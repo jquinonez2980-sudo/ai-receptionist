@@ -1,8 +1,9 @@
-# streamlit_app.py — Orchelix AI • Esmi  (Chanin-style, mobile-ready)
+# streamlit_app.py — Orchelix AI • Esmi (mobile-ready, clean formatting)
 import streamlit as st
 from graph import graph
 import uuid
 import base64
+import re
 from pathlib import Path
 
 st.set_page_config(
@@ -12,7 +13,27 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# ── Load logo as base64 ────────────────────────────────────────────────────────
+# ── Strip markdown from AI responses ─────────────────────────────────────────
+def clean_response(text):
+    # Remove headers (## Title, ### Title etc.)
+    text = re.sub(r'#{1,6}\s+', '', text)
+    # Remove bold (**text** or __text__)
+    text = re.sub(r'\*\*(.+?)\*\*', r'\1', text)
+    text = re.sub(r'__(.+?)__', r'\1', text)
+    # Remove italic (*text* or _text_)
+    text = re.sub(r'\*(.+?)\*', r'\1', text)
+    text = re.sub(r'_(.+?)_', r'\1', text)
+    # Remove inline code (`code`)
+    text = re.sub(r'`(.+?)`', r'\1', text)
+    # Remove horizontal rules
+    text = re.sub(r'\n[-*_]{3,}\n', '\n', text)
+    # Remove bullet points (- item or * item)
+    text = re.sub(r'^\s*[-*]\s+', '', text, flags=re.MULTILINE)
+    # Clean up extra blank lines (max 1 blank line between paragraphs)
+    text = re.sub(r'\n{3,}', '\n\n', text)
+    return text.strip()
+
+# ── Load logo as base64 ───────────────────────────────────────────────────────
 def get_logo_b64():
     logo_path = Path(__file__).parent / "logo.jpg"
     if logo_path.exists():
@@ -21,7 +42,10 @@ def get_logo_b64():
     return None
 
 logo_b64 = get_logo_b64()
-logo_img_tag = f'<img src="data:image/jpeg;base64,{logo_b64}" class="orchelix-logo-img" alt="Orchelix Logo">' if logo_b64 else '<div class="orchelix-logo">🤖</div>'
+logo_img_tag = (
+    f'<img src="data:image/jpeg;base64,{logo_b64}" class="orchelix-logo-img" alt="Orchelix Logo">'
+    if logo_b64 else '<div class="orchelix-logo">🤖</div>'
+)
 
 st.markdown("""
 <style>
@@ -30,11 +54,21 @@ st.markdown("""
 * { font-family: 'Inter', sans-serif !important; }
 
 .stApp { background-color: #FFFFFF; }
-.main .block-container { padding-top: 1.5rem; padding-bottom: 100px; max-width: 860px; }
+.main .block-container { padding-top: 1.5rem; padding-bottom: 120px; max-width: 860px; }
 
-#MainMenu, footer, .stDeployButton { display: none !important; }
+/* ── Hide ALL Streamlit branding — crown, menu, footer, deploy button ── */
+#MainMenu                          { display: none !important; }
+footer                             { display: none !important; }
+.stDeployButton                    { display: none !important; }
+[data-testid="stToolbar"]          { display: none !important; }
+[data-testid="manage-app-button"]  { display: none !important; }
+[class*="viewerBadge"]             { display: none !important; }
+[class*="badge"]                   { display: none !important; }
+[data-testid="stBottom"] > div:last-child { display: none !important; }
+a[href*="streamlit.io"]            { display: none !important; }
+.styles_viewerBadge__CvC9N         { display: none !important; }
+
 header[data-testid="stHeader"] { background: transparent !important; }
-
 h1, h2, h3 { color: #0A2540 !important; }
 
 section[data-testid="stSidebar"] {
@@ -44,31 +78,53 @@ section[data-testid="stSidebar"] {
 
 hr { border-color: #E8ECEF !important; margin: 0.75rem 0 !important; }
 
-/* Esmi (assistant) chat bubble */
+/* ── Assistant chat bubble ── */
 [data-testid="stChatMessage"]:has([data-testid="chatAvatarIcon-assistant"]) {
     background-color: #E6F7FA !important;
     border-radius: 16px !important;
     border: 1px solid #B2EBF2 !important;
-    padding: 10px 14px !important;
-    margin-bottom: 8px !important;
+    padding: 12px 16px !important;
+    margin-bottom: 10px !important;
 }
 
-/* User chat bubble */
+/* ── User chat bubble ── */
 [data-testid="stChatMessage"]:has([data-testid="chatAvatarIcon-user"]) {
     background-color: #F1F3F5 !important;
     border-radius: 16px !important;
     border: 1px solid #E2E8F0 !important;
-    padding: 10px 14px !important;
-    margin-bottom: 8px !important;
+    padding: 12px 16px !important;
+    margin-bottom: 10px !important;
 }
 
-[data-testid="stChatMessage"] p {
+/* ── Chat text — plain, clean, no coloured highlights ── */
+[data-testid="stChatMessage"] p,
+[data-testid="stChatMessage"] li,
+[data-testid="stChatMessage"] span,
+[data-testid="stChatMessage"] div {
     color: #1e293b !important;
-    font-size: 14.5px !important;
-    line-height: 1.65 !important;
+    font-size: 15px !important;
+    line-height: 1.75 !important;
+    background: transparent !important;
+    background-color: transparent !important;
 }
 
-/* ── Chat input — FIXED for white bg with dark text ── */
+/* Kill any code/mark/pre highlight blocks inside chat */
+[data-testid="stChatMessage"] mark,
+[data-testid="stChatMessage"] code,
+[data-testid="stChatMessage"] pre,
+[data-testid="stChatMessage"] kbd {
+    background: transparent !important;
+    background-color: transparent !important;
+    color: #1e293b !important;
+    font-family: 'Inter', sans-serif !important;
+    font-size: 15px !important;
+    padding: 0 !important;
+    border: none !important;
+    border-radius: 0 !important;
+    box-shadow: none !important;
+}
+
+/* ── Chat input ── */
 [data-testid="stChatInput"],
 .stChatInputContainer {
     background: #FFFFFF !important;
@@ -108,7 +164,7 @@ div[data-baseweb="input"] {
     border: none !important;
 }
 
-/* Sidebar buttons */
+/* ── Sidebar buttons ── */
 section[data-testid="stSidebar"] .stButton button {
     background-color: #00B8D4 !important;
     color: white !important;
@@ -123,7 +179,7 @@ section[data-testid="stSidebar"] .stButton button:hover {
     background-color: #008C9E !important;
 }
 
-/* Quick chip buttons */
+/* ── Quick chip buttons ── */
 div[data-testid="column"] .stButton button {
     background: #F0FAFB !important;
     border: 1px solid #B2EBF2 !important;
@@ -140,7 +196,6 @@ div[data-testid="column"] .stButton button:hover {
     border-color: #00B8D4 !important;
 }
 
-/* Sidebar labels */
 section[data-testid="stSidebar"] label {
     color: #0A2540 !important;
     font-size: 13px !important;
@@ -161,7 +216,6 @@ section[data-testid="stSidebar"] label {
     box-shadow: 0 4px 20px rgba(10,37,64,0.15);
 }
 
-/* Real logo image */
 .orchelix-logo-img {
     width: 56px;
     height: 56px;
@@ -173,7 +227,6 @@ section[data-testid="stSidebar"] label {
     box-shadow: 0 2px 10px rgba(0,0,0,0.25);
 }
 
-/* Fallback emoji logo */
 .orchelix-logo {
     width: 56px; height: 56px;
     background: linear-gradient(135deg, #00B8D4, #00D4B8);
@@ -184,7 +237,6 @@ section[data-testid="stSidebar"] label {
     box-shadow: 0 2px 8px rgba(0,184,212,0.4);
 }
 
-/* Text block next to logo */
 .orchelix-header-text {
     display: flex;
     flex-direction: column;
@@ -265,7 +317,6 @@ section[data-testid="stSidebar"] label {
 }
 .orchelix-footer b { color: #0A2540; font-weight: 600; }
 
-/* Sidebar logo */
 .sidebar-logo-wrap {
     display: flex;
     align-items: center;
@@ -293,9 +344,9 @@ section[data-testid="stSidebar"] label {
     font-weight: 500 !important;
 }
 
-/* Mobile */
+/* ── Mobile ── */
 @media (max-width: 768px) {
-    .main .block-container { padding: 1rem 0.75rem 100px; }
+    .main .block-container { padding: 1rem 0.75rem 120px; }
     .orchelix-header { padding: 14px 16px; gap: 12px; }
     .orchelix-title { font-size: 16px !important; }
     .orchelix-slogan { font-size: 10px; }
@@ -313,7 +364,7 @@ section[data-testid="stSidebar"] label {
         border-right: none !important;
         border-bottom: none !important;
         padding: 8px 12px !important;
-        z-index: 999 !important;
+        z-index: 9999 !important;
         box-shadow: 0 -4px 20px rgba(0,0,0,0.08) !important;
         background: white !important;
     }
@@ -327,7 +378,7 @@ section[data-testid="stSidebar"] label {
 </style>
 """, unsafe_allow_html=True)
 
-# ── SESSION STATE ──────────────────────────────────────────────────────────────
+# ── SESSION STATE ─────────────────────────────────────────────────────────────
 if "thread_id" not in st.session_state:
     st.session_state.thread_id = str(uuid.uuid4())
 
@@ -335,7 +386,7 @@ if "messages" not in st.session_state:
     st.session_state.messages = [
         {
             "role": "assistant",
-            "content": "Hello! I'm **Esmi**, your AI consultant at Orchelix. 👋\n\nI can help you **book appointments**, answer questions about our **services & pricing**, and **check availability** — all in real time. How can I help you today?"
+            "content": "Hello! I'm Esmi, your AI consultant at Orchelix. 👋\n\nI can help you book appointments, answer questions about our services and pricing, and check availability — all in real time. How can I help you today?"
         }
     ]
 
@@ -346,7 +397,6 @@ config = {"configurable": {"thread_id": st.session_state.thread_id}}
 
 # ── SIDEBAR ───────────────────────────────────────────────────────────────────
 with st.sidebar:
-    # Sidebar logo + brand
     if logo_b64:
         st.markdown(f"""
         <div class="sidebar-logo-wrap">
@@ -406,8 +456,6 @@ with st.sidebar:
     """, unsafe_allow_html=True)
 
 # ── MAIN ──────────────────────────────────────────────────────────────────────
-
-# Header with real logo, slogan, and tagline
 st.markdown(f"""
 <div class="orchelix-header">
     {logo_img_tag}
@@ -437,14 +485,13 @@ if msg_count == 0:
         with col:
             if st.button(f"{icon} {label}", key=f"chip_{i}", use_container_width=True):
                 st.session_state.quick_prompt = label
-
-    st.write("")  # spacer
+    st.write("")
 
 # Chat history
 for message in st.session_state.messages:
     avatar = "🤖" if message["role"] == "assistant" else "👤"
     with st.chat_message(message["role"], avatar=avatar):
-        st.markdown(message["content"])
+        st.write(message["content"])
 
 # Chat input
 prompt = st.chat_input("Ask Esmi anything — availability, services, booking…")
@@ -457,7 +504,7 @@ if active_prompt:
     st.session_state.messages.append({"role": "user", "content": active_prompt})
 
     with st.chat_message("user", avatar="👤"):
-        st.markdown(active_prompt)
+        st.write(active_prompt)
 
     with st.chat_message("assistant", avatar="🤖"):
         with st.spinner("Esmi is thinking…"):
@@ -466,10 +513,11 @@ if active_prompt:
                     {"messages": [{"role": "user", "content": active_prompt}]},
                     config
                 )
-                response = result["messages"][-1].content
+                raw_response = result["messages"][-1].content
+                response = clean_response(raw_response)
             except Exception as e:
-                response = f"I'm sorry, I ran into an issue. Please try again. *(Error: {str(e)})*"
-        st.markdown(response)
+                response = f"I'm sorry, I ran into an issue. Please try again. (Error: {str(e)})"
+        st.write(response)
 
     st.session_state.messages.append({"role": "assistant", "content": response})
     st.rerun()
