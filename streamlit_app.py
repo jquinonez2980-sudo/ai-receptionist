@@ -15,21 +15,14 @@ st.set_page_config(
 
 # ── Strip markdown from AI responses ─────────────────────────────────────────
 def clean_response(text):
-    # Remove headers (## Title, ### Title etc.)
     text = re.sub(r'#{1,6}\s+', '', text)
-    # Remove bold (**text** or __text__)
     text = re.sub(r'\*\*(.+?)\*\*', r'\1', text)
     text = re.sub(r'__(.+?)__', r'\1', text)
-    # Remove italic (*text* or _text_)
     text = re.sub(r'\*(.+?)\*', r'\1', text)
     text = re.sub(r'_(.+?)_', r'\1', text)
-    # Remove inline code (`code`)
     text = re.sub(r'`(.+?)`', r'\1', text)
-    # Remove horizontal rules
     text = re.sub(r'\n[-*_]{3,}\n', '\n', text)
-    # Remove bullet points (- item or * item)
     text = re.sub(r'^\s*[-*]\s+', '', text, flags=re.MULTILINE)
-    # Clean up extra blank lines (max 1 blank line between paragraphs)
     text = re.sub(r'\n{3,}', '\n\n', text)
     return text.strip()
 
@@ -54,29 +47,28 @@ st.markdown("""
 * { font-family: 'Inter', sans-serif !important; }
 
 .stApp { background-color: #FFFFFF; }
-.main .block-container { padding-top: 1.5rem; padding-bottom: 120px; max-width: 860px; }
+.main .block-container { padding-top: 1.5rem; padding-bottom: 130px; max-width: 860px; }
 
-/* ── Hide ALL Streamlit branding — crown, menu, footer, deploy button ── */
-#MainMenu                          { display: none !important; }
-footer                             { display: none !important; }
-.stDeployButton                    { display: none !important; }
-[data-testid="stToolbar"]          { display: none !important; }
-[data-testid="manage-app-button"]  { display: none !important; }
-[class*="viewerBadge"]             { display: none !important; }
-[class*="badge"]                   { display: none !important; }
-[data-testid="stBottom"] > div:last-child { display: none !important; }
-a[href*="streamlit.io"]            { display: none !important; }
-.styles_viewerBadge__CvC9N         { display: none !important; }
+/* ── Hide Streamlit branding ONLY — do NOT touch input or buttons ── */
+#MainMenu                                    { display: none !important; }
+footer                                       { display: none !important; }
+.stDeployButton                              { display: none !important; }
+[data-testid="stToolbar"]                    { display: none !important; }
+[data-testid="manage-app-button"]            { display: none !important; }
+[class*="viewerBadge"]                       { display: none !important; }
+[class*="ViewerBadge"]                       { display: none !important; }
+a[href="https://streamlit.io/cloud"]         { display: none !important; }
+a[href*="share.streamlit.io"]               { display: none !important; }
+header[data-testid="stHeader"]               { background: transparent !important; }
 
-header[data-testid="stHeader"] { background: transparent !important; }
-h1, h2, h3 { color: #0A2540 !important; }
-
+/* ── Sidebar ── */
 section[data-testid="stSidebar"] {
     background-color: #F8F9FA !important;
     border-right: 1px solid #E8ECEF;
 }
 
 hr { border-color: #E8ECEF !important; margin: 0.75rem 0 !important; }
+h1, h2, h3 { color: #0A2540 !important; }
 
 /* ── Assistant chat bubble ── */
 [data-testid="stChatMessage"]:has([data-testid="chatAvatarIcon-assistant"]) {
@@ -96,11 +88,10 @@ hr { border-color: #E8ECEF !important; margin: 0.75rem 0 !important; }
     margin-bottom: 10px !important;
 }
 
-/* ── Chat text — plain, clean, no coloured highlights ── */
+/* ── Chat text — plain, no highlights ── */
 [data-testid="stChatMessage"] p,
 [data-testid="stChatMessage"] li,
-[data-testid="stChatMessage"] span,
-[data-testid="stChatMessage"] div {
+[data-testid="stChatMessage"] span {
     color: #1e293b !important;
     font-size: 15px !important;
     line-height: 1.75 !important;
@@ -108,7 +99,6 @@ hr { border-color: #E8ECEF !important; margin: 0.75rem 0 !important; }
     background-color: transparent !important;
 }
 
-/* Kill any code/mark/pre highlight blocks inside chat */
 [data-testid="stChatMessage"] mark,
 [data-testid="stChatMessage"] code,
 [data-testid="stChatMessage"] pre,
@@ -124,17 +114,15 @@ hr { border-color: #E8ECEF !important; margin: 0.75rem 0 !important; }
     box-shadow: none !important;
 }
 
-/* ── Chat input ── */
-[data-testid="stChatInput"],
-.stChatInputContainer {
+/* ── Chat input box — always visible ── */
+[data-testid="stChatInput"] {
     background: #FFFFFF !important;
     border: 1.5px solid #00B8D4 !important;
     border-radius: 12px !important;
     box-shadow: 0 2px 12px rgba(0,184,212,0.12) !important;
 }
 
-[data-testid="stChatInput"] textarea,
-.stChatInputContainer textarea {
+[data-testid="stChatInput"] textarea {
     background: #FFFFFF !important;
     background-color: #FFFFFF !important;
     color: #0A2540 !important;
@@ -144,17 +132,9 @@ hr { border-color: #E8ECEF !important; margin: 0.75rem 0 !important; }
     border: none !important;
 }
 
-[data-testid="stChatInput"] textarea::placeholder,
-.stChatInputContainer textarea::placeholder {
+[data-testid="stChatInput"] textarea::placeholder {
     color: #94a3b8 !important;
     -webkit-text-fill-color: #94a3b8 !important;
-}
-
-div[data-baseweb="base-input"],
-div[data-baseweb="textarea"],
-div[data-baseweb="input"] {
-    background: #FFFFFF !important;
-    background-color: #FFFFFF !important;
 }
 
 [data-testid="stChatInput"] button {
@@ -162,6 +142,13 @@ div[data-baseweb="input"] {
     border-radius: 8px !important;
     color: white !important;
     border: none !important;
+}
+
+div[data-baseweb="base-input"],
+div[data-baseweb="textarea"],
+div[data-baseweb="input"] {
+    background: #FFFFFF !important;
+    background-color: #FFFFFF !important;
 }
 
 /* ── Sidebar buttons ── */
@@ -217,8 +204,7 @@ section[data-testid="stSidebar"] label {
 }
 
 .orchelix-logo-img {
-    width: 56px;
-    height: 56px;
+    width: 56px; height: 56px;
     object-fit: contain;
     border-radius: 10px;
     background: #ffffff;
@@ -232,129 +218,92 @@ section[data-testid="stSidebar"] label {
     background: linear-gradient(135deg, #00B8D4, #00D4B8);
     border-radius: 12px;
     display: flex; align-items: center; justify-content: center;
-    font-size: 26px;
-    flex-shrink: 0;
+    font-size: 26px; flex-shrink: 0;
     box-shadow: 0 2px 8px rgba(0,184,212,0.4);
 }
 
 .orchelix-header-text {
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-    flex: 1;
-    min-width: 0;
+    display: flex; flex-direction: column;
+    gap: 2px; flex: 1; min-width: 0;
 }
 
 .orchelix-title {
-    font-size: 20px !important;
-    font-weight: 700 !important;
-    color: #ffffff !important;
-    line-height: 1.2;
-    margin: 0;
-    letter-spacing: -0.01em;
+    font-size: 20px !important; font-weight: 700 !important;
+    color: #ffffff !important; line-height: 1.2;
+    margin: 0; letter-spacing: -0.01em;
 }
 
 .orchelix-slogan {
-    font-size: 11.5px;
-    color: #00D4EE;
-    font-weight: 600;
-    letter-spacing: 0.06em;
-    text-transform: uppercase;
-    margin: 0;
-    opacity: 0.9;
+    font-size: 11.5px; color: #00D4EE; font-weight: 600;
+    letter-spacing: 0.06em; text-transform: uppercase;
+    margin: 0; opacity: 0.9;
 }
 
 .orchelix-tagline {
-    font-size: 12px;
-    color: rgba(255,255,255,0.55);
-    margin: 0;
-    font-style: italic;
-    font-weight: 300;
+    font-size: 12px; color: rgba(255,255,255,0.55);
+    margin: 0; font-style: italic; font-weight: 300;
 }
 
 .orchelix-badge {
     margin-left: auto;
     background: rgba(0,184,212,0.2);
     border: 1px solid rgba(0,184,212,0.4);
-    border-radius: 999px;
-    padding: 5px 14px;
-    font-size: 11.5px;
-    color: #00D4EE;
-    font-weight: 600;
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    white-space: nowrap;
-    letter-spacing: 0.04em;
-    flex-shrink: 0;
+    border-radius: 999px; padding: 5px 14px;
+    font-size: 11.5px; color: #00D4EE; font-weight: 600;
+    display: flex; align-items: center; gap: 6px;
+    white-space: nowrap; letter-spacing: 0.04em; flex-shrink: 0;
 }
 
 .badge-dot {
-    width: 7px; height: 7px;
-    background: #00D4EE;
-    border-radius: 50%;
-    box-shadow: 0 0 6px #00D4EE;
+    width: 7px; height: 7px; background: #00D4EE;
+    border-radius: 50%; box-shadow: 0 0 6px #00D4EE;
     animation: blink 2s ease infinite;
 }
 
 .stat-card {
-    background: white;
-    border: 1px solid #E2E8F0;
-    border-radius: 10px;
-    padding: 10px 14px;
-    margin-bottom: 8px;
+    background: white; border: 1px solid #E2E8F0;
+    border-radius: 10px; padding: 10px 14px; margin-bottom: 8px;
 }
 .stat-label { font-size: 11px; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.08em; font-weight: 600; }
 .stat-value { font-size: 15px; font-weight: 700; color: #0A2540; margin-top: 2px; }
 .stat-value span { color: #00B8D4; }
 
 .orchelix-footer {
-    text-align: center;
-    font-size: 11.5px;
-    color: #94a3b8;
-    padding: 16px 0 4px;
-    letter-spacing: 0.03em;
+    text-align: center; font-size: 11.5px; color: #94a3b8;
+    padding: 16px 0 4px; letter-spacing: 0.03em;
 }
 .orchelix-footer b { color: #0A2540; font-weight: 600; }
 
 .sidebar-logo-wrap {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    padding: 10px 0 4px;
-    margin-bottom: 4px;
+    display: flex; align-items: center; gap: 10px;
+    padding: 10px 0 4px; margin-bottom: 4px;
 }
 .sidebar-logo-img {
-    width: 36px; height: 36px;
-    object-fit: contain;
-    border-radius: 8px;
-    background: #fff;
-    padding: 3px;
+    width: 36px; height: 36px; object-fit: contain;
+    border-radius: 8px; background: #fff; padding: 3px;
     border: 1px solid #E2E8F0;
 }
 .sidebar-brand-name {
-    font-size: 14px !important;
-    font-weight: 700 !important;
-    color: #0A2540 !important;
-    line-height: 1.2;
+    font-size: 14px !important; font-weight: 700 !important;
+    color: #0A2540 !important; line-height: 1.2;
 }
 .sidebar-brand-tag {
-    font-size: 10.5px !important;
-    color: #00B8D4 !important;
-    font-weight: 500 !important;
+    font-size: 10.5px !important; color: #00B8D4 !important; font-weight: 500 !important;
 }
 
 /* ── Mobile ── */
 @media (max-width: 768px) {
-    .main .block-container { padding: 1rem 0.75rem 120px; }
+    .main .block-container { padding: 1rem 0.75rem 130px; }
     .orchelix-header { padding: 14px 16px; gap: 12px; }
     .orchelix-title { font-size: 16px !important; }
     .orchelix-slogan { font-size: 10px; }
     .orchelix-tagline { display: none; }
     .orchelix-badge { display: none; }
     .orchelix-logo-img { width: 44px; height: 44px; }
-    [data-testid="stChatInput"],
-    .stChatInputContainer {
+    section[data-testid="stSidebar"] { display: none !important; }
+
+    /* Keep chat input pinned to bottom on mobile */
+    [data-testid="stChatInput"] {
         position: fixed !important;
         bottom: 0 !important;
         left: 0 !important;
@@ -368,7 +317,6 @@ section[data-testid="stSidebar"] label {
         box-shadow: 0 -4px 20px rgba(0,0,0,0.08) !important;
         background: white !important;
     }
-    section[data-testid="stSidebar"] { display: none !important; }
 }
 
 @keyframes blink {
@@ -493,7 +441,7 @@ for message in st.session_state.messages:
     with st.chat_message(message["role"], avatar=avatar):
         st.write(message["content"])
 
-# Chat input
+# ── Chat input — always rendered ─────────────────────────────────────────────
 prompt = st.chat_input("Ask Esmi anything — availability, services, booking…")
 
 active_prompt = st.session_state.quick_prompt or prompt
