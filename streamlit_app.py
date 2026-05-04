@@ -28,15 +28,18 @@ def clean_response(text):
 
 # ── Load logo as base64 ───────────────────────────────────────────────────────
 def get_logo_b64():
-    logo_path = Path(__file__).parent / "logo.jpg"
-    if logo_path.exists():
-        with open(logo_path, "rb") as f:
-            return base64.b64encode(f.read()).decode()
-    return None
+    for name in ["logo.jpg", "logo.png", "logo.jpeg"]:
+        logo_path = Path(__file__).parent / name
+        if logo_path.exists():
+            ext = logo_path.suffix.lower().replace(".", "")
+            mime = "jpeg" if ext in ["jpg", "jpeg"] else "png"
+            with open(logo_path, "rb") as f:
+                return base64.b64encode(f.read()).decode(), mime
+    return None, None
 
-logo_b64 = get_logo_b64()
+logo_b64, logo_mime = get_logo_b64()
 logo_img_tag = (
-    f'<img src="data:image/jpeg;base64,{logo_b64}" class="orchelix-logo-img" alt="Orchelix Logo">'
+    f'<img src="data:image/{logo_mime};base64,{logo_b64}" class="orchelix-logo-img" alt="Orchelix Logo">'
     if logo_b64 else '<div class="orchelix-logo">🤖</div>'
 )
 
@@ -47,26 +50,31 @@ st.markdown("""
 * { font-family: 'Inter', sans-serif !important; }
 
 .stApp { background-color: #FFFFFF; }
-.main .block-container { padding-top: 1.5rem; padding-bottom: 130px; max-width: 860px; }
 
-/* ── Hide Streamlit branding ONLY — do NOT touch input or buttons ── */
-#MainMenu                                    { display: none !important; }
-footer                                       { display: none !important; }
-.stDeployButton                              { display: none !important; }
-[data-testid="stToolbar"]                    { display: none !important; }
-[data-testid="manage-app-button"]            { display: none !important; }
-[class*="viewerBadge"]                       { display: none !important; }
-[class*="ViewerBadge"]                       { display: none !important; }
-a[href="https://streamlit.io/cloud"]         { display: none !important; }
-a[href*="share.streamlit.io"]               { display: none !important; }
-header[data-testid="stHeader"]               { background: transparent !important; }
+/* Extra bottom padding so content never hides behind fixed input bar */
+.main .block-container {
+    padding-top: 1.5rem;
+    padding-bottom: 160px;
+    max-width: 860px;
+}
+
+/* ── Hide Streamlit branding only ── */
+#MainMenu                           { display: none !important; }
+footer                              { display: none !important; }
+.stDeployButton                     { display: none !important; }
+[data-testid="stToolbar"]           { display: none !important; }
+[data-testid="manage-app-button"]   { display: none !important; }
+[class*="viewerBadge"]              { display: none !important; }
+[class*="ViewerBadge"]              { display: none !important; }
+a[href="https://streamlit.io/cloud"]{ display: none !important; }
+a[href*="share.streamlit.io"]       { display: none !important; }
+header[data-testid="stHeader"]      { background: transparent !important; }
 
 /* ── Sidebar ── */
 section[data-testid="stSidebar"] {
     background-color: #F8F9FA !important;
     border-right: 1px solid #E8ECEF;
 }
-
 hr { border-color: #E8ECEF !important; margin: 0.75rem 0 !important; }
 h1, h2, h3 { color: #0A2540 !important; }
 
@@ -88,7 +96,7 @@ h1, h2, h3 { color: #0A2540 !important; }
     margin-bottom: 10px !important;
 }
 
-/* ── Chat text — plain, no highlights ── */
+/* ── Chat text ── */
 [data-testid="stChatMessage"] p,
 [data-testid="stChatMessage"] li,
 [data-testid="stChatMessage"] span {
@@ -114,7 +122,7 @@ h1, h2, h3 { color: #0A2540 !important; }
     box-shadow: none !important;
 }
 
-/* ── Chat input box — always visible ── */
+/* ── Chat input — fixed to bottom, raised above any watermark ── */
 [data-testid="stChatInput"] {
     background: #FFFFFF !important;
     border: 1.5px solid #00B8D4 !important;
@@ -142,6 +150,8 @@ h1, h2, h3 { color: #0A2540 !important; }
     border-radius: 8px !important;
     color: white !important;
     border: none !important;
+    z-index: 99999 !important;
+    position: relative !important;
 }
 
 div[data-baseweb="base-input"],
@@ -204,21 +214,21 @@ section[data-testid="stSidebar"] label {
 }
 
 .orchelix-logo-img {
-    width: 56px; height: 56px;
+    width: 64px; height: 64px;
     object-fit: contain;
     border-radius: 10px;
     background: #ffffff;
-    padding: 4px;
+    padding: 6px;
     flex-shrink: 0;
     box-shadow: 0 2px 10px rgba(0,0,0,0.25);
 }
 
 .orchelix-logo {
-    width: 56px; height: 56px;
+    width: 64px; height: 64px;
     background: linear-gradient(135deg, #00B8D4, #00D4B8);
     border-radius: 12px;
     display: flex; align-items: center; justify-content: center;
-    font-size: 26px; flex-shrink: 0;
+    font-size: 28px; flex-shrink: 0;
     box-shadow: 0 2px 8px rgba(0,184,212,0.4);
 }
 
@@ -279,7 +289,7 @@ section[data-testid="stSidebar"] label {
     padding: 10px 0 4px; margin-bottom: 4px;
 }
 .sidebar-logo-img {
-    width: 36px; height: 36px; object-fit: contain;
+    width: 40px; height: 40px; object-fit: contain;
     border-radius: 8px; background: #fff; padding: 3px;
     border: 1px solid #E2E8F0;
 }
@@ -293,28 +303,28 @@ section[data-testid="stSidebar"] label {
 
 /* ── Mobile ── */
 @media (max-width: 768px) {
-    .main .block-container { padding: 1rem 0.75rem 130px; }
+    .main .block-container { padding: 1rem 0.75rem 160px; }
     .orchelix-header { padding: 14px 16px; gap: 12px; }
     .orchelix-title { font-size: 16px !important; }
     .orchelix-slogan { font-size: 10px; }
     .orchelix-tagline { display: none; }
     .orchelix-badge { display: none; }
-    .orchelix-logo-img { width: 44px; height: 44px; }
+    .orchelix-logo-img { width: 48px; height: 48px; }
     section[data-testid="stSidebar"] { display: none !important; }
 
-    /* Keep chat input pinned to bottom on mobile */
+    /* Pin chat input to bottom with enough room above any overlapping icons */
     [data-testid="stChatInput"] {
         position: fixed !important;
-        bottom: 0 !important;
+        bottom: 60px !important;
         left: 0 !important;
         right: 0 !important;
         border-radius: 0 !important;
         border-left: none !important;
         border-right: none !important;
         border-bottom: none !important;
-        padding: 8px 12px !important;
-        z-index: 9999 !important;
-        box-shadow: 0 -4px 20px rgba(0,0,0,0.08) !important;
+        padding: 10px 14px !important;
+        z-index: 99999 !important;
+        box-shadow: 0 -4px 20px rgba(0,0,0,0.10) !important;
         background: white !important;
     }
 }
@@ -348,7 +358,17 @@ with st.sidebar:
     if logo_b64:
         st.markdown(f"""
         <div class="sidebar-logo-wrap">
-            <img src="data:image/jpeg;base64,{logo_b64}" class="sidebar-logo-img" alt="Orchelix Logo">
+            <img src="data:image/{logo_mime};base64,{logo_b64}" class="sidebar-logo-img" alt="Orchelix Logo">
+            <div>
+                <div class="sidebar-brand-name">Orchelix AI</div>
+                <div class="sidebar-brand-tag">AI Consulting that Evolves with You</div>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+    else:
+        st.markdown("""
+        <div class="sidebar-logo-wrap">
+            <div style="font-size:28px;">🤖</div>
             <div>
                 <div class="sidebar-brand-name">Orchelix AI</div>
                 <div class="sidebar-brand-tag">AI Consulting that Evolves with You</div>
@@ -441,7 +461,7 @@ for message in st.session_state.messages:
     with st.chat_message(message["role"], avatar=avatar):
         st.write(message["content"])
 
-# ── Chat input — always rendered ─────────────────────────────────────────────
+# ── Chat input ────────────────────────────────────────────────────────────────
 prompt = st.chat_input("Ask Esmi anything — availability, services, booking…")
 
 active_prompt = st.session_state.quick_prompt or prompt
