@@ -1,4 +1,4 @@
-# app.py — Orhelix AI • Esmi  (Chanin-style, mobile-ready)
+# streamlit_app.py — Orchelix AI • Esmi  (Chanin-style, mobile-ready)
 import streamlit as st
 from graph import graph
 import uuid
@@ -6,7 +6,7 @@ import base64
 from pathlib import Path
 
 st.set_page_config(
-    page_title="Orhelix AI • Esmi",
+    page_title="Orchelix AI • Esmi",
     page_icon="🤖",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -21,7 +21,7 @@ def get_logo_b64():
     return None
 
 logo_b64 = get_logo_b64()
-logo_img_tag = f'<img src="data:image/jpeg;base64,{logo_b64}" class="orhelix-logo-img" alt="Orhelix Logo">' if logo_b64 else '<div class="orhelix-logo">🤖</div>'
+logo_img_tag = f'<img src="data:image/jpeg;base64,{logo_b64}" class="orchelix-logo-img" alt="Orchelix Logo">' if logo_b64 else '<div class="orchelix-logo">🤖</div>'
 
 st.markdown("""
 <style>
@@ -150,7 +150,7 @@ section[data-testid="stSidebar"] label {
 [data-testid="stSpinner"] { color: #00B8D4 !important; }
 
 /* ── Header card ── */
-.orhelix-header {
+.orchelix-header {
     display: flex;
     align-items: center;
     gap: 16px;
@@ -162,7 +162,7 @@ section[data-testid="stSidebar"] label {
 }
 
 /* Real logo image */
-.orhelix-logo-img {
+.orchelix-logo-img {
     width: 56px;
     height: 56px;
     object-fit: contain;
@@ -174,7 +174,7 @@ section[data-testid="stSidebar"] label {
 }
 
 /* Fallback emoji logo */
-.orhelix-logo {
+.orchelix-logo {
     width: 56px; height: 56px;
     background: linear-gradient(135deg, #00B8D4, #00D4B8);
     border-radius: 12px;
@@ -185,7 +185,7 @@ section[data-testid="stSidebar"] label {
 }
 
 /* Text block next to logo */
-.orhelix-header-text {
+.orchelix-header-text {
     display: flex;
     flex-direction: column;
     gap: 2px;
@@ -193,7 +193,7 @@ section[data-testid="stSidebar"] label {
     min-width: 0;
 }
 
-.orhelix-title {
+.orchelix-title {
     font-size: 20px !important;
     font-weight: 700 !important;
     color: #ffffff !important;
@@ -202,7 +202,7 @@ section[data-testid="stSidebar"] label {
     letter-spacing: -0.01em;
 }
 
-.orhelix-slogan {
+.orchelix-slogan {
     font-size: 11.5px;
     color: #00D4EE;
     font-weight: 600;
@@ -212,7 +212,7 @@ section[data-testid="stSidebar"] label {
     opacity: 0.9;
 }
 
-.orhelix-tagline {
+.orchelix-tagline {
     font-size: 12px;
     color: rgba(255,255,255,0.55);
     margin: 0;
@@ -220,7 +220,7 @@ section[data-testid="stSidebar"] label {
     font-weight: 300;
 }
 
-.orhelix-badge {
+.orchelix-badge {
     margin-left: auto;
     background: rgba(0,184,212,0.2);
     border: 1px solid rgba(0,184,212,0.4);
@@ -256,14 +256,14 @@ section[data-testid="stSidebar"] label {
 .stat-value { font-size: 15px; font-weight: 700; color: #0A2540; margin-top: 2px; }
 .stat-value span { color: #00B8D4; }
 
-.orhelix-footer {
+.orchelix-footer {
     text-align: center;
     font-size: 11.5px;
     color: #94a3b8;
     padding: 16px 0 4px;
     letter-spacing: 0.03em;
 }
-.orhelix-footer b { color: #0A2540; font-weight: 600; }
+.orchelix-footer b { color: #0A2540; font-weight: 600; }
 
 /* Sidebar logo */
 .sidebar-logo-wrap {
@@ -296,12 +296,12 @@ section[data-testid="stSidebar"] label {
 /* Mobile */
 @media (max-width: 768px) {
     .main .block-container { padding: 1rem 0.75rem 100px; }
-    .orhelix-header { padding: 14px 16px; gap: 12px; }
-    .orhelix-title { font-size: 16px !important; }
-    .orhelix-slogan { font-size: 10px; }
-    .orhelix-tagline { display: none; }
-    .orhelix-badge { display: none; }
-    .orhelix-logo-img { width: 44px; height: 44px; }
+    .orchelix-header { padding: 14px 16px; gap: 12px; }
+    .orchelix-title { font-size: 16px !important; }
+    .orchelix-slogan { font-size: 10px; }
+    .orchelix-tagline { display: none; }
+    .orchelix-badge { display: none; }
+    .orchelix-logo-img { width: 44px; height: 44px; }
     [data-testid="stChatInput"],
     .stChatInputContainer {
         position: fixed !important;
@@ -335,7 +335,7 @@ if "messages" not in st.session_state:
     st.session_state.messages = [
         {
             "role": "assistant",
-            "content": "Hello! I'm **Esmi**, your AI consultant at Orhelix. 👋\n\nI can help you **book appointments**, answer questions about our **services & pricing**, and **check availability** — all in real time. How can I help you today?"
+            "content": "Hello! I'm **Esmi**, your AI consultant at Orchelix. 👋\n\nI can help you **book appointments**, answer questions about our **services & pricing**, and **check availability** — all in real time. How can I help you today?"
         }
     ]
 
@@ -350,9 +350,9 @@ with st.sidebar:
     if logo_b64:
         st.markdown(f"""
         <div class="sidebar-logo-wrap">
-            <img src="data:image/jpeg;base64,{logo_b64}" class="sidebar-logo-img" alt="Orhelix Logo">
+            <img src="data:image/jpeg;base64,{logo_b64}" class="sidebar-logo-img" alt="Orchelix Logo">
             <div>
-                <div class="sidebar-brand-name">Orhelix AI</div>
+                <div class="sidebar-brand-name">Orchelix AI</div>
                 <div class="sidebar-brand-tag">AI Consulting that Evolves with You</div>
             </div>
         </div>
@@ -399,7 +399,7 @@ with st.sidebar:
     st.markdown("""
     <div style="padding-top:1.5rem;text-align:center;">
         <div style="font-size:11px;color:#94a3b8;line-height:1.7;">
-            🤖 Powered by <b style="color:#0A2540;">Orhelix AI</b><br>
+            🤖 Powered by <b style="color:#0A2540;">Orchelix AI</b><br>
             LangGraph · GPT-4o · Google Calendar
         </div>
     </div>
@@ -409,14 +409,14 @@ with st.sidebar:
 
 # Header with real logo, slogan, and tagline
 st.markdown(f"""
-<div class="orhelix-header">
+<div class="orchelix-header">
     {logo_img_tag}
-    <div class="orhelix-header-text">
-        <div class="orhelix-title">Orhelix AI Consulting</div>
-        <div class="orhelix-slogan">Orchestrating the Future of AI</div>
-        <div class="orhelix-tagline">AI Consulting that Evolves with You</div>
+    <div class="orchelix-header-text">
+        <div class="orchelix-title">Orchelix AI Consulting</div>
+        <div class="orchelix-slogan">Orchestrating the Future of AI</div>
+        <div class="orchelix-tagline">AI Consulting that Evolves with You</div>
     </div>
-    <div class="orhelix-badge">
+    <div class="orchelix-badge">
         <div class="badge-dot"></div>
         Live
     </div>
@@ -476,8 +476,8 @@ if active_prompt:
 
 # Footer
 st.markdown("""
-<div class="orhelix-footer">
-    © <b>Orhelix AI Consulting</b> · All rights reserved
+<div class="orchelix-footer">
+    © <b>Orchelix AI Consulting</b> · All rights reserved
     &nbsp;·&nbsp;
     <span style="color:#00B8D4;font-weight:600;">Orchestrating the Future of AI</span>
 </div>
