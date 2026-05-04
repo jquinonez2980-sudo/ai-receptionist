@@ -1,89 +1,114 @@
+# tools.py - ORCHELIX AI RECEPTIONIST (Streamlit Cloud ready)
+
 from langchain_core.tools import tool
-from langchain_google_community import CalendarToolkit
-from googleapiclient.discovery import build
-from google.oauth2.credentials import Credentials
+from langchain_community.document_loaders import DirectoryLoader, TextLoader
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+from langchain_community.vectorstores import FAISS
+from langchain_openai import OpenAIEmbeddings
 import os
-import glob
-from datetime import datetime, timedelta
-import pytz
+import json
+import tempfile
+from dotenv import load_dotenv
 
-# ── GOOGLE CALENDAR SETUP ─────────────────────────────────────────────────────
-creds = Credentials.from_authorized_user_file("token.json")
-service = build("calendar", "v3", credentials=creds)
-toolkit = CalendarToolkit(service=service)
-calendar_tools = toolkit.get_tools()
+load_dotenv()
 
-# Map tool names for easy access
-tools_by_name = {t.name: t for t in calendar_tools}
 
-# ── KNOWLEDGE BASE SETUP (PDF) ────────────────────────────────────────────────
-KB_FOLDER = "kb"
+# ── GOOGLE CALENDAR HELPER (lazy, never runs at import time) ──────────────
+def _get_calendar_service():
+    """
+    Build and return a Google Calendar service client.
+    Tries two methods in order:
+      1. Streamlit secret  GOOGLE_TOKEN_JSON  (recommended for Streamlit Cloud)
+      2. Local token.json file               (works locally)
+    Raises a clear RuntimeError if neither is available.
+    """
+    from google.oauth2.credentials import Credentials
+    from googleapiclient.discovery import build
 
-def load_knowledge_base() -> str:
-    pdf_files = glob.glob(os.path.join(KB_FOLDER, "*.pdf"))
-    if not pdf_files:
-        return "No PDF found in kb folder."
+    # ── Method 1: Streamlit Cloud secret ──────────────────────────────────
     try:
-        from pypdf import PdfReader
-    except ImportError:
-        return "PDF library not installed. Run: pip install pypdf"
-    all_text = []
-    for pdf_path in pdf_files:
-        reader = PdfReader(pdf_path)
-        for page in reader.pages:
-            text = page.extract_text()
-            if text:
-                all_text.append(text)
-    return "\n".join(all_text) if all_text else "Could not extract text from PDF."
+        import streamlit as st
+        token_data = json.loads(st.secrets["GOOGLE_TOKEN_JSON"])
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".json", delete=False
+        ) as f:
+            json.dump(token_data, f)
+            tmp_path = f.name
+        creds = Credentials.from_authorized_user_file(tmp_path)
+        os.unlink(tmp_path)          # clean up temp file immediately
+        return build("calendar", "v3", credentials=creds)
+    except Exception:
+        pass                         # secret not set — fall through to local file
 
-# ── TOOLS ─────────────────────────────────────────────────────────────────────
+    # ── Method 2: Local token.json ─────────────────────────────────────────
+    token_path = os.getenv("GOOGLE_TOKEN_PATH", "token.json")
+    if os.path.exists(token_path):
+        creds = Credentials.from_authorized_user_file(token_path)
+        return build("calendar", "v3", credentials=creds)
 
+    # ── Neither worked ─────────────────────────────────────────────────────
+    raise RuntimeError(
+        "Google Calendar credentials not found. "
+        "Add GOOGLE_TOKEN_JSON to Streamlit secrets, or provide a local token.json file."
+    )
+
+
+# ── ORCHELIX KNOWLEDGE BASE ───────────────────────────────────────────────
 @tool
 def search_knowledge_base(query: str) -> str:
-    """
-    Search the business knowledge base for information about services,
-    pricing, FAQs, policies, or anything about the business.
-    """
-    content = load_knowledge_base()
-    if content in ["No PDF found in kb folder.", "Could not extract text from PDF."]:
-        return content
-    query_lower = query.lower()
-    lines = content.split("\n")
-    relevant = [l for l in lines if any(
-        word in l.lower() for word in query_lower.split()
-    )]
-    return "\n".join(relevant) if relevant else content
+    """Search the Orchelix AI knowledge base (all .md files)."""
+    try:
+        loader = DirectoryLoader(
+            "orchelix_knowledge_base/",
+            glob="**/*.md",
+            loader_cls=TextLoader,
+            loader_kwargs={"encoding": "utf-8"}
+        )
+        docs = loader.load()
+
+        if not docs:
+            return "No documents found in orchelix_knowledge_base folder."
+
+        text_splitter = RecursiveCharacterTextSplitter(
+            chunk_size=1000, chunk_overlap=200
+        )
+        splits = text_splitter.split_documents(docs)
+
+        vectorstore = FAISS.from_documents(splits, OpenAIEmbeddings())
+        retriever = vectorstore.as_retriever(search_kwargs={"k": 6})
+        results = retriever.invoke(query)
+
+        return "\n\n".join([doc.page_content for doc in results])
+    except Exception as e:
+        return f"Knowledge base error: {str(e)}"
 
 
+# ── GOOGLE CALENDAR TOOLS ─────────────────────────────────────────────────
 @tool
 def list_available_slots(start_date: str, end_date: str) -> str:
-    """
-    List available (free) appointment slots in Google Calendar.
-    Call this whenever the user asks about availability or wants to book.
-
-    Args:
-        start_date: Start of search window in YYYY-MM-DD format (e.g. "2026-05-06")
-        end_date:   End of search window in YYYY-MM-DD format (e.g. "2026-05-13")
-    """
+    """List available 30-minute appointment slots in Google Calendar."""
     try:
-        tz = pytz.timezone("America/New_York")  # ← change to your timezone
+        import pytz
+        from datetime import datetime, timedelta
+
+        service = _get_calendar_service()
+        tz = pytz.timezone("America/Toronto")
 
         start_dt = datetime.strptime(start_date, "%Y-%m-%d")
-        end_dt = datetime.strptime(end_date, "%Y-%m-%d")
+        end_dt   = datetime.strptime(end_date,   "%Y-%m-%d")
 
-        # Check each day for free slots (9am - 5pm, 30 min slots)
         available_slots = []
         current = start_dt
 
         while current <= end_dt:
-            # Skip weekends
-            if current.weekday() < 5:
+            if current.weekday() < 5:                      # Mon–Fri only
                 for hour in range(9, 17):
                     for minute in [0, 30]:
-                        slot_start = tz.localize(current.replace(hour=hour, minute=minute, second=0))
+                        slot_start = tz.localize(
+                            current.replace(hour=hour, minute=minute, second=0)
+                        )
                         slot_end = slot_start + timedelta(minutes=30)
 
-                        # Check if slot is free using Google Calendar freebusy
                         body = {
                             "timeMin": slot_start.isoformat(),
                             "timeMax": slot_end.isoformat(),
@@ -95,7 +120,7 @@ def list_available_slots(start_date: str, end_date: str) -> str:
                         if not busy:
                             available_slots.append(
                                 f"{current.strftime('%A %b %d')} at "
-                                f"{slot_start.strftime('%I:%M %p')} - "
+                                f"{slot_start.strftime('%I:%M %p')} – "
                                 f"{slot_end.strftime('%I:%M %p')}"
                             )
             current += timedelta(days=1)
@@ -103,26 +128,25 @@ def list_available_slots(start_date: str, end_date: str) -> str:
         if not available_slots:
             return f"No available slots found between {start_date} and {end_date}."
 
-        return "Available slots:\n" + "\n".join(available_slots[:10])  # show first 10
+        return "Available slots:\n" + "\n".join(available_slots[:12])
 
+    except RuntimeError as e:
+        return f"⚠️ Calendar not configured: {str(e)}"
     except Exception as e:
         return f"Calendar error: {str(e)}"
 
 
 @tool
-def book_appointment(summary: str, start_time: str, end_time: str, attendee_email: str = None) -> str:
-    """
-    Book a confirmed appointment in Google Calendar.
-    Only call after user has explicitly chosen a specific time slot.
-
-    Args:
-        summary:        Title (e.g. "Consultation with Jane")
-        start_time:     ISO 8601 datetime (e.g. "2026-05-06T10:00:00")
-        end_time:       ISO 8601 datetime (e.g. "2026-05-06T10:30:00")
-        attendee_email: Optional attendee email address
-    """
+def book_appointment(
+    summary: str,
+    start_time: str,
+    end_time: str,
+    attendee_email: str = None
+) -> str:
+    """Book a confirmed appointment in Google Calendar."""
     try:
-        tz = "America/New_York"  # ← change to your timezone
+        service = _get_calendar_service()
+        tz = "America/Toronto"
 
         event = {
             "summary": summary,
@@ -137,11 +161,17 @@ def book_appointment(summary: str, start_time: str, end_time: str, attendee_emai
         ).execute()
 
         return (
-            f"Appointment booked successfully!\n"
+            f"✅ Appointment booked!\n"
             f"Title: {summary}\n"
             f"Start: {start_time}\n"
             f"End:   {end_time}\n"
             f"Link:  {created.get('htmlLink', 'N/A')}"
         )
+
+    except RuntimeError as e:
+        return f"⚠️ Calendar not configured: {str(e)}"
     except Exception as e:
-        return f"Booking error: {str(e)}"
+        return f"Calendar error: {str(e)}"
+
+
+print("✅ Tools loaded successfully with ORCHELIX KNOWLEDGE BASE (.md files)!")
