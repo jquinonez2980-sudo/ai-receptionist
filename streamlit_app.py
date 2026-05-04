@@ -1,4 +1,4 @@
-# streamlit_app.py — Orchelix AI • Esmi (mobile-ready, clean formatting)
+# streamlit_app.py — Orchelix AI • Esmi (mobile-ready, structured responses)
 import streamlit as st
 from graph import graph
 import uuid
@@ -13,22 +13,25 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# ── Strip markdown from AI responses ─────────────────────────────────────────
+# ── Clean response — removes headers/bold/italic but KEEPS lists ──────────────
 def clean_response(text):
+    # Remove markdown headers (## Title)
     text = re.sub(r'#{1,6}\s+', '', text)
+    # Remove bold and italic
     text = re.sub(r'\*\*(.+?)\*\*', r'\1', text)
     text = re.sub(r'__(.+?)__', r'\1', text)
-    text = re.sub(r'\*(.+?)\*', r'\1', text)
-    text = re.sub(r'_(.+?)_', r'\1', text)
+    text = re.sub(r'\*(?!\s)(.+?)(?<!\s)\*', r'\1', text)
+    text = re.sub(r'_(?!\s)(.+?)(?<!\s)_', r'\1', text)
+    # Remove inline code
     text = re.sub(r'`(.+?)`', r'\1', text)
+    # Remove horizontal rules
     text = re.sub(r'\n[-*_]{3,}\n', '\n', text)
-    text = re.sub(r'^\s*[-*]\s+', '', text, flags=re.MULTILINE)
+    # Clean up excessive blank lines
     text = re.sub(r'\n{3,}', '\n\n', text)
     return text.strip()
 
-# ── Load image as base64 helper ───────────────────────────────────────────────
+# ── Load image as base64 ──────────────────────────────────────────────────────
 def load_image_b64(filenames):
-    """Try a list of filenames, return (b64, mime) for first found."""
     for name in filenames:
         path = Path(__file__).parent / name
         if path.exists():
@@ -38,23 +41,15 @@ def load_image_b64(filenames):
                 return base64.b64encode(f.read()).decode(), mime
     return None, None
 
-# Main Orchelix logo
 logo_b64, logo_mime = load_image_b64(["logo.png", "logo.jpg", "logo.jpeg"])
-
-# Esmi avatar — looks for esmi.png / esmi.jpg in project root
 esmi_b64, esmi_mime = load_image_b64(["Esmi.jpg", "esmi.png", "esmi.jpg", "esmi.jpeg"])
 
-# Build header logo tag — no padding so it fills the square nicely
 if logo_b64:
     logo_img_tag = f'<img src="data:image/{logo_mime};base64,{logo_b64}" class="orchelix-logo-img" alt="Orchelix Logo">'
 else:
     logo_img_tag = '<div class="orchelix-logo">🧬</div>'
 
-# Build Esmi avatar for chat (base64 data URI used in st.chat_message avatar)
-if esmi_b64:
-    esmi_avatar = f"data:image/{esmi_mime};base64,{esmi_b64}"
-else:
-    esmi_avatar = "🤖"
+esmi_avatar = f"data:image/{esmi_mime};base64,{esmi_b64}" if esmi_b64 else "🤖"
 
 st.markdown("""
 <style>
@@ -69,7 +64,7 @@ st.markdown("""
     max-width: 860px;
 }
 
-/* ── Hide Streamlit branding only ── */
+/* ── Hide Streamlit branding ── */
 #MainMenu                            { display: none !important; }
 footer                               { display: none !important; }
 .stDeployButton                      { display: none !important; }
@@ -107,16 +102,30 @@ h1, h2, h3 { color: #0A2540 !important; }
     margin-bottom: 10px !important;
 }
 
-/* ── Chat text ── */
-[data-testid="stChatMessage"] p,
-[data-testid="stChatMessage"] li,
-[data-testid="stChatMessage"] span {
+/* ── Chat text — clean and readable ── */
+[data-testid="stChatMessage"] p {
     color: #1e293b !important;
     font-size: 15px !important;
     line-height: 1.75 !important;
-    background: transparent !important;
-    background-color: transparent !important;
+    margin-bottom: 6px !important;
 }
+
+/* ── Lists in chat — nicely spaced ── */
+[data-testid="stChatMessage"] ul,
+[data-testid="stChatMessage"] ol {
+    color: #1e293b !important;
+    font-size: 15px !important;
+    line-height: 1.75 !important;
+    padding-left: 20px !important;
+    margin: 4px 0 10px 0 !important;
+}
+[data-testid="stChatMessage"] li {
+    color: #1e293b !important;
+    font-size: 15px !important;
+    margin-bottom: 4px !important;
+}
+
+/* ── Remove highlight blocks ── */
 [data-testid="stChatMessage"] mark,
 [data-testid="stChatMessage"] code,
 [data-testid="stChatMessage"] pre,
@@ -182,7 +191,7 @@ section[data-testid="stSidebar"] .stButton button:hover {
     background-color: #008C9E !important;
 }
 
-/* ── Quick chip buttons — light teal style, 2 per row ── */
+/* ── Quick chip buttons — 2x2 grid ── */
 div[data-testid="column"] .stButton button {
     background: #F0FAFB !important;
     border: 1.5px solid #00B8D4 !important;
@@ -193,9 +202,6 @@ div[data-testid="column"] .stButton button {
     padding: 10px 8px !important;
     width: 100% !important;
     transition: all 0.15s ease !important;
-    white-space: nowrap !important;
-    overflow: hidden !important;
-    text-overflow: ellipsis !important;
 }
 div[data-testid="column"] .stButton button:hover {
     background: #00B8D4 !important;
@@ -210,41 +216,27 @@ section[data-testid="stSidebar"] label {
 }
 [data-testid="stSpinner"] { color: #00B8D4 !important; }
 
-/* ── Header card ── */
+/* ── Header ── */
 .orchelix-header {
-    display: flex;
-    align-items: center;
-    gap: 14px;
+    display: flex; align-items: center; gap: 14px;
     padding: 14px 18px;
     background: linear-gradient(135deg, #0A2540 0%, #0e3460 100%);
-    border-radius: 14px;
-    margin-bottom: 16px;
+    border-radius: 14px; margin-bottom: 16px;
     box-shadow: 0 4px 20px rgba(10,37,64,0.15);
 }
-
-/* Logo fills its container with no extra whitespace */
 .orchelix-logo-img {
-    width: 60px;
-    height: 60px;
-    object-fit: cover;        /* fills the box edge-to-edge */
-    border-radius: 10px;
-    flex-shrink: 0;
-    box-shadow: 0 2px 10px rgba(0,0,0,0.3);
-    display: block;
+    width: 60px; height: 60px;
+    object-fit: cover; border-radius: 10px;
+    flex-shrink: 0; box-shadow: 0 2px 10px rgba(0,0,0,0.3); display: block;
 }
-
 .orchelix-logo {
     width: 60px; height: 60px;
     background: linear-gradient(135deg, #00B8D4, #00D4B8);
-    border-radius: 10px;
-    display: flex; align-items: center; justify-content: center;
-    font-size: 28px; flex-shrink: 0;
-    box-shadow: 0 2px 8px rgba(0,184,212,0.4);
+    border-radius: 10px; display: flex; align-items: center;
+    justify-content: center; font-size: 28px; flex-shrink: 0;
 }
-
 .orchelix-header-text {
-    display: flex; flex-direction: column;
-    gap: 2px; flex: 1; min-width: 0;
+    display: flex; flex-direction: column; gap: 2px; flex: 1; min-width: 0;
 }
 .orchelix-title {
     font-size: 19px !important; font-weight: 700 !important;
@@ -259,13 +251,10 @@ section[data-testid="stSidebar"] label {
     margin: 0; font-style: italic; font-weight: 300;
 }
 .orchelix-badge {
-    margin-left: auto;
-    background: rgba(0,184,212,0.2);
-    border: 1px solid rgba(0,184,212,0.4);
-    border-radius: 999px; padding: 5px 12px;
-    font-size: 11px; color: #00D4EE; font-weight: 600;
-    display: flex; align-items: center; gap: 6px;
-    white-space: nowrap; flex-shrink: 0;
+    margin-left: auto; background: rgba(0,184,212,0.2);
+    border: 1px solid rgba(0,184,212,0.4); border-radius: 999px;
+    padding: 5px 12px; font-size: 11px; color: #00D4EE; font-weight: 600;
+    display: flex; align-items: center; gap: 6px; white-space: nowrap; flex-shrink: 0;
 }
 .badge-dot {
     width: 7px; height: 7px; background: #00D4EE;
@@ -316,7 +305,6 @@ section[data-testid="stSidebar"] label {
     .orchelix-badge { display: none; }
     .orchelix-logo-img { width: 50px; height: 50px; }
     section[data-testid="stSidebar"] { display: none !important; }
-
     [data-testid="stChatInput"] {
         position: fixed !important;
         bottom: 60px !important;
@@ -431,7 +419,7 @@ st.markdown(f"""
 </div>
 """, unsafe_allow_html=True)
 
-# Quick chips — 2x2 grid, only shown before first user message
+# Quick chips — 2x2 grid
 msg_count = len([m for m in st.session_state.messages if m["role"] == "user"])
 if msg_count == 0:
     chips = [
@@ -440,7 +428,6 @@ if msg_count == 0:
         ("💰", "Pricing & services"),
         ("📋", "What do you offer?"),
     ]
-    # Row 1
     col1, col2 = st.columns(2)
     with col1:
         if st.button(f"{chips[0][0]} {chips[0][1]}", key="chip_0", use_container_width=True):
@@ -448,7 +435,6 @@ if msg_count == 0:
     with col2:
         if st.button(f"{chips[1][0]} {chips[1][1]}", key="chip_1", use_container_width=True):
             st.session_state.quick_prompt = chips[1][1]
-    # Row 2
     col3, col4 = st.columns(2)
     with col3:
         if st.button(f"{chips[2][0]} {chips[2][1]}", key="chip_2", use_container_width=True):
@@ -458,14 +444,14 @@ if msg_count == 0:
             st.session_state.quick_prompt = chips[3][1]
     st.write("")
 
-# Chat history
+# Chat history — use st.markdown to render lists properly
 for message in st.session_state.messages:
     if message["role"] == "assistant":
         with st.chat_message("assistant", avatar=esmi_avatar):
-            st.write(message["content"])
+            st.markdown(message["content"])
     else:
         with st.chat_message("user", avatar="👤"):
-            st.write(message["content"])
+            st.markdown(message["content"])
 
 # ── Chat input ────────────────────────────────────────────────────────────────
 prompt = st.chat_input("Ask Esmi anything — availability, services, booking…")
@@ -478,7 +464,7 @@ if active_prompt:
     st.session_state.messages.append({"role": "user", "content": active_prompt})
 
     with st.chat_message("user", avatar="👤"):
-        st.write(active_prompt)
+        st.markdown(active_prompt)
 
     with st.chat_message("assistant", avatar=esmi_avatar):
         with st.spinner("Esmi is thinking…"):
@@ -491,7 +477,7 @@ if active_prompt:
                 response = clean_response(raw_response)
             except Exception as e:
                 response = f"I'm sorry, I ran into an issue. Please try again. (Error: {str(e)})"
-        st.write(response)
+        st.markdown(response)
 
     st.session_state.messages.append({"role": "assistant", "content": response})
     st.rerun()
