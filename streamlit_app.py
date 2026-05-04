@@ -42,7 +42,7 @@ def load_image_b64(filenames):
 logo_b64, logo_mime = load_image_b64(["logo.png", "logo.jpg", "logo.jpeg"])
 
 # Esmi avatar — looks for esmi.png / esmi.jpg in project root
-esmi_b64, esmi_mime = load_image_b64(["esmi.png", "esmi.jpg", "esmi.jpeg"])
+esmi_b64, esmi_mime = load_image_b64(["Esmi.jpg", "esmi.png", "esmi.jpg", "esmi.jpeg"])
 
 # Build header logo tag — no padding so it fills the square nicely
 if logo_b64:
