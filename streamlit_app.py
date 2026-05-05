@@ -1,34 +1,10 @@
-# streamlit_app.py — Orchelix AI • Esmi (mobile-ready, structured responses)
+# streamlit_app.py — Orchelix AI • Esmi (mobile-ready, clean formatting)
 import streamlit as st
 from graph import graph
 import uuid
 import base64
 import re
 from pathlib import Path
-
-st.set_page_config(
-    page_title="Orchelix AI • Esmi",
-    page_icon="🤖",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
-
-# ── Clean response — removes headers/bold/italic but KEEPS lists ──────────────
-def clean_response(text):
-    # Remove markdown headers (## Title)
-    text = re.sub(r'#{1,6}\s+', '', text)
-    # Remove bold and italic
-    text = re.sub(r'\*\*(.+?)\*\*', r'\1', text)
-    text = re.sub(r'__(.+?)__', r'\1', text)
-    text = re.sub(r'\*(?!\s)(.+?)(?<!\s)\*', r'\1', text)
-    text = re.sub(r'_(?!\s)(.+?)(?<!\s)_', r'\1', text)
-    # Remove inline code
-    text = re.sub(r'`(.+?)`', r'\1', text)
-    # Remove horizontal rules
-    text = re.sub(r'\n[-*_]{3,}\n', '\n', text)
-    # Clean up excessive blank lines
-    text = re.sub(r'\n{3,}', '\n\n', text)
-    return text.strip()
 
 # ── Load image as base64 ──────────────────────────────────────────────────────
 def load_image_b64(filenames):
@@ -41,15 +17,52 @@ def load_image_b64(filenames):
                 return base64.b64encode(f.read()).decode(), mime
     return None, None
 
+# Load logos
 logo_b64, logo_mime = load_image_b64(["logo.png", "logo.jpg", "logo.jpeg"])
 esmi_b64, esmi_mime = load_image_b64(["Esmi.jpg", "esmi.png", "esmi.jpg", "esmi.jpeg"])
 
+# ── Page config — uses Esmi logo as tab icon ──────────────────────────────────
+if esmi_b64:
+    st.set_page_config(
+        page_title="Esmi AI",
+        page_icon=f"data:image/{esmi_mime};base64,{esmi_b64}",
+        layout="wide",
+        initial_sidebar_state="expanded"
+    )
+else:
+    st.set_page_config(
+        page_title="Esmi AI",
+        page_icon="🤖",
+        layout="wide",
+        initial_sidebar_state="expanded"
+    )
+
+# ── Clean response — removes headers/bold/italic but KEEPS numbered lists ─────
+def clean_response(text):
+    text = re.sub(r'#{1,6}\s+', '', text)
+    text = re.sub(r'\*\*(.+?)\*\*', r'\1', text)
+    text = re.sub(r'__(.+?)__', r'\1', text)
+    text = re.sub(r'\*(?!\s)(.+?)(?<!\s)\*', r'\1', text)
+    text = re.sub(r'_(?!\s)(.+?)(?<!\s)_', r'\1', text)
+    text = re.sub(r'`(.+?)`', r'\1', text)
+    text = re.sub(r'\n[-*_]{3,}\n', '\n', text)
+    text = re.sub(r'\n{3,}', '\n\n', text)
+    return text.strip()
+
+# Build header logo
 if logo_b64:
     logo_img_tag = f'<img src="data:image/{logo_mime};base64,{logo_b64}" class="orchelix-logo-img" alt="Orchelix Logo">'
 else:
     logo_img_tag = '<div class="orchelix-logo">🧬</div>'
 
+# Build Esmi avatar
 esmi_avatar = f"data:image/{esmi_mime};base64,{esmi_b64}" if esmi_b64 else "🤖"
+
+# Build sidebar Esmi logo tag
+if esmi_b64:
+    esmi_sidebar_tag = f'<img src="data:image/{esmi_mime};base64,{esmi_b64}" class="esmi-powered-img" alt="Esmi">'
+else:
+    esmi_sidebar_tag = '<span style="font-size:22px;">🤖</span>'
 
 st.markdown("""
 <style>
@@ -102,15 +115,13 @@ h1, h2, h3 { color: #0A2540 !important; }
     margin-bottom: 10px !important;
 }
 
-/* ── Chat text — clean and readable ── */
+/* ── Chat text ── */
 [data-testid="stChatMessage"] p {
     color: #1e293b !important;
     font-size: 15px !important;
     line-height: 1.75 !important;
     margin-bottom: 6px !important;
 }
-
-/* ── Lists in chat — nicely spaced ── */
 [data-testid="stChatMessage"] ul,
 [data-testid="stChatMessage"] ol {
     color: #1e293b !important;
@@ -124,8 +135,6 @@ h1, h2, h3 { color: #0A2540 !important; }
     font-size: 15px !important;
     margin-bottom: 4px !important;
 }
-
-/* ── Remove highlight blocks ── */
 [data-testid="stChatMessage"] mark,
 [data-testid="stChatMessage"] code,
 [data-testid="stChatMessage"] pre,
@@ -150,7 +159,6 @@ h1, h2, h3 { color: #0A2540 !important; }
 }
 [data-testid="stChatInput"] textarea {
     background: #FFFFFF !important;
-    background-color: #FFFFFF !important;
     color: #0A2540 !important;
     -webkit-text-fill-color: #0A2540 !important;
     font-size: 14px !important;
@@ -167,13 +175,11 @@ h1, h2, h3 { color: #0A2540 !important; }
     color: white !important;
     border: none !important;
     z-index: 99999 !important;
-    position: relative !important;
 }
 div[data-baseweb="base-input"],
 div[data-baseweb="textarea"],
 div[data-baseweb="input"] {
     background: #FFFFFF !important;
-    background-color: #FFFFFF !important;
 }
 
 /* ── Sidebar buttons ── */
@@ -191,7 +197,7 @@ section[data-testid="stSidebar"] .stButton button:hover {
     background-color: #008C9E !important;
 }
 
-/* ── Quick chip buttons — 2x2 grid ── */
+/* ── Quick chip buttons ── */
 div[data-testid="column"] .stButton button {
     background: #F0FAFB !important;
     border: 1.5px solid #00B8D4 !important;
@@ -225,9 +231,9 @@ section[data-testid="stSidebar"] label {
     box-shadow: 0 4px 20px rgba(10,37,64,0.15);
 }
 .orchelix-logo-img {
-    width: 60px; height: 60px;
-    object-fit: cover; border-radius: 10px;
-    flex-shrink: 0; box-shadow: 0 2px 10px rgba(0,0,0,0.3); display: block;
+    width: 60px; height: 60px; object-fit: cover;
+    border-radius: 10px; flex-shrink: 0;
+    box-shadow: 0 2px 10px rgba(0,0,0,0.3); display: block;
 }
 .orchelix-logo {
     width: 60px; height: 60px;
@@ -254,7 +260,8 @@ section[data-testid="stSidebar"] label {
     margin-left: auto; background: rgba(0,184,212,0.2);
     border: 1px solid rgba(0,184,212,0.4); border-radius: 999px;
     padding: 5px 12px; font-size: 11px; color: #00D4EE; font-weight: 600;
-    display: flex; align-items: center; gap: 6px; white-space: nowrap; flex-shrink: 0;
+    display: flex; align-items: center; gap: 6px;
+    white-space: nowrap; flex-shrink: 0;
 }
 .badge-dot {
     width: 7px; height: 7px; background: #00D4EE;
@@ -293,6 +300,37 @@ section[data-testid="stSidebar"] label {
 }
 .sidebar-brand-tag {
     font-size: 10.5px !important; color: #00B8D4 !important; font-weight: 500 !important;
+}
+
+/* ── Esmi powered by section ── */
+.esmi-powered-wrap {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding-top: 1.2rem;
+    gap: 8px;
+}
+.esmi-powered-img {
+    width: 52px;
+    height: 52px;
+    object-fit: cover;
+    border-radius: 12px;
+    border: 2px solid #B2EBF2;
+    box-shadow: 0 2px 8px rgba(0,184,212,0.2);
+}
+.esmi-powered-text {
+    font-size: 11px !important;
+    color: #94a3b8 !important;
+    text-align: center;
+    line-height: 1.6;
+}
+.esmi-powered-text b {
+    color: #0A2540 !important;
+    font-weight: 600 !important;
+}
+.esmi-powered-text span {
+    color: #00B8D4 !important;
+    font-weight: 500 !important;
 }
 
 /* ── Mobile ── */
@@ -394,11 +432,13 @@ with st.sidebar:
         st.session_state.thread_id = str(uuid.uuid4())
         st.rerun()
 
-    st.markdown("""
-    <div style="padding-top:1.5rem;text-align:center;">
-        <div style="font-size:11px;color:#94a3b8;line-height:1.7;">
-            🤖 Powered by <b style="color:#0A2540;">Orchelix AI</b><br>
-            LangGraph · GPT-4o · Google Calendar
+    # ── Esmi powered by Orchelix AI ───────────────────────────────────────
+    st.markdown(f"""
+    <div class="esmi-powered-wrap">
+        {esmi_sidebar_tag}
+        <div class="esmi-powered-text">
+            Powered by <b>Esmi</b><br>
+            <span>Orchelix AI</span> · LangGraph · GPT-4o
         </div>
     </div>
     """, unsafe_allow_html=True)
@@ -444,7 +484,7 @@ if msg_count == 0:
             st.session_state.quick_prompt = chips[3][1]
     st.write("")
 
-# Chat history — use st.markdown to render lists properly
+# Chat history
 for message in st.session_state.messages:
     if message["role"] == "assistant":
         with st.chat_message("assistant", avatar=esmi_avatar):
