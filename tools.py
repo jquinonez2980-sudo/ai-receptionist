@@ -35,10 +35,10 @@ def _get_calendar_service():
             json.dump(token_data, f)
             tmp_path = f.name
         creds = Credentials.from_authorized_user_file(tmp_path)
-        os.unlink(tmp_path)          # clean up temp file immediately
+        os.unlink(tmp_path)
         return build("calendar", "v3", credentials=creds)
     except Exception:
-        pass                         # secret not set — fall through to local file
+        pass
 
     # ── Method 2: Local token.json ─────────────────────────────────────────
     token_path = os.getenv("GOOGLE_TOKEN_PATH", "token.json")
@@ -51,6 +51,142 @@ def _get_calendar_service():
         "Google Calendar credentials not found. "
         "Add GOOGLE_TOKEN_JSON to Streamlit secrets, or provide a local token.json file."
     )
+
+
+# ── EMAIL NOTIFICATION HELPER ─────────────────────────────────────────────
+def _send_booking_notification(
+    summary: str,
+    start_time: str,
+    end_time: str,
+    attendee_email: str = None
+):
+    """
+    Send a branded email notification to info@orchelix.com
+    when a new appointment is booked.
+    Silently skips if SENDGRID_API_KEY is not set.
+    """
+    try:
+        # Get API key — try Streamlit secrets first, then .env
+        api_key = None
+        try:
+            import streamlit as st
+            api_key = st.secrets.get("SENDGRID_API_KEY")
+        except Exception:
+            pass
+        if not api_key:
+            api_key = os.environ.get("SENDGRID_API_KEY")
+        if not api_key:
+            print("⚠️ SENDGRID_API_KEY not set — skipping email notification.")
+            return
+
+        from sendgrid import SendGridAPIClient
+        from sendgrid.helpers.mail import Mail
+        from datetime import datetime
+
+        # Format date and time nicely
+        try:
+            dt = datetime.fromisoformat(start_time)
+            formatted_date = dt.strftime("%A, %B %d, %Y")
+            formatted_time = dt.strftime("%I:%M %p")
+        except Exception:
+            formatted_date = start_time
+            formatted_time = ""
+
+        try:
+            dt_end = datetime.fromisoformat(end_time)
+            formatted_end_time = dt_end.strftime("%I:%M %p")
+        except Exception:
+            formatted_end_time = end_time
+
+        subject = f"📅 New Booking — {summary}"
+
+        html_content = f"""
+        <div style="font-family: Inter, Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+
+            <!-- Header -->
+            <div style="background: linear-gradient(135deg, #0A2540, #0e3460);
+                        padding: 24px 28px; border-radius: 12px 12px 0 0;">
+                <h1 style="color: #ffffff; margin: 0; font-size: 20px;">
+                    📅 New Appointment Booked
+                </h1>
+                <p style="color: #00D4EE; margin: 4px 0 0; font-size: 12px;
+                           letter-spacing: 0.06em; text-transform: uppercase;">
+                    Orchelix AI Consulting — Esmi Receptionist
+                </p>
+            </div>
+
+            <!-- Body -->
+            <div style="background: #f8f9fa; padding: 28px;
+                        border: 1px solid #e2e8f0; border-radius: 0 0 12px 12px;">
+
+                <p style="color: #0A2540; font-size: 15px; margin-top: 0;">
+                    A new appointment has been booked through <strong>Esmi</strong>.
+                    Here are the details:
+                </p>
+
+                <!-- Details card -->
+                <div style="background: #ffffff; border: 1px solid #B2EBF2;
+                            border-radius: 10px; padding: 20px; margin: 16px 0;">
+                    <table style="width: 100%; border-collapse: collapse;">
+                        <tr>
+                            <td style="padding: 10px 0; color: #94a3b8; font-size: 12px;
+                                       text-transform: uppercase; letter-spacing: 0.08em;
+                                       width: 140px;">Title</td>
+                            <td style="padding: 10px 0; color: #0A2540;
+                                       font-size: 15px; font-weight: 600;">{summary}</td>
+                        </tr>
+                        <tr style="border-top: 1px solid #f1f5f9;">
+                            <td style="padding: 10px 0; color: #94a3b8; font-size: 12px;
+                                       text-transform: uppercase; letter-spacing: 0.08em;">Date</td>
+                            <td style="padding: 10px 0; color: #0A2540;
+                                       font-size: 15px; font-weight: 600;">{formatted_date}</td>
+                        </tr>
+                        <tr style="border-top: 1px solid #f1f5f9;">
+                            <td style="padding: 10px 0; color: #94a3b8; font-size: 12px;
+                                       text-transform: uppercase; letter-spacing: 0.08em;">Time</td>
+                            <td style="padding: 10px 0; color: #0A2540;
+                                       font-size: 15px; font-weight: 600;">
+                                {formatted_time} – {formatted_end_time}
+                            </td>
+                        </tr>
+                        <tr style="border-top: 1px solid #f1f5f9;">
+                            <td style="padding: 10px 0; color: #94a3b8; font-size: 12px;
+                                       text-transform: uppercase; letter-spacing: 0.08em;">Client Email</td>
+                            <td style="padding: 10px 0; color: #0A2540; font-size: 15px;">
+                                {attendee_email if attendee_email else "Not provided"}
+                            </td>
+                        </tr>
+                    </table>
+                </div>
+
+                <p style="color: #64748b; font-size: 13px; margin-bottom: 0;">
+                    This notification was sent automatically by <strong>Esmi</strong>,
+                    your AI receptionist at Orchelix AI Consulting.
+                </p>
+            </div>
+
+            <!-- Footer -->
+            <div style="text-align: center; padding: 16px; color: #94a3b8; font-size: 11px;">
+                © Orchelix AI Consulting &nbsp;·&nbsp;
+                <span style="color: #00B8D4;">Orchestrating the Future of AI</span>
+            </div>
+        </div>
+        """
+
+        message = Mail(
+            from_email="info@orchelix.com",
+            to_emails="info@orchelix.com",
+            subject=subject,
+            html_content=html_content
+        )
+
+        sg = SendGridAPIClient(api_key)
+        response = sg.send(message)
+        print(f"✅ Booking notification sent! Status: {response.status_code}")
+
+    except Exception as e:
+        # Never let email failure break the booking
+        print(f"⚠️ Email notification failed: {str(e)}")
 
 
 # ── ORCHELIX KNOWLEDGE BASE ───────────────────────────────────────────────
@@ -143,7 +279,7 @@ def book_appointment(
     end_time: str,
     attendee_email: str = None
 ) -> str:
-    """Book a confirmed appointment in Google Calendar."""
+    """Book a confirmed appointment in Google Calendar and send email notification."""
     try:
         service = _get_calendar_service()
         tz = "America/Toronto"
@@ -159,6 +295,14 @@ def book_appointment(
         created = service.events().insert(
             calendarId="primary", body=event, sendUpdates="all"
         ).execute()
+
+        # ── Send email notification to info@orchelix.com ──────────────────
+        _send_booking_notification(
+            summary=summary,
+            start_time=start_time,
+            end_time=end_time,
+            attendee_email=attendee_email
+        )
 
         return (
             f"✅ Appointment booked!\n"
