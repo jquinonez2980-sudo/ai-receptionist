@@ -166,11 +166,13 @@ section[data-testid="stSidebar"] .stButton > button:hover { background: #00B8D4 
     padding: 18px 0 8px; gap: 10px;
 }
 .sb-esmi-img {
-    width: 58px; height: 58px;
-    object-fit: cover; object-position: center top;
+    width: 72px; height: 72px;
+    object-fit: cover; object-position: center 10%;
     border-radius: 14px;
     border: 2px solid #B2EBF2;
     box-shadow: 0 2px 12px rgba(0,184,212,0.18);
+    background: #0A2540;
+    display: block;
 }
 .sb-esmi-fallback {
     width: 58px; height: 58px;
