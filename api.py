@@ -1,0 +1,162 @@
+"""FastAPI chat endpoint for Esmi — replaces Streamlit as the HTTP interface.
+
+Exposes:
+  GET  /health  — liveness check
+  POST /chat    — SSE streaming chat (LangGraph astream_events)
+
+Run locally:  uvicorn api:app --reload --port 8000
+Railway:      see railway.toml
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import re
+from typing import AsyncGenerator
+
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
+from pydantic import BaseModel
+
+from graph import graph
+
+log = logging.getLogger(__name__)
+
+app = FastAPI(title="Esmi API", version="1.0")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],   # Next.js proxies all requests; browser never hits this directly
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["Content-Type"],
+)
+
+
+# ── Pydantic schema ───────────────────────────────────────────────────────────
+
+class ChatRequest(BaseModel):
+    message: str
+    thread_id: str
+
+
+# ── Text utilities (copied from streamlit_app.py to avoid Streamlit import) ──
+
+def _clean_response(text: str) -> str:
+    text = re.sub(r"#{1,6}\s+", "", text)
+    text = re.sub(r"\*\*(.+?)\*\*", r"\1", text)
+    text = re.sub(r"__(.+?)__", r"\1", text)
+    text = re.sub(r"\*(?!\s)(.+?)(?<!\s)\*", r"\1", text)
+    text = re.sub(r"_(?!\s)(.+?)(?<!\s)_", r"\1", text)
+    text = re.sub(r"`(.+?)`", r"\1", text)
+    text = re.sub(r"\n[-*_]{3,}\n", "\n", text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()
+
+
+def _parse_time_slots(text: str) -> tuple[str | None, list[str]]:
+    slot_pattern = re.compile(
+        r"\b(\d{1,2}:\d{2}\s*(?:AM|PM)\s*[–\-]\s*\d{1,2}:\d{2}\s*(?:AM|PM))\b"
+    )
+    slots = slot_pattern.findall(text)
+    date_pattern = re.compile(
+        r"((?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday),?\s+"
+        r"(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|"
+        r"Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)"
+        r"\s+\d{1,2}(?:,?\s+\d{4})?)",
+        re.IGNORECASE,
+    )
+    date_match = date_pattern.search(text)
+    date_label = date_match.group(1) if date_match else None
+    return date_label, [s.strip() for s in slots]
+
+
+def _strip_slots_from_text(text: str) -> str:
+    text = re.sub(
+        r"\n\s*[-•]\s*\d{1,2}:\d{2}\s*(?:AM|PM)\s*[–\-]\s*\d{1,2}:\d{2}\s*(?:AM|PM)",
+        "",
+        text,
+    )
+    text = re.sub(
+        r"\n\s*\d{1,2}:\d{2}\s*(?:AM|PM)\s*[–\-]\s*\d{1,2}:\d{2}\s*(?:AM|PM)",
+        "",
+        text,
+    )
+    text = re.sub(r"Which of these works best for you\?\s*", "", text)
+    return text.strip()
+
+
+# ── SSE generator ─────────────────────────────────────────────────────────────
+
+async def _stream_chat(message: str, thread_id: str) -> AsyncGenerator[str, None]:
+    config = {"configurable": {"thread_id": thread_id}}
+    full_text = ""
+
+    try:
+        async for event in graph.astream_events(
+            {"messages": [{"role": "user", "content": message}]},
+            config=config,
+            version="v2",
+        ):
+            kind = event["event"]
+
+            if kind == "on_tool_start":
+                tool_name = event.get("name", "tool")
+                yield f"data: {json.dumps({'type': 'tool_start', 'tool': tool_name})}\n\n"
+
+            elif kind == "on_tool_end":
+                yield f"data: {json.dumps({'type': 'tool_end'})}\n\n"
+
+            elif kind == "on_chat_model_stream":
+                chunk = event["data"].get("chunk")
+                if chunk is None:
+                    continue
+                content = getattr(chunk, "content", "")
+                if isinstance(content, list):
+                    for item in content:
+                        if isinstance(item, dict) and item.get("type") == "text":
+                            text = item["text"]
+                            if text:
+                                full_text += text
+                                yield f"data: {json.dumps({'type': 'token', 'content': text})}\n\n"
+                elif isinstance(content, str) and content:
+                    full_text += content
+                    yield f"data: {json.dumps({'type': 'token', 'content': content})}\n\n"
+
+        # Build final done event
+        cleaned = _clean_response(full_text)
+        date_label, slots = _parse_time_slots(full_text)
+
+        done: dict = {"type": "done", "full_text": cleaned}
+        if slots:
+            done["slots"] = slots
+            done["full_text"] = _strip_slots_from_text(cleaned)
+            if date_label:
+                done["date_label"] = date_label
+
+        yield f"data: {json.dumps(done)}\n\n"
+
+    except Exception as exc:
+        log.exception("Stream error for thread %s", thread_id)
+        yield f"data: {json.dumps({'type': 'error', 'message': 'Something went wrong — please try again.'})}\n\n"
+
+
+# ── Routes ────────────────────────────────────────────────────────────────────
+
+@app.get("/health")
+async def health() -> dict:
+    return {"status": "ok", "agent": "esmi"}
+
+
+@app.post("/chat")
+async def chat(req: ChatRequest) -> StreamingResponse:
+    return StreamingResponse(
+        _stream_chat(req.message, req.thread_id),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+        },
+    )

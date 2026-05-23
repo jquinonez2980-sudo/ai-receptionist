@@ -9,4 +9,4 @@ COPY . .
 
 EXPOSE 8080
 
-CMD ["sh", "-c", "streamlit run /app/streamlit_app.py --server.port ${PORT:-8080} --server.address 0.0.0.0 --server.headless true --server.enableCORS false --server.enableXsrfProtection false"]
+CMD ["sh", "-c", "uvicorn api:app --host 0.0.0.0 --port ${PORT:-8080}"]
