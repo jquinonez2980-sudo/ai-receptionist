@@ -1,8 +1,47 @@
+# ─────────────────────────────────────────────────────────────────────
+#  Esmi — .gitignore (Phase 1)
+#  Critical: every line under "Secrets" must be honoured.
+#  See CREDENTIAL_ROTATION.md for cleanup of any previously-tracked secrets.
+# ─────────────────────────────────────────────────────────────────────
+
+# ── Secrets — NEVER commit ───────────────────────────────────────────
 .env
-credentials.json
+.env.*
+!.env.example
+*.env
 token.json
-venv/
-__pycache__/
-*.pyc
-.DS_Store
+token_*.json
+credentials.json
+credentials_*.json
+service_account.json
+*.pem
+*.key
+
+# Streamlit secrets
 .streamlit/secrets.toml
+
+# ── Persisted FAISS index (rebuilds on first run) ────────────────────
+.kb_index/
+
+# ── Python ───────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# ── Virtualenvs ──────────────────────────────────────────────────────
+venv/
+.venv/
+env/
+
+# ── Logs ─────────────────────────────────────────────────────────────
+*.log
+
+# ── IDE / OS ─────────────────────────────────────────────────────────
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
