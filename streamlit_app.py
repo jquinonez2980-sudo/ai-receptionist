@@ -87,6 +87,11 @@ logo_img_tag = (
     if logo_b64
     else '<div class="hdr-logo-fallback">✦</div>'
 )
+esmi_hdr_tag = (
+    f'<img src="data:image/{esmi_mime};base64,{esmi_b64}" class="hdr-logo" alt="Esmi">'
+    if esmi_b64
+    else logo_img_tag
+)
 esmi_avatar = f"data:image/{esmi_mime};base64,{esmi_b64}" if esmi_b64 else "✦"
 esmi_sidebar_tag = (
     f'<img src="data:image/{esmi_mime};base64,{esmi_b64}" class="sb-esmi-img" alt="Esmi">'
@@ -195,10 +200,12 @@ section[data-testid="stSidebar"] .stButton > button:hover { background: #00B8D4 
 }
 .hdr-logo {
     width: 50px; height: 50px;
-    object-fit: cover; object-position: center;
+    object-fit: cover; object-position: center 10%;
     border-radius: 10px;
     box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+    background: #0A2540;
     flex-shrink: 0;
+    display: block;
 }
 .hdr-logo-fallback {
     width: 50px; height: 50px;
@@ -482,7 +489,7 @@ with st.sidebar:
 # ── Header ────────────────────────────────────────────────────────────────────
 st.markdown(f"""
 <div class="chat-header">
-    {logo_img_tag}
+    {esmi_hdr_tag}
     <div class="hdr-text">
         <div class="hdr-title">Esmi — AI Receptionist</div>
         <div class="hdr-sub">Orchelix AI Consulting · Appointments · Services · FAQs</div>
