@@ -49,4 +49,4 @@ Once the first agent has earned the room, add the next one. Same console, same c
 
 We don't sell a discovery phase. The two-week pilot *is* the discovery phase — and it ends with a live agent in your tools, not a slide deck.
 
-Pricing starts at $2,400/month (Pilot plan). The deployment is included.
+Pricing starts at $4,250/month (Pilot plan). The deployment is included.

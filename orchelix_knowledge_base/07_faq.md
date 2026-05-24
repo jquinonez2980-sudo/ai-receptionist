@@ -57,10 +57,13 @@ A: If the agent doesn't move the number we set at kickoff, we don't move forward
 ## Pricing
 
 **Q: What does Orchelix cost?**
-A: Three plans:
-- **Pilot** — $2,400/month (or $1,950/month billed annually). One agent, 1,500 actions/month, weekly check-in, next-business-day SLA.
-- **Operate** — $5,800/month (or $4,750/month billed annually, saves $12,600/yr). All three agents, 10,000 actions/month, dedicated consultant with 4-hour SLA, up to 3 locations, API access.
-- **Orchestrate** — Custom, from $14,000/month. Unlimited agents, named delivery team (consultant + engineer + analyst), 1-hour SLA, 24/7 on-call, SSO.
+A: Four tiers, hybrid Base Orchestration Fee + Performance Component:
+- **Pilot** — $4,250/month (or $41,700/year, save 18%). One AI agent, system design, integrations, success metrics, monthly optimization.
+- **Growth** — $8,500/month (or $83,600/year, save 18%). 2–4 orchestrated agents focused on lead qualification and appointment setting.
+- **Scale** — $16,500/month (or $162,000/year, save 18%). Full multi-agent Revenue OS with analytics and dashboards.
+- **Enterprise** — Custom, starting at $28,000+/month. Fully custom multi-agent architecture with dedicated support.
+
+Annual billing saves 18% on Pilot, Growth, and Scale. Most clients start with Pilot and upgrade once the agent has earned the room.
 
 **Q: Are there setup fees?**
 A: No. The 14-day deployment is included in every plan.
@@ -79,10 +82,10 @@ A: Monthly plans cancel anytime, effective end of cycle. Annual plans cancel wit
 ## Technical & Compliance
 
 **Q: What languages does Esmi support?**
-A: English and Spanish natively on all plans, with mid-call language switching. French is available as an add-on on Pilot and Operate, and standard on Orchestrate.
+A: English and Spanish natively on all plans, with mid-call language switching. French is available as an add-on on Pilot and Growth, and standard on Scale and Enterprise.
 
 **Q: What calendar and CRM systems do you integrate with?**
-A: Calendar: Google Calendar, Microsoft 365, Calendly, Acuity. CRM: HubSpot, Salesforce, Pipedrive, Zoho. Ledger: QuickBooks, Xero. Phone: included on all plans. Pilot includes one CRM or ledger integration; Operate includes unlimited integrations.
+A: Calendar: Google Calendar, Microsoft 365, Calendly, Acuity. CRM: HubSpot, Salesforce, Pipedrive, Zoho. Ledger: QuickBooks, Xero. Phone: included on all plans. Growth and above include unlimited integrations.
 
 **Q: Is Orchelix PIPEDA-compliant?**
 A: Yes. PIPEDA-aligned by default. Canadian data residency is available on request. SOC 2 audit is in progress.

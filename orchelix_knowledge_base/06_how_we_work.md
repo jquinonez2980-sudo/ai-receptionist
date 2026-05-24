@@ -26,7 +26,7 @@ Every plan includes a Monday-morning scorecard — a structured summary showing:
 - What the agent handled that week
 - Key metrics (calls answered, leads qualified, transactions reconciled, etc.)
 - What moved, what stalled, and recommended next steps
-- Delivered by email + PDF (Pilot), with a monthly business review call (Operate), and quarterly business reviews (Orchestrate)
+- Delivered by email + PDF (Pilot), with a monthly business review call (Growth/Scale), and quarterly business reviews (Enterprise)
 
 ---
 
@@ -42,9 +42,10 @@ All agents share a single operator console where you can:
 ## The Consultant Model
 Orchelix is a consultancy that ships software. Every client has a named senior consultant, not just a support queue.
 
-- **Pilot**: Weekly check-in; next business day SLA
-- **Operate**: Dedicated consultant; 4-hour SLA; monthly business review
-- **Orchestrate**: Named delivery team (consultant + engineer + analyst); 1-hour SLA; 24/7 on-call escalation
+- **Pilot**: Weekly check-in; monthly optimization session
+- **Growth**: Dedicated consultant; monthly business review
+- **Scale**: Named delivery team (consultant + engineer + analyst); analytics dashboards
+- **Enterprise**: 1-hour SLA; 24/7 on-call escalation; fully custom support
 
 ---
 

@@ -1,78 +1,92 @@
 # Pricing & Plans — Orchelix AI Consulting
 
-## Pricing Philosophy
-Pay for the work it actually does. A senior consultant, a focused two-week pilot, and a plan that grows with the agents you trust. No long contracts. Cancel anytime. Annual billing saves 18%.
+## Pricing Model
+Hybrid model: Base Orchestration Fee + Performance Component.
+Annual billing saves 18% on all plans. No setup fees — deployment is included in every plan. Cancel anytime.
 
 ---
 
-## Plan 1: Pilot — "Prove it"
-**Monthly: $2,400/month | Annual: $1,950/month (billed annually)**
-Note: 14-day deployment is included in every plan. No setup fees.
+## Pilot — "Prove it"
+**Monthly: $4,250/month | Annual: $41,700/year (save 18%)**
 
-One agent, one workflow, instrumented end-to-end in two weeks. Read the scorecard, then decide.
+Best for businesses testing AI and proving ROI before a larger commitment. One AI agent, one workflow, instrumented end-to-end.
 
 **What's included:**
-- One Orchelix agent of your choice — Receptionist (Esmi), Revenue-Ops, or Finance OS
-- Up to 1,500 agent actions per month
+- 1 AI agent of your choice — Esmi (Receptionist), Revenue-Ops, or Finance OS
+- System design and integrations
+- Success metrics defined at kickoff
+- Monthly optimization session with your consultant
+- Operator console + full audit log
+- Monday-morning scorecard, email + PDF
 - EN · ES bilingual out of the box
 - Senior consultant, weekly check-in
-- Operator console + full audit log
-- One CRM or ledger integration
-- Monday-morning scorecard, email + PDF
-- Support SLA: next business day
+
+Most clients start with Pilot and upgrade once the agent has earned the room.
 
 ---
 
-## Plan 2: Operate — "Run it" (Most Popular)
-**Monthly: $5,800/month | Annual: $4,750/month (billed annually, saves $12,600/yr)**
+## Growth — "Run it"
+**Monthly: $8,500/month | Annual: $83,600/year (save 18%)**
 
-A full revenue-operations stack — three agents, one console, a senior consultant on the line.
+Best for growing businesses that want a multi-agent stack focused on lead qualification and appointment setting.
 
 **What's included (everything in Pilot, plus):**
-- All three agents — Receptionist (Esmi), Revenue-Ops, and Finance OS
-- Up to 10,000 agent actions per month
-- EN · ES bilingual + French add-on available
-- Dedicated senior consultant with a 4-hour SLA
+- 2–4 orchestrated agents — configured and tuned for your pipeline
+- Lead qualification and appointment-setting workflows
+- Dedicated senior consultant
 - Unlimited integrations — CRM, ledger, calendar, phone
 - Monthly business review with revenue scorecard
 - PIPEDA-aligned audit trail · data residency on request
 - Priority phone & Slack support
-- Up to 3 locations or business units
-- API access
-- 2 bespoke workflow customizations per quarter
 
 ---
 
-## Plan 3: Orchestrate — "Scale it"
-**Pricing: Custom — from $14,000/month, scoped per engagement**
+## Scale — "Scale it"
+**Monthly: $16,500/month | Annual: $162,000/year (save 18%)**
 
-For multi-location operators and professional firms — custom workflows, SSO, and a named delivery team.
+Full multi-agent Revenue OS — analytics, dashboards, and a named consultant team.
 
-**What's included (everything in Operate, plus):**
-- Unlimited agents across multiple locations or business units
-- Volume agent actions — scaled to your operations
-- EN · ES · FR + custom language tuning
-- Named delivery team — consultant + engineer + analyst
-- Custom integrations & bespoke agent workflows (unlimited)
+**What's included (everything in Growth, plus):**
+- Full multi-agent Revenue OS
+- Analytics and performance dashboards
+- Named delivery team (consultant + engineer + analyst)
+- Custom integrations & bespoke agent workflows
 - SSO, role-based access, and approval workflows
+- Up to multiple locations or business units
+
+---
+
+## Enterprise — "Custom"
+**Starting at $28,000+/month — custom scoped per engagement**
+
+Fully custom multi-agent architecture for multi-location operators and enterprises.
+
+**What's included (everything in Scale, plus):**
+- Fully custom multi-agent architecture
+- Dedicated support team with 1-hour SLA and 24/7 on-call escalation
 - SOC 2 reports, MSA, custom DPA
-- 1-hour SLA · 24/7 on-call escalation
 - Unlimited locations and business units
+- Custom language tuning (EN · ES · FR + others)
 - Quarterly business reviews + monthly reviews
 
 ---
 
-## What counts as an "agent action"?
-A discrete piece of work the agent performs: a call answered, a lead qualified, a transaction reconciled, a follow-up sent. Read-only operations and internal sync don't count. The live action count is visible in the operator console — no surprise overages.
+## Common Questions
 
-## Are there setup fees?
-No. The 14-day deployment is included in every plan. Custom integrations on Orchestrate are scoped separately, but anything in the standard connector library (CRMs, ledgers, calendars, phone, email) is included.
+**Does the price include deployment?**
+Yes. The two-week deployment (discovery, build, shadow, go-live) is included in every plan. No setup fees.
 
-## What if we exceed our monthly actions?
-Nothing breaks. You're notified at 80% and your consultant works with you on the right next step — staying on the same tier, adding a top-up pack, or moving up. No service interruptions, no surprise charges.
+**What is the performance component?**
+Pricing includes a component tied to results — the exact structure is defined at kickoff based on the goal we're measuring against.
 
-## Cancellation policy
+**Do you offer annual discounts?**
+Yes. Annual billing saves 18% on Pilot, Growth, and Scale. Enterprise is custom-scoped.
+
+**What happens if we need more than the plan covers?**
+Your consultant works with you on the right next step — adding capacity or upgrading. No service interruptions, no surprise charges.
+
+**Cancellation policy**
 Monthly plans cancel anytime, effective end of cycle. Annual plans cancel with 30 days' notice. You keep export access to every agent action and audit log for 60 days after cancellation.
 
-## How to get started
-Book a demo at orchelix.com/book. A senior consultant will map your workflow and recommend the right starting agent.
+**How to get started**
+Book a demo at orchelix.com/book. A senior consultant will map your workflow and recommend the right starting tier.
