@@ -182,11 +182,49 @@ async def health() -> dict:
 
 @app.get("/health/calendar")
 async def health_calendar() -> dict:
-    """Diagnostic: test Google Calendar auth and return the first available slot or error."""
+    """Diagnostic: test Google Calendar auth step by step."""
+    import os, json, tempfile
+    steps = {}
+
+    # Step 1: check env var presence
+    token_json_env = os.environ.get("GOOGLE_TOKEN_JSON")
+    steps["env_var_set"] = token_json_env is not None
+    steps["env_var_length"] = len(token_json_env) if token_json_env else 0
+
+    # Step 2: parse JSON
+    if token_json_env:
+        try:
+            token_data = json.loads(token_json_env)
+            steps["json_parse"] = "ok"
+            steps["has_refresh_token"] = bool(token_data.get("refresh_token"))
+            steps["has_client_id"] = bool(token_data.get("client_id"))
+        except Exception as e:
+            steps["json_parse"] = f"FAILED: {e}"
+            return {"status": "error", "steps": steps}
+    else:
+        return {"status": "error", "steps": steps, "detail": "GOOGLE_TOKEN_JSON env var not found"}
+
+    # Step 3: build credentials
     try:
-        from tools import _get_calendar_service
+        from google.oauth2.credentials import Credentials
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+            json.dump(token_data, f)
+            tmp_path = f.name
+        creds = Credentials.from_authorized_user_file(tmp_path)
+        os.unlink(tmp_path)
+        steps["credentials_loaded"] = "ok"
+        steps["creds_valid"] = creds.valid
+        steps["creds_expired"] = creds.expired
+        steps["has_token"] = bool(creds.token)
+    except Exception as e:
+        steps["credentials_loaded"] = f"FAILED: {e}"
+        return {"status": "error", "steps": steps}
+
+    # Step 4: call the API
+    try:
+        from googleapiclient.discovery import build
         from datetime import date
-        service = _get_calendar_service()
+        service = build("calendar", "v3", credentials=creds, cache_discovery=False)
         today = date.today().isoformat()
         result = service.freebusy().query(body={
             "timeMin": f"{today}T00:00:00Z",
@@ -194,9 +232,11 @@ async def health_calendar() -> dict:
             "timeZone": "America/Toronto",
             "items": [{"id": "primary"}],
         }).execute()
-        return {"status": "ok", "busy_count": len(result["calendars"]["primary"]["busy"])}
+        steps["api_call"] = "ok"
+        return {"status": "ok", "steps": steps, "busy_count": len(result["calendars"]["primary"]["busy"])}
     except Exception as e:
-        return {"status": "error", "detail": str(e)}
+        steps["api_call"] = f"FAILED: {e}"
+        return {"status": "error", "steps": steps}
 
 
 @app.post("/chat")
