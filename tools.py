@@ -77,22 +77,38 @@ def _get_calendar_service(tenant_id: str = "default"):
 
         creds = None
 
-        # Method 1: Streamlit Cloud secret
-        try:
-            import streamlit as st  # type: ignore
+        # Method 1: GOOGLE_TOKEN_JSON env var (Railway / any FastAPI host)
+        token_json_env = os.environ.get("GOOGLE_TOKEN_JSON")
+        if token_json_env:
+            try:
+                token_data = json.loads(token_json_env)
+                with tempfile.NamedTemporaryFile(
+                    mode="w", suffix=".json", delete=False
+                ) as f:
+                    json.dump(token_data, f)
+                    tmp_path = f.name
+                creds = Credentials.from_authorized_user_file(tmp_path)
+                os.unlink(tmp_path)
+            except Exception as e:
+                log.warning(f"GOOGLE_TOKEN_JSON env var parse failed: {e}")
 
-            token_data = json.loads(st.secrets["GOOGLE_TOKEN_JSON"])
-            with tempfile.NamedTemporaryFile(
-                mode="w", suffix=".json", delete=False
-            ) as f:
-                json.dump(token_data, f)
-                tmp_path = f.name
-            creds = Credentials.from_authorized_user_file(tmp_path)
-            os.unlink(tmp_path)
-        except Exception:
-            pass
+        # Method 2: Streamlit Cloud secret (legacy — kept for backward compat)
+        if creds is None:
+            try:
+                import streamlit as st  # type: ignore
 
-        # Method 2: Local token.json
+                token_data = json.loads(st.secrets["GOOGLE_TOKEN_JSON"])
+                with tempfile.NamedTemporaryFile(
+                    mode="w", suffix=".json", delete=False
+                ) as f:
+                    json.dump(token_data, f)
+                    tmp_path = f.name
+                creds = Credentials.from_authorized_user_file(tmp_path)
+                os.unlink(tmp_path)
+            except Exception:
+                pass
+
+        # Method 3: Local token.json file
         if creds is None:
             token_path = os.getenv("GOOGLE_TOKEN_PATH", "token.json")
             if os.path.exists(token_path):
