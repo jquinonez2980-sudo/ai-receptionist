@@ -89,9 +89,25 @@ def _strip_slots_from_text(text: str) -> str:
 
 # ── SSE generator ─────────────────────────────────────────────────────────────
 
+def _extract_content(content) -> str:
+    """Normalise AIMessageChunk content — handles str and list-of-blocks formats."""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for item in content:
+            if isinstance(item, dict) and item.get("type") == "text":
+                parts.append(item.get("text", ""))
+            elif isinstance(item, str):
+                parts.append(item)
+        return "".join(parts)
+    return ""
+
+
 async def _stream_chat(message: str, thread_id: str) -> AsyncGenerator[str, None]:
     config = {"configurable": {"thread_id": thread_id}}
     full_text = ""
+    chain_end_text = ""  # fallback if streaming tokens are empty
 
     try:
         async for event in graph.astream_events(
@@ -100,6 +116,7 @@ async def _stream_chat(message: str, thread_id: str) -> AsyncGenerator[str, None
             version="v2",
         ):
             kind = event["event"]
+            log.debug("SSE event: %s | name: %s", kind, event.get("name", "-"))
 
             if kind == "on_tool_start":
                 tool_name = event.get("name", "tool")
@@ -112,17 +129,31 @@ async def _stream_chat(message: str, thread_id: str) -> AsyncGenerator[str, None
                 chunk = event["data"].get("chunk")
                 if chunk is None:
                     continue
-                content = getattr(chunk, "content", "")
-                if isinstance(content, list):
-                    for item in content:
-                        if isinstance(item, dict) and item.get("type") == "text":
-                            text = item["text"]
-                            if text:
-                                full_text += text
-                                yield f"data: {json.dumps({'type': 'token', 'content': text})}\n\n"
-                elif isinstance(content, str) and content:
-                    full_text += content
-                    yield f"data: {json.dumps({'type': 'token', 'content': content})}\n\n"
+                text = _extract_content(getattr(chunk, "content", ""))
+                if text:
+                    full_text += text
+                    yield f"data: {json.dumps({'type': 'token', 'content': text})}\n\n"
+
+            elif kind == "on_chain_end":
+                # Fallback: extract final AI message from the outer graph's output.
+                # Used when on_chat_model_stream tokens don't surface (e.g. nested graphs).
+                output = event.get("data", {}).get("output")
+                if isinstance(output, dict):
+                    msgs = output.get("messages", [])
+                    if msgs:
+                        last = msgs[-1]
+                        text = _extract_content(getattr(last, "content", ""))
+                        if text:
+                            chain_end_text = text  # keep the most recent non-empty one
+
+        # If token streaming produced nothing, fall back to chain_end capture
+        if not full_text and chain_end_text:
+            log.warning(
+                "Token streaming yielded nothing — using on_chain_end fallback for thread %s",
+                thread_id,
+            )
+            full_text = chain_end_text
+            yield f"data: {json.dumps({'type': 'token', 'content': full_text})}\n\n"
 
         # Build final done event
         cleaned = _clean_response(full_text)
