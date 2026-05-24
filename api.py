@@ -180,6 +180,14 @@ async def health() -> dict:
     return {"status": "ok", "agent": "esmi"}
 
 
+@app.get("/health/env")
+async def health_env() -> dict:
+    """Diagnostic: list env var names that contain GOOGLE, RAILWAY, or PORT."""
+    import os
+    keys = [k for k in os.environ if any(x in k.upper() for x in ["GOOGLE", "RAILWAY", "PORT", "TOKEN"])]
+    return {"visible_keys": sorted(keys), "total_env_vars": len(os.environ)}
+
+
 @app.get("/health/calendar")
 async def health_calendar() -> dict:
     """Diagnostic: test Google Calendar auth step by step."""
