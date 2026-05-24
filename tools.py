@@ -81,7 +81,12 @@ def _get_calendar_service(tenant_id: str = "default"):
         token_json_env = os.environ.get("GOOGLE_TOKEN_JSON")
         if token_json_env:
             try:
-                token_data = json.loads(token_json_env)
+                # Strip wrapping single or double quotes (common in .env Raw Editor)
+                stripped = token_json_env.strip()
+                if (stripped.startswith("'") and stripped.endswith("'")) or \
+                   (stripped.startswith('"') and stripped.endswith('"')):
+                    stripped = stripped[1:-1]
+                token_data = json.loads(stripped)
                 with tempfile.NamedTemporaryFile(
                     mode="w", suffix=".json", delete=False
                 ) as f:
