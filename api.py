@@ -180,6 +180,25 @@ async def health() -> dict:
     return {"status": "ok", "agent": "esmi"}
 
 
+@app.get("/health/calendar")
+async def health_calendar() -> dict:
+    """Diagnostic: test Google Calendar auth and return the first available slot or error."""
+    try:
+        from tools import _get_calendar_service
+        from datetime import date
+        service = _get_calendar_service()
+        today = date.today().isoformat()
+        result = service.freebusy().query(body={
+            "timeMin": f"{today}T00:00:00Z",
+            "timeMax": f"{today}T23:59:59Z",
+            "timeZone": "America/Toronto",
+            "items": [{"id": "primary"}],
+        }).execute()
+        return {"status": "ok", "busy_count": len(result["calendars"]["primary"]["busy"])}
+    except Exception as e:
+        return {"status": "error", "detail": str(e)}
+
+
 @app.post("/chat")
 async def chat(req: ChatRequest) -> StreamingResponse:
     return StreamingResponse(
