@@ -1,38 +1,33 @@
-# Orchelix AI Consulting - Company Overview
+# Orchelix AI Consulting — Company Overview
 
 ## Core Identity
-**Orchelix AI Consulting** specializes in building and deploying production-ready AI Agents that transform how businesses handle inbound leads and operations.
+Orchelix AI Consulting deploys multi-agent systems that answer the calls, qualify the pipeline, and close the books — bilingually, around the clock, and with an audit trail your operators actually want to use.
 
-Our flagship offering is a **sophisticated AI Receptionist Agent** — a stateful, multi-channel receptionist that acts as the first line of contact and revenue engine for your business.
+We are a consultancy that ships software, not a chatbot with a billing page. Every deployment comes with a named senior consultant and a two-week pilot before any long-term commitment.
 
-## Flagship Product: AI Receptionist Agent
-This intelligent agent handles **all inbound inquiries** across:
-- Email
-- SMS
-- Chat (website/live chat)
-- WhatsApp
+## The Agent Stack — Three Agents, One Console
 
-**What it does autonomously:**
-- Qualifies leads with smart, conversational questions
-- Answers FAQs instantly using your knowledge base
-- Books appointments directly into your calendar
-- Follows up on no-shows and missed opportunities
-- Escalates complex or high-value cases seamlessly to a human
+### Agent 01 — Esmi · Virtual Receptionist
+The front desk that never closes. Esmi picks up in under 14 seconds, holds a real conversation in English or Spanish, and books the appointment, escalates the urgency, or files the voicemail — with a transcript and a reason for every call. Available 24/7 including nights, weekends, and holidays.
 
-Built with **LangGraph’s graph-based orchestration**, the agent is fully stateful, reliable, and production-ready. It maintains context across conversations, remembers previous interactions, and operates 24/7 without fatigue.
+### Agent 02 — Revenue-Ops Agents
+A pair of sales and marketing agents that work the pipeline. Every lead is triaged, scored, sequenced, and handed off with the context a senior rep would have written themselves. Works natively in HubSpot, Salesforce, Pipedrive, and Zoho.
 
-## Why This Agent Is Our Specialty
-Most businesses lose 30-60% of inbound leads due to slow or inconsistent responses. Our AI Receptionist Agent eliminates that leak — turning inquiries into qualified appointments and revenue while freeing your team from repetitive tasks.
+### Agent 03 — Accounting & Finance OS
+Automated bookkeeping, reconciliations, and a month-end close you can defend to an auditor. The agent categorizes, matches, and flags — your bookkeeper opens to a triaged inbox of decisions worth a human's time. QuickBooks and Xero native.
 
-It is the perfect entry-point AI solution: high ROI, fast to implement, and immediately visible impact on your pipeline.
+All three agents share a single operator console with a full audit trail, human-override controls, and a Monday-morning scorecard.
 
-## Broader Capabilities
-While the AI Receptionist is our flagship, we also build coordinated teams of AI Agents that automate the full revenue engine:
-- Sales pipeline & follow-up
-- Marketing campaign execution
-- Finance reconciliation & reporting
+## Key Facts
+- Bilingual EN · ES out of the box on all plans; French available as add-on or standard on Orchestrate
+- PIPEDA-aligned by default; Canadian data residency available
+- SOC 2 audit in progress
+- 14-day deployment from kickoff to live agent
+- No setup fees — deployment is included in every plan
+- No long contracts; cancel anytime
 
 ## Mission
-To deliver intelligent, reliable AI Agents that make businesses feel calm, responsive, and scalable — starting with the first point of contact.
+To deliver intelligent, reliable AI agents that make businesses feel calm, responsive, and scalable — starting with the first point of contact.
 
-**One AI Receptionist Agent** can replace multiple full-time roles in lead handling and customer service, giving owners and teams back their time while accelerating growth.
+## Company
+Orchelix AI Consulting. Toronto-based. orchelix.com

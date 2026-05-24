@@ -1,30 +1,52 @@
-# Free 15-Minute AI Growth Audit - Orchelix AI Consulting
+# Getting Started — The Two-Week Pilot
 
-## What the AI Growth Audit Is
-A fast, no-pressure 15-minute call (or video meeting) where we review your current inbound inquiry process and show you exactly how our **AI Receptionist Agent** can transform your lead flow and revenue.
+## The Entry Point: Book a Demo
 
-This is the highest-ROI entry point we offer clients — and the service we push the most.
+The first step with Orchelix is a **30-minute discovery call** with a senior consultant. No deck, no slides — just your workflow. The consultant maps what you're trying to solve and recommends the right starting agent (Esmi, Revenue-Ops, or Finance OS).
 
-## What You’ll Receive in Just 15 Minutes
-- A quick audit of your existing inbound channels (email, SMS, chat, WhatsApp)
-- Identification of your biggest lead leaks (slow response times, missed messages, no-shows)
-- A live demonstration of how our AI Receptionist Agent would handle your real inquiries
-- Clear projections: expected increase in booked appointments and time saved
-- A custom recommendation for your business (including exact channels and features needed)
+Book at orchelix.com/book.
 
-## Why We Offer This Audit for Free
-We believe the best way to prove the power of our AI Receptionist Agent is to show it in action with your own business data. Most clients see the potential for 30–60% more qualified appointments within the first 15 minutes.
+---
 
-## What Happens After the Audit
-If you love what you see, we can:
-1. Deploy a custom AI Receptionist Agent tailored to your knowledge base, branding, and tools
-2. Go live in days (not weeks or months)
-3. Track real results: more booked appointments, fewer lost leads, less manual work
+## The Two-Week Pilot
 
-No contracts. No hard sell. Just clear value.
+After the discovery call, every engagement begins with a **two-week pilot** — included in every plan, no setup fees.
 
-## How to Book Your Free Audit
-Simply reply with “AUDIT” or book directly via our Calendly link. Spots are limited each week to ensure we can give every business full attention.
+**Week 1 — Discovery & Design (Days 1–7)**
+- Days 1–3: Your consultant maps the current inbound flow, integrations, and the goal you're measuring against
+- Days 4–7: The agent is configured to your branding, knowledge base, scripts, and connected tools (calendar, CRM, ledger, phone)
 
-This 15-minute session is the fastest way to see whether the Orchelix AI Receptionist Agent is the right fit for your business in 2026.
+**Week 2 — Shadow, Train, Go Live (Days 8–14)**
+- Days 8–12: The agent runs in shadow mode alongside your real workflow; tuned on actual calls and scenarios
+- Days 13–14: Go-live — agent is live in production; you open Monday to your first scorecard
 
+If the agent doesn't move the number set at kickoff, we don't move forward.
+
+---
+
+## What You'll See on Day 1 of Week 3
+
+Every pilot ends with a **Monday-morning scorecard** — a structured summary showing:
+- What the agent handled that week
+- Key metrics: calls answered, leads qualified, transactions reconciled
+- What moved, what stalled, and recommended next steps
+- Delivered by email + PDF
+
+---
+
+## Why Start with One Agent?
+
+Start with the agent that has the clearest payback. Common starting points:
+- **Esmi** — if you're losing leads to missed calls or after-hours gaps
+- **Revenue-Ops** — if your sales pipeline is leaking qualified leads or follow-up is inconsistent
+- **Finance OS** — if reconciliations and month-end close are consuming too much time
+
+Once the first agent has earned the room, add the next one. Same console, same consultant, no re-platforming.
+
+---
+
+## No Free Audit, No Long Discovery Phase
+
+We don't sell a discovery phase. The two-week pilot *is* the discovery phase — and it ends with a live agent in your tools, not a slide deck.
+
+Pricing starts at $2,400/month (Pilot plan). The deployment is included.

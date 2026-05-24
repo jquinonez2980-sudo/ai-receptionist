@@ -1,43 +1,59 @@
-# How We Work - Orchelix AI Consulting
+# How We Work — Orchelix AI Consulting
 
-## Our Simple, Results-Focused Process
+## From first call to your first agent in 14 days.
 
-We make implementing a production-ready **AI Receptionist Agent** fast, transparent, and low-risk. Most clients are live within 5–10 business days.
+We make implementing a production-ready AI agent fast, transparent, and low-risk. Every plan includes the full 14-day deployment — no setup fees, no hidden costs.
 
-### Step-by-Step Client Journey
+---
 
-1. **Free 15-Minute AI Growth Audit**  
-   You book a quick call. We review your current inbound flow (email, SMS, chat, WhatsApp) and show you exactly how our AI Receptionist Agent would handle your real inquiries live.
+## The 14-Day Deployment Process
 
-2. **Custom Agent Design**  
-   We build the AI Receptionist Agent specifically for your business using:
-   - Your branding and voice
-   - Your knowledge base (FAQs, services, pricing, policies)
-   - Your existing tools (calendar, CRM, email, WhatsApp, etc.)
+### Week 1 — Discovery & Design (Days 1–7)
+A senior consultant sits with your team and writes the workflow we'll automate.
+- Days 1–3: Discovery — we map your current inbound flow, integrations, and the goal we're measuring against
+- Days 4–7: Build — the agent is configured to your branding, knowledge base, scripts, and connected tools (calendar, CRM, ledger, phone)
 
-3. **LangGraph-Powered Build**  
-   The agent is developed with **LangGraph’s graph-based orchestration** so it is fully stateful, reliable, and can handle complex, multi-turn conversations across channels.
+### Week 2 — Shadow, Train, Go Live (Days 8–14)
+- Days 8–12: The agent runs in shadow mode alongside your real workflow; we tune based on actual calls and scenarios
+- Days 13–14: Go-live — agent is live in production; you open Monday morning to your first scorecard
 
-4. **Testing & Refinement**  
-   We run thorough tests with real scenarios (lead qualification, FAQ answering, appointment booking, no-show follow-ups). You review and approve every behavior.
+**If the agent doesn't move the number we set at kickoff, we don't move forward.**
 
-5. **Seamless Deployment**  
-   The AI Receptionist Agent goes live on your email, website chat, SMS, and WhatsApp. We handle all integrations and provide training for your team.
+---
 
-6. **Ongoing Optimization & Support**  
-   - Weekly performance reports (leads captured, appointments booked, time saved)
-   - Continuous improvements based on real conversations
-   - Easy expansion to additional agents (sales follow-up, marketing, finance)
+## The Monday-Morning Scorecard
+Every plan includes a Monday-morning scorecard — a structured summary showing:
+- What the agent handled that week
+- Key metrics (calls answered, leads qualified, transactions reconciled, etc.)
+- What moved, what stalled, and recommended next steps
+- Delivered by email + PDF (Pilot), with a monthly business review call (Operate), and quarterly business reviews (Orchestrate)
 
-## Typical Timeline
-- Audit → 1 day
-- Build & Test → 3–7 days
-- Go Live → Same week
+---
+
+## The Operator Console
+All agents share a single operator console where you can:
+- See live agent activity
+- Approve, override, or coach any agent action
+- Review the full PIPEDA-aligned audit trail with attribution and timestamps
+- Track your agent action count (no surprise overages)
+
+---
+
+## The Consultant Model
+Orchelix is a consultancy that ships software. Every client has a named senior consultant, not just a support queue.
+
+- **Pilot**: Weekly check-in; next business day SLA
+- **Operate**: Dedicated consultant; 4-hour SLA; monthly business review
+- **Orchestrate**: Named delivery team (consultant + engineer + analyst); 1-hour SLA; 24/7 on-call escalation
+
+---
+
+## Adding More Agents
+Start with the agent that has the clearest payback. When it has earned the room, add the next one. Same console, same consultant, no re-platforming required.
+
+Order doesn't matter — you can start with Esmi, Revenue-Ops, or Finance OS depending on where your biggest bottleneck is.
+
+---
 
 ## Our Promise
-You get a sophisticated, always-on AI Receptionist that qualifies leads, books appointments, answers questions, and follows up — all autonomously — while feeling professional and human.
-
-No long implementation projects.  
-No overwhelming tech.  
-Just fast, measurable results: more booked appointments and dramatically less manual work.
-
+No long implementation projects. No overwhelming tech. Just fast, measurable results — and a consultant you can actually call.
