@@ -1,47 +1,30 @@
-# ─────────────────────────────────────────────────────────────────────
-#  Esmi — .gitignore (Phase 1)
-#  Critical: every line under "Secrets" must be honoured.
-#  See CREDENTIAL_ROTATION.md for cleanup of any previously-tracked secrets.
-# ─────────────────────────────────────────────────────────────────────
-
-# ── Secrets — NEVER commit ───────────────────────────────────────────
+﻿# Environment / secrets
 .env
-.env.*
-!.env.example
-*.env
+.env.local
 token.json
-token_*.json
-credentials.json
-credentials_*.json
-service_account.json
-*.pem
 *.key
+*.pem
 
-# Streamlit secrets
-.streamlit/secrets.toml
-
-# ── Persisted FAISS index (rebuilds on first run) ────────────────────
-.kb_index/
-
-# ── Python ───────────────────────────────────────────────────────────
+# Python
 __pycache__/
 *.py[cod]
-*$py.class
-*.so
-.pytest_cache/
-.mypy_cache/
-.ruff_cache/
-
-# ── Virtualenvs ──────────────────────────────────────────────────────
+*.pyo
 venv/
 .venv/
-env/
+*.egg-info/
+dist/
+build/
 
-# ── Logs ─────────────────────────────────────────────────────────────
-*.log
+# KB index (rebuilt automatically on startup)
+.kb_index/
 
-# ── IDE / OS ─────────────────────────────────────────────────────────
+# Railway temp files
+.railway_tmp.env
+
+# IDE
 .vscode/
 .idea/
-.DS_Store
-Thumbs.db
+*.swp
+
+credentials.json
+.streamlit/
