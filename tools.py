@@ -77,16 +77,22 @@ def _get_calendar_service(tenant_id: str = "default"):
 
         creds = None
 
-        # Method 1: GOOGLE_TOKEN_JSON env var (Railway / any FastAPI host)
-        token_json_env = os.environ.get("GOOGLE_TOKEN_JSON")
-        if token_json_env:
+        # Method 1: Individual env vars — no JSON quoting issues (preferred for Railway)
+        # Set GOOGLE_REFRESH_TOKEN, GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET in Railway vars.
+        refresh_token = os.environ.get("GOOGLE_REFRESH_TOKEN")
+        client_id = os.environ.get("GOOGLE_CLIENT_ID")
+        client_secret = os.environ.get("GOOGLE_CLIENT_SECRET")
+        if refresh_token and client_id and client_secret:
             try:
-                # Strip wrapping single or double quotes (common in .env Raw Editor)
-                stripped = token_json_env.strip()
-                if (stripped.startswith("'") and stripped.endswith("'")) or \
-                   (stripped.startswith('"') and stripped.endswith('"')):
-                    stripped = stripped[1:-1]
-                token_data = json.loads(stripped)
+                token_data = {
+                    "refresh_token": refresh_token,
+                    "client_id": client_id,
+                    "client_secret": client_secret,
+                    "token_uri": os.environ.get(
+                        "GOOGLE_TOKEN_URI", "https://oauth2.googleapis.com/token"
+                    ),
+                    "scopes": ["https://www.googleapis.com/auth/calendar"],
+                }
                 with tempfile.NamedTemporaryFile(
                     mode="w", suffix=".json", delete=False
                 ) as f:
@@ -95,9 +101,26 @@ def _get_calendar_service(tenant_id: str = "default"):
                 creds = Credentials.from_authorized_user_file(tmp_path)
                 os.unlink(tmp_path)
             except Exception as e:
-                log.warning(f"GOOGLE_TOKEN_JSON env var parse failed: {e}")
+                log.warning(f"Individual Google credential env vars failed: {e}")
 
-        # Method 2: Streamlit Cloud secret (legacy — kept for backward compat)
+        # Method 2: GOOGLE_TOKEN_JSON env var (full JSON blob)
+        if creds is None:
+            token_json_env = os.environ.get("GOOGLE_TOKEN_JSON")
+            if token_json_env:
+                try:
+                    stripped = token_json_env.strip().strip("'\"")
+                    token_data = json.loads(stripped)
+                    with tempfile.NamedTemporaryFile(
+                        mode="w", suffix=".json", delete=False
+                    ) as f:
+                        json.dump(token_data, f)
+                        tmp_path = f.name
+                    creds = Credentials.from_authorized_user_file(tmp_path)
+                    os.unlink(tmp_path)
+                except Exception as e:
+                    log.warning(f"GOOGLE_TOKEN_JSON env var parse failed: {e}")
+
+        # Method 3: Streamlit Cloud secret (legacy)
         if creds is None:
             try:
                 import streamlit as st  # type: ignore
@@ -113,7 +136,7 @@ def _get_calendar_service(tenant_id: str = "default"):
             except Exception:
                 pass
 
-        # Method 3: Local token.json file
+        # Method 4: Local token.json file
         if creds is None:
             token_path = os.getenv("GOOGLE_TOKEN_PATH", "token.json")
             if os.path.exists(token_path):
