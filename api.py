@@ -184,15 +184,14 @@ async def health() -> dict:
 async def health_env() -> dict:
     """Diagnostic: list env var names and show safe Railway metadata values."""
     import os
-    keys = [k for k in os.environ if any(x in k.upper() for x in ["GOOGLE", "RAILWAY", "PORT", "TOKEN"])]
+    all_keys = sorted(os.environ.keys())
     safe_values = {
         k: os.environ[k] for k in [
             "RAILWAY_GIT_COMMIT_SHA", "RAILWAY_GIT_BRANCH",
-            "RAILWAY_GIT_COMMIT_MESSAGE", "RAILWAY_SNAPSHOT_ID",
             "RAILWAY_ENVIRONMENT_NAME",
         ] if k in os.environ
     }
-    return {"visible_keys": sorted(keys), "total_env_vars": len(os.environ), "railway_meta": safe_values}
+    return {"all_env_keys": all_keys, "total_env_vars": len(os.environ), "railway_meta": safe_values}
 
 
 @app.get("/health/calendar")
