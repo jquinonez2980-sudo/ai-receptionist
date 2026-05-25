@@ -77,7 +77,24 @@ def _get_calendar_service(tenant_id: str = "default"):
 
         creds = None
 
-        # Method 1: Individual env vars — no JSON quoting issues (preferred for Railway)
+        # Method 1: Base64-encoded token blob (from .env baked into Docker image)
+        token_b64 = os.environ.get("GOOGLE_TOKEN_B64")
+        if token_b64:
+            try:
+                import base64
+                token_data = json.loads(base64.b64decode(token_b64).decode("utf-8"))
+                with tempfile.NamedTemporaryFile(
+                    mode="w", suffix=".json", delete=False
+                ) as f:
+                    json.dump(token_data, f)
+                    tmp_path = f.name
+                creds = Credentials.from_authorized_user_file(tmp_path)
+                os.unlink(tmp_path)
+                log.info("Google Calendar: credentials loaded from GOOGLE_TOKEN_B64.")
+            except Exception as e:
+                log.warning(f"GOOGLE_TOKEN_B64 decode failed: {e}")
+
+        # Method 2: Individual env vars — no JSON quoting issues (preferred for Railway)
         # Set GOOGLE_REFRESH_TOKEN, GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET in Railway vars.
         refresh_token = os.environ.get("GOOGLE_REFRESH_TOKEN")
         client_id = os.environ.get("GOOGLE_CLIENT_ID")
