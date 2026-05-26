@@ -303,6 +303,43 @@ async def chat(request: Request, req: ChatRequest) -> StreamingResponse:
     )
 
 
+def _enhance_slots_for_voice(slots_text: str) -> str:
+    """Append ISO timestamps to each slot line so the voice agent can pass them to book_appointment.
+
+    Input line:  "Tuesday, May 27 10:00 AM – 10:30 AM"
+    Output line: "Tuesday, May 27 10:00 AM – 10:30 AM | start_iso=2026-05-27T10:00:00-04:00 end_iso=2026-05-27T10:30:00-04:00"
+    """
+    import pytz
+    from datetime import datetime, date as _date
+
+    tz = pytz.timezone("America/Toronto")
+    year = _date.today().year
+    slot_re = re.compile(
+        r"^(.+?,\s+\w+\s+\d+)\s+(\d{1,2}:\d{2}\s*(?:AM|PM))\s*[–\-]\s*(\d{1,2}:\d{2}\s*(?:AM|PM))$",
+        re.IGNORECASE,
+    )
+    lines = []
+    for line in slots_text.splitlines():
+        m = slot_re.match(line.strip())
+        if m:
+            date_part, start_str, end_str = m.group(1), m.group(2).strip(), m.group(3).strip()
+            try:
+                start_dt = datetime.strptime(f"{date_part} {start_str} {year}", "%A, %B %d %I:%M %p %Y")
+                start_dt = tz.localize(start_dt)
+                end_dt = start_dt.replace(
+                    hour=datetime.strptime(end_str, "%I:%M %p").hour,
+                    minute=datetime.strptime(end_str, "%I:%M %p").minute,
+                )
+                lines.append(
+                    f"{line.strip()} | start_iso={start_dt.isoformat()} end_iso={end_dt.isoformat()}"
+                )
+                continue
+            except Exception:
+                pass
+        lines.append(line)
+    return "\n".join(lines)
+
+
 def _run_voice_tool(name: str, params: dict) -> str:
     """Execute a named voice tool and return a plain-text result."""
     if name == "get_current_date":
@@ -315,10 +352,11 @@ def _run_voice_tool(name: str, params: dict) -> str:
     if name == "search_knowledge_base":
         return str(search_knowledge_base.invoke({"query": params["query"]}))
     if name == "list_available_slots":
-        return str(list_available_slots.invoke({
+        raw = str(list_available_slots.invoke({
             "start_date": params["start_date"],
             "end_date": params["end_date"],
         }))
+        return _enhance_slots_for_voice(raw)
     if name == "book_appointment":
         return str(book_appointment.invoke({
             "summary": params.get("summary", "Orchelix Intro Call"),
