@@ -51,7 +51,7 @@ class ChatRequest(BaseModel):
 
 
 class VapiToolRequest(BaseModel):
-    message: dict  # VAPI sends {"type": "function-call", "functionCall": {...}, ...}
+    message: dict = {}  # VAPI server message — format varies by API version
 
 
 # ── Text utilities (copied from streamlit_app.py to avoid Streamlit import) ──
@@ -303,51 +303,81 @@ async def chat(request: Request, req: ChatRequest) -> StreamingResponse:
     )
 
 
+def _run_voice_tool(name: str, params: dict) -> str:
+    """Execute a named voice tool and return a plain-text result."""
+    if name == "get_current_date":
+        from datetime import date
+        today = date.today()
+        return (
+            f"Today is {today.strftime('%A, %B %d, %Y')}. "
+            f"ISO format: {today.isoformat()}."
+        )
+    if name == "search_knowledge_base":
+        return str(search_knowledge_base.invoke({"query": params["query"]}))
+    if name == "list_available_slots":
+        return str(list_available_slots.invoke({
+            "start_date": params["start_date"],
+            "end_date": params["end_date"],
+        }))
+    if name == "book_appointment":
+        return str(book_appointment.invoke({
+            "summary": params.get("summary", "Orchelix Intro Call"),
+            "start_time": params["start_time"],
+            "end_time": params["end_time"],
+            "attendee_email": params.get("caller_phone", "phone-booking"),
+        }))
+    log.warning("VAPI sent unknown tool: %s", name)
+    return "Unknown tool."
+
+
 @app.post("/voice/tools")
-async def voice_tools(req: VapiToolRequest) -> dict:
+async def voice_tools(request: Request) -> dict:
     """VAPI.ai webhook — executes tools on behalf of the voice agent.
 
-    VAPI calls this endpoint when the voice assistant needs to run a tool.
-    We execute the tool synchronously and return {"result": "..."}.
-    transferCall is handled natively by VAPI — it never reaches here.
+    Handles both VAPI formats:
+      Old: message.functionCall.{name, parameters}
+      New: message.toolCallList[].{id, function.{name, arguments}}
     """
-    fn = req.message.get("functionCall", {})
+    body = await request.json()
+    log.info("VAPI raw payload: %s", json.dumps(body))
+
+    msg = body.get("message", body)  # some VAPI versions omit the outer wrapper
+    msg_type = msg.get("type", "")
+
+    # ── New format: tool-calls ────────────────────────────────────────────
+    if msg_type == "tool-calls" or "toolCallList" in msg:
+        results = []
+        for call in msg.get("toolCallList", []):
+            call_id = call.get("id", "")
+            fn = call.get("function", {})
+            name = fn.get("name", "")
+            raw_args = fn.get("arguments", "{}")
+            params = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
+            log.info("VAPI tool-calls: %s | params: %s", name, params)
+            try:
+                result = _run_voice_tool(name, params)
+            except Exception:
+                log.exception("VAPI tool %s failed", name)
+                result = "Something went wrong — I'll connect you with our team."
+            results.append({"toolCallId": call_id, "result": result})
+        return {"results": results}
+
+    # ── Old format: function-call ─────────────────────────────────────────
+    fn = msg.get("functionCall", {})
     name = fn.get("name", "")
     params = fn.get("parameters", {})
-    log.info("VAPI tool call: %s | params: %s", name, params)
-
+    log.info("VAPI function-call: %s | params: %s", name, params)
     try:
-        if name == "get_current_date":
-            from datetime import date
-            today = date.today()
-            result = (
-                f"Today is {today.strftime('%A, %B %d, %Y')}. "
-                f"ISO format: {today.isoformat()}."
-            )
-
-        elif name == "search_knowledge_base":
-            result = search_knowledge_base.invoke({"query": params["query"]})
-
-        elif name == "list_available_slots":
-            result = list_available_slots.invoke({
-                "start_date": params["start_date"],
-                "end_date": params["end_date"],
-            })
-
-        elif name == "book_appointment":
-            result = book_appointment.invoke({
-                "summary": params.get("summary", "Orchelix Intro Call"),
-                "start_time": params["start_time"],
-                "end_time": params["end_time"],
-                "attendee_email": params.get("caller_phone", "phone-booking"),
-            })
-
-        else:
-            result = "Unknown tool."
-            log.warning("VAPI sent unknown tool: %s", name)
-
+        result = _run_voice_tool(name, params)
     except Exception:
         log.exception("VAPI tool %s failed", name)
         result = "Something went wrong — I'll connect you with our team."
+    return {"result": result}
 
-    return {"result": str(result)}
+
+@app.post("/voice/debug")
+async def voice_debug(request: Request) -> dict:
+    """Diagnostic: echo the raw VAPI payload so we can inspect the format."""
+    body = await request.json()
+    log.info("VAPI debug payload: %s", json.dumps(body))
+    return {"received": body}
