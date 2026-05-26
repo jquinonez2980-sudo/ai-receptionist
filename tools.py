@@ -172,6 +172,30 @@ def _get_calendar_service(tenant_id: str = "default"):
 
 
 # ════════════════════════════════════════════════════════════════════════
+#  SENDGRID KEY HELPER
+# ════════════════════════════════════════════════════════════════════════
+
+def _get_sendgrid_key() -> str | None:
+    """Return the SendGrid API key, decoding from base64 if needed.
+
+    Checks in order:
+      1. SENDGRID_API_KEY      — plain text (Railway shared var)
+      2. SENDGRID_API_KEY_B64  — base64-encoded (baked into Dockerfile)
+    """
+    key = os.environ.get("SENDGRID_API_KEY")
+    if key:
+        return key
+    key_b64 = os.environ.get("SENDGRID_API_KEY_B64")
+    if key_b64:
+        try:
+            import base64
+            return base64.b64decode(key_b64).decode("utf-8")
+        except Exception as e:
+            log.warning(f"SENDGRID_API_KEY_B64 decode failed: {e}")
+    return None
+
+
+# ════════════════════════════════════════════════════════════════════════
 #  EMAIL NOTIFICATION HELPER  (unchanged from v0 in behaviour)
 # ════════════════════════════════════════════════════════════════════════
 
@@ -184,17 +208,9 @@ def _send_booking_notification(
 ) -> None:
     """Send a branded ops email on every booking. Best-effort."""
     try:
-        api_key = None
-        try:
-            import streamlit as st  # type: ignore
-
-            api_key = st.secrets.get("SENDGRID_API_KEY")
-        except Exception:
-            pass
+        api_key = _get_sendgrid_key()
         if not api_key:
-            api_key = os.environ.get("SENDGRID_API_KEY")
-        if not api_key:
-            log.warning("SENDGRID_API_KEY not set — skipping booking email.")
+            log.warning("SendGrid key not found — skipping booking email.")
             return
 
         from sendgrid import SendGridAPIClient
@@ -633,9 +649,9 @@ def escalate_to_human(reason: str, user_summary: str) -> str:
         user_summary: 2-3 sentences summarising what the user needs.
     """
     try:
-        api_key = os.environ.get("SENDGRID_API_KEY")
+        api_key = _get_sendgrid_key()
         if not api_key:
-            log.warning("SENDGRID_API_KEY not set — escalation email skipped.")
+            log.warning("SendGrid key not found — escalation email skipped.")
             return "I've flagged this for our team and someone will follow up with you shortly."
 
         from sendgrid import SendGridAPIClient
