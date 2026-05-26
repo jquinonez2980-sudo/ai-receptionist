@@ -205,10 +205,10 @@ async def health_env() -> dict:
 @app.get("/health/sendgrid")
 async def health_sendgrid() -> dict:
     """Diagnostic: send a test escalation email and report the result."""
-    import os
-    api_key = os.environ.get("SENDGRID_API_KEY")
+    from tools import _get_sendgrid_key
+    api_key = _get_sendgrid_key()
     if not api_key:
-        return {"status": "error", "detail": "SENDGRID_API_KEY env var not set"}
+        return {"status": "error", "detail": "SendGrid key not found (checked SENDGRID_API_KEY and SENDGRID_API_KEY_B64)"}
     try:
         from sendgrid import SendGridAPIClient
         from sendgrid.helpers.mail import Mail
