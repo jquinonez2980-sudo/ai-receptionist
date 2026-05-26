@@ -22,7 +22,8 @@ Browser
                           └── LangGraph ReAct agent
                                 ├── search_knowledge_base (FAISS vector store)
                                 ├── list_available_slots (Google Calendar freebusy)
-                                └── book_appointment (Google Calendar insert)
+                                ├── book_appointment (Google Calendar insert)
+                                └── escalate_to_human (SendGrid email alert)
 ```
 
 **Streaming protocol:** Server-Sent Events (SSE) over `text/event-stream`. Each SSE line is `data: {json}\n\n`.
@@ -44,13 +45,13 @@ Browser
 
 | File | Purpose |
 |---|---|
-| `api.py` | FastAPI app. `POST /chat` streams SSE. `GET /health/calendar` for diagnostics. |
-| `agents.py` | Esmi persona prompt + `create_react_agent` with 3 tools. |
+| `api.py` | FastAPI app. `POST /chat` streams SSE. Rate-limited (10 req/min/IP). Diagnostic endpoints. |
+| `agents.py` | Esmi persona prompt + `create_react_agent` with 4 tools. |
 | `graph.py` | `StateGraph` wrapping the agent. Uses `PostgresSaver` (Railway DB) or `MemorySaver` fallback. |
-| `tools.py` | `search_knowledge_base`, `list_available_slots`, `book_appointment`. |
+| `tools.py` | `search_knowledge_base`, `list_available_slots`, `book_appointment`, `escalate_to_human`. |
 | `state.py` | `AgentState` TypedDict. |
 | `observability.py` | LangSmith tracing init. |
-| `Dockerfile` | `python:3.11-slim`, uvicorn CMD, `GOOGLE_TOKEN_B64` ENV baked in. |
+| `Dockerfile` | `python:3.11-slim`, uvicorn CMD, `GOOGLE_TOKEN_B64` + `SENDGRID_API_KEY_B64` baked in. |
 | `railway.toml` | `builder = "DOCKERFILE"`. |
 | `orchelix_knowledge_base/` | 14 markdown files — Esmi's knowledge source. |
 
@@ -70,12 +71,26 @@ Key KB files (highest retrieval priority):
 - Formatting: no markdown headers, no bold, use `-` for bullet points
 - Booking flow: ask day → show slots → collect name+email → book
 - Pricing/services: always call `search_knowledge_base`, never answer from memory
-- Model: `gpt-4o-mini`, temperature 0
+- Lead capture: after answering pricing/services, offer a calendar check once per conversation
+- Escalation: call `escalate_to_human` if KB search fails twice, or user signals urgency/budget readiness
+- Model: `gpt-4o`, temperature 0
 
-### Streaming Gotcha — LangGraph 1.1.10
-With `create_react_agent` wrapped in a `StateGraph`, `on_chat_model_stream` events
-from the inner graph don't always surface through `astream_events(version="v2")`.
-Fix: capture the final response from `on_chain_end` as a fallback (`api.py: _stream_chat`).
+### Tools
+
+| Tool | Trigger | Action |
+|---|---|---|
+| `search_knowledge_base` | Any question about services, pricing, FAQs | FAISS semantic search over KB |
+| `list_available_slots` | User gives a preferred day | Google Calendar freebusy, 9–5 Mon–Fri |
+| `book_appointment` | Name + email + slot confirmed | Google Calendar insert, idempotent via SHA256 event ID |
+| `escalate_to_human` | KB fails twice, or urgency/budget/frustration detected | SendGrid email to `jquinonez2980@gmail.com` |
+
+### Rate Limiting
+`slowapi` limits `POST /chat` to 10 requests/minute per IP. No Redis needed — in-memory per process.
+
+### Streaming — LangGraph 1.1.10
+With `create_react_agent` wrapped in a `StateGraph`, `on_chat_model_stream` events from the inner
+graph surface through `astream_events(version="v2", include_subgraphs=True)`. The `on_chain_end`
+fallback is still in place for resilience if token events are missed.
 
 ---
 
@@ -96,7 +111,8 @@ Fix: capture the final response from `on_chain_end` as a fallback (`api.py: _str
 - Typing indicator (animated dots) while tools run
 - Slot picker cards for time slots (instead of bullet list)
 - Quick reply chips (shown only before first user message)
-- Thread ID persistence via `localStorage`
+- Thread ID persistence via `localStorage("esmi-thread-id")`
+- **Message persistence** via `localStorage("esmi-messages-{threadId}")` — restores on reload, capped at 30 messages, cleared on New Chat
 - Reset conversation button
 
 ### Slot Flash Fix
@@ -116,19 +132,19 @@ Tailwind v4 with `@theme` block in `globals.css`:
 
 **Build:** Dockerfile (python:3.11-slim → pip install → uvicorn)
 
-**Environment Variables (must be set):**
+**Environment Variables:**
 | Variable | Where | Notes |
 |---|---|---|
-| `OPENAI_API_KEY` | Railway shared/env var | GPT-4o-mini |
+| `OPENAI_API_KEY` | Railway shared/env var | GPT-4o |
 | `LANGCHAIN_PROJECT` | Railway shared/env var | LangSmith project name |
-| `SENDGRID_API_KEY` | Railway shared/env var | Booking email notifications |
 | `DATABASE_URL` | Railway PostgreSQL plugin | Thread persistence (auto-set by Railway) |
 | `GOOGLE_TOKEN_B64` | Dockerfile ENV | Base64-encoded Google OAuth JSON (see below) |
+| `SENDGRID_API_KEY_B64` | Dockerfile ENV | Base64-encoded SendGrid API key (see below) |
 
-**Railway Gotcha:** Service-level variables set via CLI or dashboard Raw Editor do NOT
-reliably reach the container. Only shared/environment-level variables (set via the
-Railway dashboard's environment settings) are injected. For secrets that can't be shared,
-bake them into the Dockerfile as `ENV KEY=value`.
+**Railway Gotcha:** Service-level variables set via CLI or dashboard Variables tab do NOT
+reliably reach the container. Only shared/environment-level variables (set via the Railway
+dashboard environment settings) are injected. For secrets that can't be shared, bake them
+into the Dockerfile as `ENV KEY=value` using base64 encoding to bypass GitHub secret scanning.
 
 ---
 
@@ -156,10 +172,36 @@ print(base64.b64encode(json.dumps(data).encode()).decode())
 
 The `refresh_token` auto-renews the expired access token on first API call.
 
-**Diagnostic endpoints:**
-- `GET /health` — liveness check
-- `GET /health/calendar` — step-by-step auth trace
-- `GET /health/env` — all env var names visible in container
+---
+
+## SendGrid Setup
+
+1. Create a SendGrid account → Settings → API Keys → Create API key (Mail Send permission only)
+2. Verify your sender email (Settings → Sender Authentication → verify `info@orchelix.com`)
+3. Base64-encode the key:
+
+```python
+import base64
+print(base64.b64encode(b"SG.your-key-here").decode())
+```
+
+4. Put the output in Dockerfile: `ENV SENDGRID_API_KEY_B64=...`
+
+`_get_sendgrid_key()` in `tools.py` checks `SENDGRID_API_KEY` (plain) first, then
+falls back to base64-decoding `SENDGRID_API_KEY_B64`. Both email functions use this helper.
+
+Escalation emails go to `jquinonez2980@gmail.com`. Booking notifications go to `info@orchelix.com`.
+
+---
+
+## Diagnostic Endpoints
+
+| Endpoint | Purpose |
+|---|---|
+| `GET /health` | Liveness check |
+| `GET /health/calendar` | Step-by-step Google Calendar auth trace |
+| `GET /health/env` | All env var names visible in container |
+| `GET /health/sendgrid` | Sends a test email to confirm SendGrid works end-to-end |
 
 ---
 
@@ -182,14 +224,18 @@ Pricing model: Base Orchestration Fee + Performance Component tied to results.
    - `orchelix_knowledge_base/` with your client's KB files
    - The system prompt in `agents.py` (persona, business name, booking flow)
    - `_BUSINESS_TZ` and `_HOURS` in `tools.py` for timezone/hours
+   - Escalation email recipient in `escalate_to_human` (`tools.py`)
 
 2. **Google Calendar:** Follow setup steps above. Each client needs their own OAuth credentials.
 
-3. **Railway:** Create a new service, connect the repo, set `OPENAI_API_KEY` as a shared variable. Bake the Google token into the Dockerfile.
+3. **SendGrid:** Follow setup steps above. Verify the sender domain for each client.
 
-4. **Frontend:** The `EsmiChat.tsx` + `api/chat/route.ts` work as-is. Update `RAILWAY_API_URL` in `route.ts`.
+4. **Railway:** Create a new service, connect the repo, set `OPENAI_API_KEY` as a shared variable.
+   Bake `GOOGLE_TOKEN_B64` and `SENDGRID_API_KEY_B64` into the Dockerfile.
 
-5. **Knowledge base:** Update the 14 markdown files. The FAISS index rebuilds automatically on startup.
+5. **Frontend:** The `EsmiChat.tsx` + `api/chat/route.ts` work as-is. Update `RAILWAY_API_URL` in `route.ts`.
+
+6. **Knowledge base:** Update the 14 markdown files. The FAISS index rebuilds automatically on startup.
 
 ---
 
@@ -198,4 +244,17 @@ Pricing model: Base Orchestration Fee + Performance Component tied to results.
 - `token.json` refresh tokens expire if not used for 6 months — re-run OAuth flow to refresh
 - `MemorySaver` fallback loses conversation history on Railway restart — `DATABASE_URL` must be set for persistence
 - FAISS index rebuild calls OpenAI embeddings API — costs a small amount on each deploy if KB files changed
-- Slot stripping regex is fragile — if LLM changes time format, it may not be stripped correctly
+- Slot stripping regex is fragile — if LLM changes time format, slots may not be stripped during streaming
+- Rate limiter is in-memory per process — resets on Railway restart, not shared across multiple instances
+- Phone/voice integration (Twilio) is not yet implemented — tracked as future work
+
+## Completed Improvements (May 2026)
+
+| # | Improvement | Files Changed |
+|---|---|---|
+| 1 | Model upgraded `gpt-4o-mini` → `gpt-4o` | `agents.py` |
+| 2 | Rate limiting — `slowapi` 10 req/min/IP | `api.py`, `requirements.txt` |
+| 3 | Streaming fix — `include_subgraphs=True` surfaces inner agent tokens | `api.py` |
+| 4 | Message persistence across page reloads via localStorage | `EsmiChat.tsx` |
+| 5 | Human escalation — `escalate_to_human` tool + SendGrid email | `tools.py`, `agents.py`, `Dockerfile` |
+| 6 | Proactive lead capture — prompt rule after pricing/services answers | `agents.py` |
