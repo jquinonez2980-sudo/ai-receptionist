@@ -15,16 +15,23 @@ import logging
 import re
 from typing import AsyncGenerator
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.util import get_remote_address
 
 from graph import graph
 
 log = logging.getLogger(__name__)
 
+limiter = Limiter(key_func=get_remote_address)
+
 app = FastAPI(title="Esmi API", version="1.0")
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 app.add_middleware(
     CORSMiddleware,
@@ -114,6 +121,7 @@ async def _stream_chat(message: str, thread_id: str) -> AsyncGenerator[str, None
             {"messages": [{"role": "user", "content": message}]},
             config=config,
             version="v2",
+            include_subgraphs=True,
         ):
             kind = event["event"]
             log.debug("SSE event: %s | name: %s", kind, event.get("name", "-"))
@@ -254,7 +262,8 @@ async def health_calendar() -> dict:
 
 
 @app.post("/chat")
-async def chat(req: ChatRequest) -> StreamingResponse:
+@limiter.limit("10/minute")
+async def chat(request: Request, req: ChatRequest) -> StreamingResponse:
     return StreamingResponse(
         _stream_chat(req.message, req.thread_id),
         media_type="text/event-stream",

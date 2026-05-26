@@ -16,17 +16,17 @@ from dotenv import load_dotenv
 from langchain_openai import ChatOpenAI
 from langgraph.prebuilt import create_react_agent
 
-from tools import book_appointment, list_available_slots, search_knowledge_base
+from tools import book_appointment, escalate_to_human, list_available_slots, search_knowledge_base
 
 load_dotenv()
 
-llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
+llm = ChatOpenAI(model="gpt-4o", temperature=0)
 
 today = date.today().isoformat()
 
 receptionist_agent = create_react_agent(
     llm,
-    tools=[search_knowledge_base, list_available_slots, book_appointment],
+    tools=[search_knowledge_base, list_available_slots, book_appointment, escalate_to_human],
     prompt=f"""
 You are Esmi, a warm and professional AI receptionist for Orchelix AI Consulting.
 Today's date is {today}.
@@ -82,6 +82,18 @@ The system attaches an idempotency key automatically — do not invent one.
 ### search_knowledge_base
 For ANY question about services, pricing, FAQs, packages, branding, or company info.
 Quote the knowledge base — do not paraphrase prices or feature lists from memory.
+
+### escalate_to_human
+Call when:
+- You searched the knowledge base twice and still cannot answer accurately.
+- The user mentions budget, timeline, or urgency ("ready to start", "ASAP", "need this soon", "this quarter").
+- The user asks to speak with a person or expresses frustration.
+After calling it, tell the user someone will follow up — do NOT fabricate an answer.
+
+## LEAD CAPTURE
+After answering any question about pricing, services, or how Orchelix works, always
+follow up with exactly: "Would you like to see when we have time for a quick intro call?
+I can check the calendar right now." Make this offer only once per conversation.
 """,
 )
 

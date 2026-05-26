@@ -618,6 +618,69 @@ def book_appointment(
         return f"Calendar error: {e}"
 
 
+# ── Tool: escalate_to_human ───────────────────────────────────────────────
+@tool
+def escalate_to_human(reason: str, user_summary: str) -> str:
+    """Notify the Orchelix team that a lead needs human follow-up.
+
+    Call this when:
+    - You searched the knowledge base twice and still cannot answer accurately.
+    - The user mentions budget, timeline, or urgency ("ready to start", "ASAP", "need this soon").
+    - The user expresses frustration or explicitly asks to speak with a person.
+
+    Args:
+        reason: Short label, e.g. "hot lead — mentioned budget" or "out of scope question".
+        user_summary: 2-3 sentences summarising what the user needs.
+    """
+    try:
+        api_key = os.environ.get("SENDGRID_API_KEY")
+        if not api_key:
+            log.warning("SENDGRID_API_KEY not set — escalation email skipped.")
+            return "I've flagged this for our team and someone will follow up with you shortly."
+
+        from sendgrid import SendGridAPIClient
+        from sendgrid.helpers.mail import Mail
+
+        ts = datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
+        subject = f"[Esmi Escalation] {reason}"
+        html_content = f"""
+        <div style="font-family: Inter, Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+            <div style="background: linear-gradient(135deg, #0A2540, #0e3460);
+                        padding: 24px 28px; border-radius: 12px 12px 0 0;">
+                <h1 style="color: #ffffff; margin: 0; font-size: 20px;">🚨 Esmi Escalation</h1>
+                <p style="color: #00D4EE; margin: 4px 0 0; font-size: 12px;
+                           letter-spacing: 0.06em; text-transform: uppercase;">
+                    Orchelix AI Consulting — Action Required
+                </p>
+            </div>
+            <div style="background: #f8f9fa; padding: 28px; border: 1px solid #e2e8f0;
+                        border-radius: 0 0 12px 12px;">
+                <table style="width: 100%; border-collapse: collapse; margin-top: 4px;">
+                    <tr><td style="color:#94a3b8;text-transform:uppercase;font-size:12px;padding:10px 0;width:140px;">Reason</td>
+                        <td style="color:#0A2540;font-weight:600;">{reason}</td></tr>
+                    <tr><td style="color:#94a3b8;text-transform:uppercase;font-size:12px;padding:10px 0;">Time</td>
+                        <td style="color:#0A2540;">{ts}</td></tr>
+                    <tr><td style="color:#94a3b8;text-transform:uppercase;font-size:12px;padding:10px 0;vertical-align:top;">Summary</td>
+                        <td style="color:#0A2540;">{user_summary}</td></tr>
+                </table>
+            </div>
+        </div>
+        """
+
+        message = Mail(
+            from_email="info@orchelix.com",
+            to_emails="jquinonez2980@gmail.com",
+            subject=subject,
+            html_content=html_content,
+        )
+        SendGridAPIClient(api_key).send(message)
+        log.info(f"Escalation email sent: {reason}")
+    except Exception as e:
+        log.warning(f"Escalation email failed: {e}")
+
+    return "I've flagged this for our team and someone will follow up with you shortly."
+
+
 # ── Eager KB index warm-up (best-effort) ─────────────────────────────────
 try:
     _get_kb_index()
