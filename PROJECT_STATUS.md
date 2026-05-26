@@ -13,6 +13,7 @@ A production AI receptionist system with two repos:
 
 ## Architecture
 
+**Chat (web):**
 ```
 Browser
   └── /try-esmi (Next.js page)
@@ -24,6 +25,19 @@ Browser
                                 ├── list_available_slots (Google Calendar freebusy)
                                 ├── book_appointment (Google Calendar insert)
                                 └── escalate_to_human (SendGrid email alert)
+```
+
+**Voice (phone):**
+```
+Caller
+  └── VAPI phone number: 561-566-1066
+        └── VAPI AI engine (ElevenLabs Bella STT/TTS + GPT-4o)
+              └── POST /voice/tools  ← Railway FastAPI (sync tool execution)
+                    ├── get_current_date    → returns today's ISO date
+                    ├── search_knowledge_base → FAISS KB
+                    ├── list_available_slots  → Google Calendar freebusy
+                    ├── book_appointment      → Google Calendar insert (phone # as contact)
+                    └── transferCall          → VAPI built-in → Jorge's phone
 ```
 
 **Streaming protocol:** Server-Sent Events (SSE) over `text/event-stream`. Each SSE line is `data: {json}\n\n`.
@@ -45,13 +59,13 @@ Browser
 
 | File | Purpose |
 |---|---|
-| `api.py` | FastAPI app. `POST /chat` streams SSE. Rate-limited (10 req/min/IP). Diagnostic endpoints. |
+| `api.py` | FastAPI app. `POST /chat` streams SSE. `POST /voice/tools` for VAPI. Rate-limited. Diagnostic endpoints. |
 | `agents.py` | Esmi persona prompt + `create_react_agent` with 4 tools. |
 | `graph.py` | `StateGraph` wrapping the agent. Uses `PostgresSaver` (Railway DB) or `MemorySaver` fallback. |
 | `tools.py` | `search_knowledge_base`, `list_available_slots`, `book_appointment`, `escalate_to_human`. |
 | `state.py` | `AgentState` TypedDict. |
 | `observability.py` | LangSmith tracing init. |
-| `Dockerfile` | `python:3.11-slim`, uvicorn CMD, `GOOGLE_TOKEN_B64` + `SENDGRID_API_KEY_B64` baked in. |
+| `Dockerfile` | `python:3.11-slim`, uvicorn CMD, `GOOGLE_TOKEN_B64` + `SENDGRID_API_KEY_B64` + `VAPI_API_KEY_B64` baked in. |
 | `railway.toml` | `builder = "DOCKERFILE"`. |
 | `orchelix_knowledge_base/` | 14 markdown files — Esmi's knowledge source. |
 
@@ -140,6 +154,7 @@ Tailwind v4 with `@theme` block in `globals.css`:
 | `DATABASE_URL` | Railway PostgreSQL plugin | Thread persistence (auto-set by Railway) |
 | `GOOGLE_TOKEN_B64` | Dockerfile ENV | Base64-encoded Google OAuth JSON (see below) |
 | `SENDGRID_API_KEY_B64` | Dockerfile ENV | Base64-encoded SendGrid API key (see below) |
+| `VAPI_API_KEY_B64` | Dockerfile ENV | Base64-encoded VAPI private API key (see below) |
 
 **Railway Gotcha:** Service-level variables set via CLI or dashboard Variables tab do NOT
 reliably reach the container. Only shared/environment-level variables (set via the Railway
@@ -194,6 +209,42 @@ Escalation emails go to `jquinonez2980@gmail.com`. Booking notifications go to `
 
 ---
 
+## VAPI Voice Setup
+
+**Phone number:** 561-566-1066
+**Voice:** ElevenLabs Bella
+**Model:** GPT-4o (configured in VAPI dashboard)
+**Server URL:** `https://ai-receptionist-production-5375.up.railway.app/voice/tools`
+
+### Tools configured in VAPI dashboard
+
+| Tool | Parameters | Notes |
+|---|---|---|
+| `get_current_date` | none | Always called first so agent can resolve relative dates |
+| `search_knowledge_base` | `query: string` | KB search |
+| `list_available_slots` | `start_date: string`, `end_date: string` | ISO dates |
+| `book_appointment` | `summary`, `start_time`, `end_time`, `caller_phone` | Phone # used instead of email |
+| `transferCall` | destination: Jorge's phone | VAPI built-in — no backend webhook |
+
+### Voice booking differences from chat
+- Collects **phone number** instead of email (STT can't reliably transcribe emails)
+- Booking contact field stores phone number in the `attendee_email` slot of Google Calendar
+- `get_current_date` tool required because VAPI GPT-4o doesn't know today's date at runtime
+
+### Pronunciation fix
+"Orchelix" is pronounced "or-kee-lix". Configured via ElevenLabs Pronunciation Dictionary
+(Alias entry: `Orchelix` → `or kee lix`) linked to the VAPI assistant's voice settings.
+
+### To set up VAPI for a new client
+1. Create VAPI account → get private API key
+2. Create assistant: GPT-4o, ElevenLabs Bella, server URL pointing to new Railway endpoint
+3. Add 4 tools + `transferCall` with client owner's phone number
+4. Buy VAPI phone number (~$2/mo) → assign to assistant
+5. Base64-encode VAPI key → add to Dockerfile as `VAPI_API_KEY_B64`
+6. Set up ElevenLabs Pronunciation Dictionary for client's brand name
+
+---
+
 ## Diagnostic Endpoints
 
 | Endpoint | Purpose |
@@ -237,6 +288,8 @@ Pricing model: Base Orchestration Fee + Performance Component tied to results.
 
 6. **Knowledge base:** Update the 14 markdown files. The FAISS index rebuilds automatically on startup.
 
+7. **Voice:** Follow VAPI setup steps above. Update the system prompt in the VAPI dashboard with the new business name and escalation transfer number.
+
 ---
 
 ## Known Issues / Limitations
@@ -246,7 +299,9 @@ Pricing model: Base Orchestration Fee + Performance Component tied to results.
 - FAISS index rebuild calls OpenAI embeddings API — costs a small amount on each deploy if KB files changed
 - Slot stripping regex is fragile — if LLM changes time format, slots may not be stripped during streaming
 - Rate limiter is in-memory per process — resets on Railway restart, not shared across multiple instances
-- Phone/voice integration (Twilio) is not yet implemented — tracked as future work
+- VAPI rate limits apply per account — monitor call volume on the VAPI dashboard
+- Voice bookings store phone number in the `attendee_email` field of Google Calendar (cosmetic only)
+- ElevenLabs Pronunciation Dictionary must be manually updated when new brand terms are added
 
 ## Completed Improvements (May 2026)
 
@@ -258,3 +313,4 @@ Pricing model: Base Orchestration Fee + Performance Component tied to results.
 | 4 | Message persistence across page reloads via localStorage | `EsmiChat.tsx` |
 | 5 | Human escalation — `escalate_to_human` tool + SendGrid email | `tools.py`, `agents.py`, `Dockerfile` |
 | 6 | Proactive lead capture — prompt rule after pricing/services answers | `agents.py` |
+| 7 | Phone/voice — VAPI.ai integration, ElevenLabs Bella, 561-566-1066 | `api.py`, `Dockerfile`, VAPI dashboard |
