@@ -317,7 +317,15 @@ async def voice_tools(req: VapiToolRequest) -> dict:
     log.info("VAPI tool call: %s | params: %s", name, params)
 
     try:
-        if name == "search_knowledge_base":
+        if name == "get_current_date":
+            from datetime import date
+            today = date.today()
+            result = (
+                f"Today is {today.strftime('%A, %B %d, %Y')}. "
+                f"ISO format: {today.isoformat()}."
+            )
+
+        elif name == "search_knowledge_base":
             result = search_knowledge_base.invoke({"query": params["query"]})
 
         elif name == "list_available_slots":
