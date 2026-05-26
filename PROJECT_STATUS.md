@@ -128,6 +128,7 @@ fallback is still in place for resilience if token events are missed.
 - Thread ID persistence via `localStorage("esmi-thread-id")`
 - **Message persistence** via `localStorage("esmi-messages-{threadId}")` — restores on reload, capped at 30 messages, cleared on New Chat
 - Reset conversation button
+- **EN/ES language toggle** — click EN or ES in the chat header to switch language; resets welcome message and quick replies; agent auto-detects and responds in the selected language
 
 ### Slot Flash Fix
 During streaming, slot bullet lines are stripped client-side via `stripSlotLines()` so
@@ -314,3 +315,4 @@ Pricing model: Base Orchestration Fee + Performance Component tied to results.
 | 5 | Human escalation — `escalate_to_human` tool + SendGrid email | `tools.py`, `agents.py`, `Dockerfile` |
 | 6 | Proactive lead capture — prompt rule after pricing/services answers | `agents.py` |
 | 7 | Phone/voice — VAPI.ai integration, ElevenLabs Bella, 561-566-1066 | `api.py`, `Dockerfile`, VAPI dashboard |
+| 8 | Spanish support — EN/ES toggle in chat UI, agent responds in detected language | `EsmiChat.tsx`, `agents.py` |
