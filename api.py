@@ -202,6 +202,28 @@ async def health_env() -> dict:
     return {"all_env_keys": all_keys, "total_env_vars": len(os.environ), "railway_meta": safe_values}
 
 
+@app.get("/health/sendgrid")
+async def health_sendgrid() -> dict:
+    """Diagnostic: send a test escalation email and report the result."""
+    import os
+    api_key = os.environ.get("SENDGRID_API_KEY")
+    if not api_key:
+        return {"status": "error", "detail": "SENDGRID_API_KEY env var not set"}
+    try:
+        from sendgrid import SendGridAPIClient
+        from sendgrid.helpers.mail import Mail
+        message = Mail(
+            from_email="info@orchelix.com",
+            to_emails="jquinonez2980@gmail.com",
+            subject="[Esmi Test] SendGrid diagnostic",
+            html_content="<p>SendGrid diagnostic test from Esmi health endpoint.</p>",
+        )
+        response = SendGridAPIClient(api_key).send(message)
+        return {"status": "ok", "http_status": response.status_code}
+    except Exception as e:
+        return {"status": "error", "detail": str(e)}
+
+
 @app.get("/health/calendar")
 async def health_calendar() -> dict:
     """Diagnostic: test Google Calendar auth step by step."""
