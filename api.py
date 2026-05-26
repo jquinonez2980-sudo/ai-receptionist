@@ -1,8 +1,9 @@
 """FastAPI chat endpoint for Esmi — replaces Streamlit as the HTTP interface.
 
 Exposes:
-  GET  /health  — liveness check
-  POST /chat    — SSE streaming chat (LangGraph astream_events)
+  GET  /health        — liveness check
+  POST /chat          — SSE streaming chat (LangGraph astream_events)
+  POST /voice/tools   — VAPI.ai tool execution webhook
 
 Run locally:  uvicorn api:app --reload --port 8000
 Railway:      see railway.toml
@@ -24,6 +25,7 @@ from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
 
 from graph import graph
+from tools import book_appointment, list_available_slots, search_knowledge_base
 
 log = logging.getLogger(__name__)
 
@@ -46,6 +48,10 @@ app.add_middleware(
 class ChatRequest(BaseModel):
     message: str
     thread_id: str
+
+
+class VapiToolRequest(BaseModel):
+    message: dict  # VAPI sends {"type": "function-call", "functionCall": {...}, ...}
 
 
 # ── Text utilities (copied from streamlit_app.py to avoid Streamlit import) ──
@@ -295,3 +301,45 @@ async def chat(request: Request, req: ChatRequest) -> StreamingResponse:
             "Connection": "keep-alive",
         },
     )
+
+
+@app.post("/voice/tools")
+async def voice_tools(req: VapiToolRequest) -> dict:
+    """VAPI.ai webhook — executes tools on behalf of the voice agent.
+
+    VAPI calls this endpoint when the voice assistant needs to run a tool.
+    We execute the tool synchronously and return {"result": "..."}.
+    transferCall is handled natively by VAPI — it never reaches here.
+    """
+    fn = req.message.get("functionCall", {})
+    name = fn.get("name", "")
+    params = fn.get("parameters", {})
+    log.info("VAPI tool call: %s | params: %s", name, params)
+
+    try:
+        if name == "search_knowledge_base":
+            result = search_knowledge_base.invoke({"query": params["query"]})
+
+        elif name == "list_available_slots":
+            result = list_available_slots.invoke({
+                "start_date": params["start_date"],
+                "end_date": params["end_date"],
+            })
+
+        elif name == "book_appointment":
+            result = book_appointment.invoke({
+                "summary": params.get("summary", "Orchelix Intro Call"),
+                "start_time": params["start_time"],
+                "end_time": params["end_time"],
+                "attendee_email": params.get("caller_phone", "phone-booking"),
+            })
+
+        else:
+            result = "Unknown tool."
+            log.warning("VAPI sent unknown tool: %s", name)
+
+    except Exception:
+        log.exception("VAPI tool %s failed", name)
+        result = "Something went wrong — I'll connect you with our team."
+
+    return {"result": str(result)}
