@@ -175,6 +175,21 @@ def _get_calendar_service(tenant_id: str = "default"):
 #  SENDGRID KEY HELPER
 # ════════════════════════════════════════════════════════════════════════
 
+def _get_vapi_key() -> str | None:
+    """Return the VAPI private API key, decoding from base64 if needed."""
+    key = os.environ.get("VAPI_API_KEY")
+    if key:
+        return key
+    key_b64 = os.environ.get("VAPI_API_KEY_B64")
+    if key_b64:
+        try:
+            import base64
+            return base64.b64decode(key_b64).decode("utf-8")
+        except Exception as e:
+            log.warning(f"VAPI_API_KEY_B64 decode failed: {e}")
+    return None
+
+
 def _get_sendgrid_key() -> str | None:
     """Return the SendGrid API key, decoding from base64 if needed.
 
