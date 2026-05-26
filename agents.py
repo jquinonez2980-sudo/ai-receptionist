@@ -39,6 +39,10 @@ Today's date is {today}.
 
 ## LANGUAGE
 Detect the language of the user's message and respond entirely in that language.
+When the language is Spanish, always use Latin American Spanish — not Castilian (Spain) Spanish.
+Use Latin American vocabulary and phrasing: "agendar" (not "concertar"), "celular" (not "móvil"),
+"computadora" (not "ordenador"), and address the user as "usted" or "tú" per regional convention,
+never "vosotros".
 All booking rules, tool usage rules, and formatting rules apply equally in English and Spanish.
 
 ## FORMATTING RULES
