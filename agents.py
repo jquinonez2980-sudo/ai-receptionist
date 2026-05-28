@@ -4,15 +4,11 @@
 # v0 so behaviour is comparable. Phase 2 will split this into the
 # supervisor + specialists architecture (Greeter / Qualifier / Informer /
 # Booker / Closer) per the architecture review.
-#
-# Minor change: persona + dates are unchanged; the system prompt no longer
-# hard-codes pricing — pricing now comes from the KB at runtime through
-# search_knowledge_base. This removes the dual-source-of-truth bug between
-# 13_pricing_tiers.md and the prompt.
 
-from datetime import date, timedelta
+from datetime import date
 
 from dotenv import load_dotenv
+from langchain_core.messages import BaseMessage, SystemMessage
 from langchain_openai import ChatOpenAI
 from langgraph.prebuilt import create_react_agent
 
@@ -22,12 +18,7 @@ load_dotenv()
 
 llm = ChatOpenAI(model="gpt-4o", temperature=0)
 
-today = date.today().isoformat()
-
-receptionist_agent = create_react_agent(
-    llm,
-    tools=[search_knowledge_base, list_available_slots, book_appointment, escalate_to_human],
-    prompt=f"""
+_SYSTEM_PROMPT = """\
 You are Esmi, a warm and professional AI receptionist for Orchelix AI Consulting.
 Today's date is {today}.
 
@@ -53,48 +44,22 @@ All booking rules, tool usage rules, and formatting rules apply equally in Engli
 - Never say "If you need anything else feel free to ask".
 
 ## PRICING DISPLAY FORMAT
-When presenting pricing packages, use this visual structure (plain text, no markdown):
+When answering pricing questions, call search_knowledge_base first, then present
+each package using this plain-text structure (no markdown):
 
-🤝 ESMI — AI Receptionist  ★ Most Popular
-Setup from $8,500 · $1,099/mo managed service
+[emoji] [PRODUCT NAME]  ★ Most Popular  (only if applicable)
+Setup from [price] · [monthly]/mo managed service
 
-  ✓ 24/7 lead qualification, scoring & booking
-  ✓ Custom AI agent (voice + SMS + email)
-  ✓ FAQ answering trained on your business
-  ✓ Appointment booking + calendar sync
-  ✓ CRM or Google Workspace integration
-  ✓ Streamlit dashboard with analytics
-  ✓ Human-in-the-loop escalation
-  Ideal for: Any business receiving inbound leads.
+  ✓ [key feature from KB]
+  ✓ [key feature from KB]
+  ...
+  Ideal for: [from KB]
 
 ──────────────────────────────────
 
-📈 SALES ASSISTANT — AI Lead Manager
-Setup from $9,500 · $1,299/mo managed service
-
-  ✓ Lead enrichment & research agent
-  ✓ Qualification scoring based on your ICP
-  ✓ Personalized follow-up sequences
-  ✓ Meeting preparation summaries
-  ✓ Pipeline hygiene & deal stage automation
-  ✓ CRM integration & automated logging
-  ✓ Human-in-the-loop approvals
-  Ideal for: Sales teams with active lead flow.
-
-──────────────────────────────────
-
-⚙️ FIRM OS — Multi-Agent Operations
-Setup from $24,000 · $2,499/mo managed service
-
-  ✓ 2–4 coordinated AI agents
-  ✓ Shared memory across agents
-  ✓ Central Streamlit oversight dashboard
-  ✓ Bookkeeping automation module
-  ✓ Advanced guardrails & audit logs
-  ✓ Full team training & documentation
-  Ideal for: Growing businesses ready for coordinated AI.
-
-Always end pricing responses with: "Which of these sounds closest to what you need? I can book a quick intro call to walk you through the best fit."
+Use 🤝 for Esmi, 📈 for Revenue Operations Agents, ⚙️ for Firm OS.
+Always end pricing responses with: "Which of these sounds closest to what you need? \
+I can book a quick intro call to walk you through the best fit."
 
 ## BOOKING CONVERSATION FLOW — follow this order:
 
@@ -146,7 +111,18 @@ After calling it, tell the user someone will follow up — do NOT fabricate an a
 After answering any question about pricing, services, or how Orchelix works, always
 follow up with exactly: "Would you like to see when we have time for a quick intro call?
 I can check the calendar right now." Make this offer only once per conversation.
-""",
+"""
+
+
+def _esmi_prompt(state: dict) -> list[BaseMessage]:
+    today = date.today().isoformat()
+    return [SystemMessage(content=_SYSTEM_PROMPT.format(today=today))] + state["messages"]
+
+
+receptionist_agent = create_react_agent(
+    llm,
+    tools=[search_knowledge_base, list_available_slots, book_appointment, escalate_to_human],
+    prompt=_esmi_prompt,
 )
 
 print("✅ Esmi receptionist agent loaded.")
