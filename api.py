@@ -233,26 +233,48 @@ async def health_sendgrid() -> dict:
 @app.get("/health/calendar")
 async def health_calendar() -> dict:
     """Diagnostic: test Google Calendar auth step by step."""
-    import os, json, tempfile
+    import os, json, tempfile, base64
     steps = {}
 
-    # Step 1: check env var presence
+    # Step 1: resolve token data from whichever env var is present (matches tools.py priority)
+    token_data = None
+    token_b64 = os.environ.get("GOOGLE_TOKEN_B64")
     token_json_env = os.environ.get("GOOGLE_TOKEN_JSON")
-    steps["env_var_set"] = token_json_env is not None
-    steps["env_var_length"] = len(token_json_env) if token_json_env else 0
+    refresh_token = os.environ.get("GOOGLE_REFRESH_TOKEN")
 
-    # Step 2: parse JSON
-    if token_json_env:
+    if token_b64:
+        steps["source"] = "GOOGLE_TOKEN_B64"
         try:
-            token_data = json.loads(token_json_env)
-            steps["json_parse"] = "ok"
-            steps["has_refresh_token"] = bool(token_data.get("refresh_token"))
-            steps["has_client_id"] = bool(token_data.get("client_id"))
+            token_data = json.loads(base64.b64decode(token_b64).decode("utf-8"))
+            steps["decode"] = "ok"
         except Exception as e:
-            steps["json_parse"] = f"FAILED: {e}"
+            steps["decode"] = f"FAILED: {e}"
+            return {"status": "error", "steps": steps}
+    elif refresh_token and os.environ.get("GOOGLE_CLIENT_ID") and os.environ.get("GOOGLE_CLIENT_SECRET"):
+        steps["source"] = "individual env vars"
+        token_data = {
+            "refresh_token": refresh_token,
+            "client_id": os.environ["GOOGLE_CLIENT_ID"],
+            "client_secret": os.environ["GOOGLE_CLIENT_SECRET"],
+            "token_uri": os.environ.get("GOOGLE_TOKEN_URI", "https://oauth2.googleapis.com/token"),
+            "scopes": ["https://www.googleapis.com/auth/calendar"],
+        }
+    elif token_json_env:
+        steps["source"] = "GOOGLE_TOKEN_JSON"
+        try:
+            token_data = json.loads(token_json_env.strip().strip("'\""))
+            steps["decode"] = "ok"
+        except Exception as e:
+            steps["decode"] = f"FAILED: {e}"
             return {"status": "error", "steps": steps}
     else:
-        return {"status": "error", "steps": steps, "detail": "GOOGLE_TOKEN_JSON env var not found"}
+        steps["source"] = "none"
+        return {"status": "error", "steps": steps, "detail": "No Google credential env vars found (checked GOOGLE_TOKEN_B64, GOOGLE_REFRESH_TOKEN, GOOGLE_TOKEN_JSON)"}
+
+    steps["has_refresh_token"] = bool(token_data.get("refresh_token"))
+    steps["has_client_id"] = bool(token_data.get("client_id"))
+    expiry = token_data.get("expiry")
+    steps["token_expiry"] = expiry
 
     # Step 3: build credentials
     try:
@@ -362,7 +384,7 @@ def _run_voice_tool(name: str, params: dict) -> str:
             "summary": params.get("summary", "Orchelix Intro Call"),
             "start_time": params["start_time"],
             "end_time": params["end_time"],
-            "attendee_email": params.get("caller_phone", "phone-booking"),
+            "attendee_email": params.get("attendee_email") or params.get("caller_phone"),
         }))
     log.warning("VAPI sent unknown tool: %s", name)
     return "Unknown tool."
