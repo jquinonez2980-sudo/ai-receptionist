@@ -1,92 +1,106 @@
 # Pricing & Plans — Orchelix AI Consulting
 
 ## Pricing Model
-Hybrid model: Base Orchestration Fee + Performance Component.
-Annual billing saves 18% on all plans. No setup fees — deployment is included in every plan. Cancel anytime.
+Every system includes a one-time setup fee (custom build + deployment) and a monthly managed service fee (monitoring, optimization, updates, and support). No long-term contracts required on the monthly service.
 
 ---
 
-## Pilot — "Prove it"
-**Monthly: $4,250/month | Annual: $41,700/year (save 18%)**
+## Card 01 — Esmi AI Virtual Receptionist & Lead Qualification System
+**★ Most Popular**
 
-Best for businesses testing AI and proving ROI before a larger commitment. One AI agent, one workflow, instrumented end-to-end.
+**One-time Setup: Starting at $8,500**
+**Monthly Managed Service: Starting at $1,099/month**
 
-**What's included:**
-- 1 AI agent of your choice — Esmi (Receptionist), Revenue-Ops, or Finance OS
-- System design and integrations
-- Success metrics defined at kickoff
-- Monthly optimization session with your consultant
-- Operator console + full audit log
-- Monday-morning scorecard, email + PDF
-- EN · ES bilingual out of the box
-- Senior consultant, weekly check-in
+Best for any business that receives inbound leads or inquiries and wants 24/7 coverage without missing a lead.
 
-Most clients start with Pilot and upgrade once the agent has earned the room.
+**Key Benefits:**
+- Never miss another lead
+- Intelligent 24/7 qualification and booking
+- Bilingual support (EN/ES) available
 
----
+**What You Get:**
+- Custom LangGraph AI agent (voice + SMS + email)
+- Advanced lead qualification with scoring and routing
+- FAQ answering trained on your business
+- Appointment booking + calendar sync
+- CRM or Google Workspace integration
+- Custom Streamlit dashboard with analytics
+- Monthly monitoring, optimization & updates
+- Human-in-the-loop design with escalation paths
 
-## Growth — "Run it"
-**Monthly: $8,500/month | Annual: $83,600/year (save 18%)**
-
-Best for growing businesses that want a multi-agent stack focused on lead qualification and appointment setting.
-
-**What's included (everything in Pilot, plus):**
-- 2–4 orchestrated agents — configured and tuned for your pipeline
-- Lead qualification and appointment-setting workflows
-- Dedicated senior consultant
-- Unlimited integrations — CRM, ledger, calendar, phone
-- Monthly business review with revenue scorecard
-- PIPEDA-aligned audit trail · data residency on request
-- Priority phone & Slack support
+**Ideal For:** Any business that receives inbound leads or inquiries.
 
 ---
 
-## Scale — "Scale it"
-**Monthly: $16,500/month | Annual: $162,000/year (save 18%)**
+## Card 02 — AI Sales & Lead Management Assistant
+**One-time Setup: Starting at $9,500**
+**Monthly Managed Service: Starting at $1,299/month**
 
-Full multi-agent Revenue OS — analytics, dashboards, and a named consultant team.
+Best for sales teams and businesses with active lead flow who want to scale follow-up without burning out their team.
 
-**What's included (everything in Growth, plus):**
-- Full multi-agent Revenue OS
-- Analytics and performance dashboards
-- Named delivery team (consultant + engineer + analyst)
-- Custom integrations & bespoke agent workflows
-- SSO, role-based access, and approval workflows
-- Up to multiple locations or business units
+**Key Benefits:**
+- Scale your sales follow-up without burning out your team
+- Cleaner pipeline and higher conversion rates
+
+**What You Get:**
+- Lead enrichment & research agent
+- Qualification scoring based on your ICP
+- Personalized follow-up sequence agent
+- Meeting preparation summaries
+- Pipeline hygiene & deal stage automation
+- CRM integration & automated logging
+- Custom sales dashboard
+- Monthly optimization and performance reporting
+- Human-in-the-loop approvals
+
+**Ideal For:** Sales teams and businesses with active lead flow.
 
 ---
 
-## Enterprise — "Custom"
-**Starting at $28,000+/month — custom scoped per engagement**
+## Card 03 — Custom Multi-Agent Operations System ("Firm OS")
+**One-time Setup (Phased): Starting at $24,000**
+**Monthly Managed Service: Starting at $2,499/month**
 
-Fully custom multi-agent architecture for multi-location operators and enterprises.
+Best for growing businesses ready for coordinated AI operations across multiple departments.
 
-**What's included (everything in Scale, plus):**
-- Fully custom multi-agent architecture
-- Dedicated support team with 1-hour SLA and 24/7 on-call escalation
-- SOC 2 reports, MSA, custom DPA
-- Unlimited locations and business units
-- Custom language tuning (EN · ES · FR + others)
-- Quarterly business reviews + monthly reviews
+**Key Benefits:**
+- Multiple specialized agents working together as one team
+- Bookkeeping automation available as a module
+- One central dashboard for full visibility
+
+**What You Get:**
+- 2–4 orchestrated AI agents (lead qualification + sales + document processing + financial operations)
+- Shared memory across agents
+- Central custom Streamlit oversight dashboard
+- Deep integrations with your existing tools
+- Bookkeeping automation module (categorization, invoice extraction, basic reconciliation)
+- Advanced guardrails and audit logs
+- Monthly strategy calls + continuous optimization
+- Full team training and documentation
+
+**Ideal For:** Growing businesses ready for coordinated AI operations.
 
 ---
 
 ## Common Questions
 
-**Does the price include deployment?**
-Yes. The two-week deployment (discovery, build, shadow, go-live) is included in every plan. No setup fees.
+**What does the setup fee cover?**
+Everything needed to go live: custom agent build, integrations, testing, deployment, and team training. No hidden fees.
 
-**What is the performance component?**
-Pricing includes a component tied to results — the exact structure is defined at kickoff based on the goal we're measuring against.
+**What does the monthly managed service include?**
+Ongoing monitoring, performance optimization, updates, support, and reporting — so the system keeps improving after launch.
 
-**Do you offer annual discounts?**
-Yes. Annual billing saves 18% on Pilot, Growth, and Scale. Enterprise is custom-scoped.
+**Can I start with one system and add more later?**
+Yes. Many clients begin with Esmi and later expand to the Sales Assistant or Firm OS. Systems are designed to work together.
 
-**What happens if we need more than the plan covers?**
-Your consultant works with you on the right next step — adding capacity or upgrading. No service interruptions, no surprise charges.
+**Is the monthly service a long-term contract?**
+No. The monthly managed service is flexible with no long-term contracts required.
 
-**Cancellation policy**
-Monthly plans cancel anytime, effective end of cycle. Annual plans cancel with 30 days' notice. You keep export access to every agent action and audit log for 60 days after cancellation.
+**Do you offer bookkeeping automation?**
+Yes. It's available as a module inside the Firm OS and can be discussed as an add-on for other packages.
 
-**How to get started**
-Book a demo at orchelix.com/book. A senior consultant will map your workflow and recommend the right starting tier.
+**How long does launch take?**
+Esmi and the Sales Assistant typically launch in 2–3 weeks. The Firm OS uses phased delivery, with the first phase live in 4–6 weeks.
+
+**How to get started:**
+Book a free 30-minute strategy call at orchelix.com/book. A senior consultant will map your workflow and recommend the right system.
