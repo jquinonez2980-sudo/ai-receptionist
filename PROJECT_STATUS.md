@@ -143,7 +143,7 @@ Tailwind v4 with `@theme` block in `globals.css`:
 
 ## Deployment — Railway
 
-**URL:** `https://ai-receptionist-production-5375.up.railway.app`
+**URL:** `https://ai-receptionist-production-3446.up.railway.app`
 
 **Build:** Dockerfile (python:3.11-slim → pip install → uvicorn)
 
@@ -167,26 +167,37 @@ into the Dockerfile as `ENV KEY=value` using base64 encoding to bypass GitHub se
 ## Google Calendar Setup
 
 1. Create a Google Cloud project → enable Calendar API
-2. Create OAuth 2.0 credentials (Desktop app type)
-3. Run the OAuth flow locally to get `token.json`
-4. Base64-encode the credentials (without the expired `token` field):
+2. Create OAuth 2.0 credentials (Desktop app type) → download as `credentials.json`
+3. Run the OAuth flow locally to generate a fresh token:
 
-```python
+```bash
+python -c "
+from google_auth_oauthlib.flow import InstalledAppFlow
 import json, base64
+flow = InstalledAppFlow.from_client_secrets_file('credentials.json', ['https://www.googleapis.com/auth/calendar'])
+creds = flow.run_local_server(port=0)
 data = {
-    "refresh_token": "...",
-    "client_id": "...",
-    "client_secret": "...",
-    "token_uri": "https://oauth2.googleapis.com/token",
-    "scopes": ["https://www.googleapis.com/auth/calendar"],
-    "universe_domain": "googleapis.com"
+  'token': creds.token,
+  'refresh_token': creds.refresh_token,
+  'token_uri': creds.token_uri,
+  'client_id': creds.client_id,
+  'client_secret': creds.client_secret,
+  'scopes': list(creds.scopes),
+  'universe_domain': 'googleapis.com',
+  'expiry': creds.expiry.isoformat() if creds.expiry else None,
 }
-print(base64.b64encode(json.dumps(data).encode()).decode())
+print('TOKEN_B64=' + base64.b64encode(json.dumps(data).encode()).decode())
+"
 ```
 
-5. Put the output in Dockerfile: `ENV GOOGLE_TOKEN_B64=eyJ...`
+4. Update Railway environment variables:
+   - `GOOGLE_TOKEN_B64` — base64-encoded full JSON (checked first by `tools.py`)
+   - `GOOGLE_REFRESH_TOKEN` — just the refresh token string (fallback method)
+   - `GOOGLE_TOKEN_JSON` — same full JSON as plain string (fallback method)
 
-The `refresh_token` auto-renews the expired access token on first API call.
+The `refresh_token` auto-renews the expired access token on each API call.
+
+**Important:** If the Google Cloud OAuth app is in **Testing** mode, refresh tokens expire after **7 days**. Re-run the OAuth flow above and update all three Railway vars every time booking breaks. To avoid this, publish the app in Google Cloud Console → OAuth consent screen → Publish App.
 
 ---
 
@@ -215,7 +226,7 @@ Escalation emails go to `jquinonez2980@gmail.com`. Booking notifications go to `
 **Phone number:** 561-566-1066
 **Voice:** ElevenLabs Bella
 **Model:** GPT-4o (configured in VAPI dashboard)
-**Server URL:** `https://ai-receptionist-production-5375.up.railway.app/voice/tools`
+**Server URL:** `https://ai-receptionist-production-3446.up.railway.app/voice/tools`
 
 ### Tools configured in VAPI dashboard
 
@@ -224,7 +235,7 @@ Escalation emails go to `jquinonez2980@gmail.com`. Booking notifications go to `
 | `get_current_date` | none | Always called first so agent can resolve relative dates |
 | `search_knowledge_base` | `query: string` | KB search |
 | `list_available_slots` | `start_date: string`, `end_date: string` | ISO dates |
-| `book_appointment` | `summary`, `start_time`, `end_time`, `caller_phone` | Phone # used instead of email |
+| `book_appointment` | `summary`, `start_time`, `end_time`, `attendee_email` | Pass caller phone as `attendee_email`; `caller_phone` also accepted as fallback |
 | `transferCall` | destination: Jorge's phone | VAPI built-in — no backend webhook |
 
 ### Voice booking differences from chat
@@ -295,7 +306,7 @@ Pricing model: Base Orchestration Fee + Performance Component tied to results.
 
 ## Known Issues / Limitations
 
-- `token.json` refresh tokens expire if not used for 6 months — re-run OAuth flow to refresh
+- Google OAuth refresh tokens expire after **7 days** if the Cloud app is in "Testing" mode — re-run the OAuth flow in the Google Calendar Setup section and update all three `GOOGLE_*` Railway vars. Fix: publish the app in Google Cloud Console → OAuth consent screen
 - `MemorySaver` fallback loses conversation history on Railway restart — `DATABASE_URL` must be set for persistence
 - FAISS index rebuild calls OpenAI embeddings API — costs a small amount on each deploy if KB files changed
 - Slot stripping regex is fragile — if LLM changes time format, slots may not be stripped during streaming
@@ -317,3 +328,4 @@ Pricing model: Base Orchestration Fee + Performance Component tied to results.
 | 7 | Phone/voice — VAPI.ai integration, ElevenLabs Bella, 561-566-1066 | `api.py`, `Dockerfile`, VAPI dashboard |
 | 8 | Spanish support — EN/ES toggle in chat UI, agent responds in detected language | `EsmiChat.tsx`, `agents.py` |
 | 9 | Latin American Spanish — agent uses LATAM vocabulary/register, never Castilian | `agents.py`, `EsmiChat.tsx` |
+| 10 | Google OAuth token refresh — re-ran OAuth, updated all 3 Railway vars (`GOOGLE_TOKEN_B64`, `GOOGLE_TOKEN_JSON`, `GOOGLE_REFRESH_TOKEN`); fixed voice `book_appointment` bug (was using `caller_phone` key instead of `attendee_email`); fixed `/health/calendar` to test correct credential source | `api.py`, Railway vars |
