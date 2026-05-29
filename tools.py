@@ -466,7 +466,7 @@ _PRICING = [
         ],
     },
     {
-        "name": "AI Sales & Lead Management Assistant",
+        "name": "Revenue Operations Agents (AI Sales & Lead Management)",
         "popular": False,
         "setup_from": 9500,
         "monthly_from": 1299,
