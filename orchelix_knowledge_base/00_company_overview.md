@@ -19,12 +19,12 @@ Automated bookkeeping, reconciliations, and a month-end close you can defend to 
 All three agents share a single operator console with a full audit trail, human-override controls, and a Monday-morning scorecard.
 
 ## Key Facts
-- Bilingual EN · ES out of the box on all plans; French available as add-on on Pilot/Growth, standard on Scale/Enterprise
+- Bilingual EN · ES out of the box; French available as an add-on
 - PIPEDA-aligned by default; Canadian data residency available
 - SOC 2 audit in progress
 - 14-day deployment from kickoff to live agent
-- No setup fees — deployment is included in every plan
-- No long contracts; cancel anytime
+- One-time setup fee per system, then a monthly managed service
+- No long contract on the monthly service; cancel anytime
 
 ## Mission
 To deliver intelligent, reliable AI agents that make businesses feel calm, responsive, and scalable — starting with the first point of contact.

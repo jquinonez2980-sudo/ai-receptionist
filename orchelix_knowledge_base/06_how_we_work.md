@@ -2,7 +2,7 @@
 
 ## From first call to your first agent in 14 days.
 
-We make implementing a production-ready AI agent fast, transparent, and low-risk. Every plan includes the full 14-day deployment — no setup fees, no hidden costs.
+We make implementing a production-ready AI agent fast, transparent, and low-risk. Every system includes the full 14-day deployment as part of its one-time setup fee — no hidden costs.
 
 ---
 
@@ -26,7 +26,7 @@ Every plan includes a Monday-morning scorecard — a structured summary showing:
 - What the agent handled that week
 - Key metrics (calls answered, leads qualified, transactions reconciled, etc.)
 - What moved, what stalled, and recommended next steps
-- Delivered by email + PDF (Pilot), with a monthly business review call (Growth/Scale), and quarterly business reviews (Enterprise)
+- Delivered by email + PDF, with a monthly business review call included in the managed service
 
 ---
 
@@ -40,12 +40,12 @@ All agents share a single operator console where you can:
 ---
 
 ## The Consultant Model
-Orchelix is a consultancy that ships software. Every client has a named senior consultant, not just a support queue.
+Orchelix is a consultancy that ships software. Every client has a named senior consultant, not just a support queue. The monthly managed service includes:
 
-- **Pilot**: Weekly check-in; monthly optimization session
-- **Growth**: Dedicated consultant; monthly business review
-- **Scale**: Named delivery team (consultant + engineer + analyst); analytics dashboards
-- **Enterprise**: 1-hour SLA; 24/7 on-call escalation; fully custom support
+- A dedicated consultant and a monthly business review
+- Ongoing monitoring, optimization, and updates
+- Audit-trail access and human-override controls in the operator console
+- Escalation support, with custom SLAs available for Firm OS engagements
 
 ---
 

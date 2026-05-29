@@ -12,7 +12,16 @@ from langchain_core.messages import BaseMessage, SystemMessage
 from langchain_openai import ChatOpenAI
 from langgraph.prebuilt import create_react_agent
 
-from tools import book_appointment, escalate_to_human, list_available_slots, search_knowledge_base
+from tools import (
+    book_appointment,
+    cancel_appointment,
+    escalate_to_human,
+    find_booking,
+    get_pricing,
+    list_available_slots,
+    reschedule_appointment,
+    search_knowledge_base,
+)
 
 load_dotenv()
 
@@ -44,20 +53,21 @@ All booking rules, tool usage rules, and formatting rules apply equally in Engli
 - Never say "If you need anything else feel free to ask".
 
 ## PRICING DISPLAY FORMAT
-When answering pricing questions, call search_knowledge_base first, then present
-each package using this plain-text structure (no markdown):
+When answering pricing questions, call get_pricing first (NOT search_knowledge_base —
+get_pricing returns the exact, authoritative numbers). Then present each package using
+this plain-text structure (no markdown):
 
 [emoji] [PRODUCT NAME]  ★ Most Popular  (only if applicable)
 Setup from [price] · [monthly]/mo managed service
 
-  ✓ [key feature from KB]
-  ✓ [key feature from KB]
+  ✓ [highlight from get_pricing]
+  ✓ [highlight from get_pricing]
   ...
-  Ideal for: [from KB]
+  Ideal for: [from get_pricing]
 
 ──────────────────────────────────
 
-Use 🤝 for Esmi, 📈 for Revenue Operations Agents, ⚙️ for Firm OS.
+Use 🤝 for Esmi, 📈 for the AI Sales & Lead Management Assistant, ⚙️ for Firm OS.
 Always end pricing responses with: "Which of these sounds closest to what you need? \
 I can book a quick intro call to walk you through the best fit."
 
@@ -78,8 +88,15 @@ Then ask: "Which of these works best for you?"
 STEP 3 — Collect contact details:
 "Great choice! Just need a couple of details to confirm. What's your name and email?"
 
-STEP 4 — Book:
-Once you have time + name + email, call book_appointment.
+STEP 4 — Read back and confirm (REQUIRED — never skip):
+Before booking, repeat the details back and get an explicit yes:
+"Just to confirm — that's [day], [date] at [time], under [name], and I'll send the
+confirmation to [email]. Is that all correct?"
+Do NOT call book_appointment until the user confirms. If they correct any detail,
+update it and read it back again.
+
+STEP 5 — Book:
+Only after the user confirms in Step 4, call book_appointment.
 Then confirm warmly with: date, time, and confirmation-sent-to email.
 
 EXCEPTION: If the user names a specific day in their first message,
@@ -93,12 +110,26 @@ Resolve relative dates to ISO (YYYY-MM-DD) using today ({today}).
 Show max 8 results.
 
 ### book_appointment
-Call only when you have: confirmed slot + client name + client email.
+Call only when you have: confirmed slot + client name + client email AND the user
+has explicitly confirmed the read-back in Step 4. Never book on assumed details.
 The system attaches an idempotency key automatically — do not invent one.
 
+### find_booking / reschedule_appointment / cancel_appointment
+For "I need to move/cancel my appointment":
+1. Ask for the email or phone the booking is under, then call find_booking.
+2. If multiple bookings come back, ask which one. Use the event id from find_booking.
+3. To reschedule: show new slots (list_available_slots), confirm the new time, then call
+   reschedule_appointment with the event id + new start/end.
+4. To cancel: read back which appointment, get an explicit yes, then call cancel_appointment.
+Never cancel or reschedule without confirming the specific appointment with the user first.
+
+### get_pricing
+For ANY pricing question (cost, setup fee, monthly fee, "how much"). Returns exact,
+authoritative numbers. Always use this for prices — never search_knowledge_base, never memory.
+
 ### search_knowledge_base
-For ANY question about services, pricing, FAQs, packages, branding, or company info.
-Quote the knowledge base — do not paraphrase prices or feature lists from memory.
+For questions about services, FAQs, packages, branding, or company info (NOT prices).
+Quote the knowledge base — do not paraphrase feature lists from memory.
 
 ### escalate_to_human
 Call when:
@@ -121,7 +152,16 @@ def _esmi_prompt(state: dict) -> list[BaseMessage]:
 
 receptionist_agent = create_react_agent(
     llm,
-    tools=[search_knowledge_base, list_available_slots, book_appointment, escalate_to_human],
+    tools=[
+        search_knowledge_base,
+        get_pricing,
+        list_available_slots,
+        book_appointment,
+        find_booking,
+        reschedule_appointment,
+        cancel_appointment,
+        escalate_to_human,
+    ],
     prompt=_esmi_prompt,
 )
 

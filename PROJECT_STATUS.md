@@ -33,10 +33,13 @@ Caller
   └── VAPI phone number: 561-566-1066
         └── VAPI AI engine (ElevenLabs Bella STT/TTS + GPT-4o)
               └── POST /voice/tools  ← Railway FastAPI (sync tool execution)
-                    ├── get_current_date    → returns today's ISO date
+                    ├── get_pricing           → canonical exact pricing
                     ├── search_knowledge_base → FAISS KB
                     ├── list_available_slots  → Google Calendar freebusy
-                    ├── book_appointment      → Google Calendar insert (phone # as contact)
+                    ├── book_appointment      → Google Calendar insert (phone # in description, SMS confirm)
+                    ├── find_booking          → look up caller's upcoming bookings
+                    ├── reschedule_appointment → move a booking to a new time
+                    ├── cancel_appointment    → cancel a booking
                     └── transferCall          → VAPI built-in → Jorge's phone
 ```
 
@@ -232,16 +235,19 @@ Escalation emails go to `jquinonez2980@gmail.com`. Booking notifications go to `
 
 | Tool | Parameters | Notes |
 |---|---|---|
-| `get_current_date` | none | Always called first so agent can resolve relative dates |
-| `search_knowledge_base` | `query: string` | KB search |
+| `get_pricing` | none | Canonical, exact pricing for all packages (use instead of KB for prices) |
+| `search_knowledge_base` | `query: string` | KB search (services/FAQs, NOT prices) |
 | `list_available_slots` | `start_date: string`, `end_date: string` | ISO dates |
 | `book_appointment` | `summary`, `start_time`, `end_time`, `attendee_email` | Pass caller phone as `attendee_email`; `caller_phone` also accepted as fallback |
+| `find_booking` | `contact: string` | Find caller's upcoming bookings by phone/email; returns event ids |
+| `reschedule_appointment` | `event_id`, `new_start_time`, `new_end_time` | Move a booking (event id from `find_booking`) |
+| `cancel_appointment` | `event_id` | Cancel a booking (event id from `find_booking`) |
 | `transferCall` | destination: Jorge's phone | VAPI built-in — no backend webhook |
 
 ### Voice booking differences from chat
 - Asks for **name only** — no email (STT can't reliably transcribe email addresses)
-- Caller's phone number is injected automatically via `{{call.customer.number}}` and passed as `attendee_email` to the backend
-- `get_current_date` tool required because VAPI GPT-4o doesn't know today's date at runtime
+- Caller's phone number is injected automatically via `{{call.customer.number}}` and passed as `attendee_email`; the backend detects it's a phone (not an email), stores it in the event description, and texts an SMS confirmation
+- Today's date is injected into the prompt via the VAPI liquid variable `{{ "now" | date: "%A, %B %d, %Y", "America/Toronto" }}` — no `get_current_date` tool round-trip needed
 - Slot options are read conversationally (not as a bullet list)
 - Hot leads flagged in the `summary` field (e.g. "Intro Call — Jorge 🔥 HOT LEAD")
 
@@ -250,7 +256,7 @@ Escalation emails go to `jquinonez2980@gmail.com`. Booking notifications go to `
 ```
 You are Esmi, a warm and professional AI receptionist for Orchelix AI Consulting.
 
-Always call get_current_date at the very start of every call, before doing anything else, so you know today's date.
+Today's date is {{ "now" | date: "%A, %B %d, %Y", "America/Toronto" }}. Use it to resolve relative dates like "tomorrow" or "next Tuesday" into YYYY-MM-DD format.
 
 YOUR PERSONALITY
 - Friendly, warm, and human — never robotic or overly formal.
@@ -282,33 +288,48 @@ Ask: "Which of those times works best for you?"
 STEP 3 — Collect name only:
 "Perfect — and just your name to reserve it?"
 
-STEP 4 — Book:
-Call book_appointment with: the confirmed slot's start_iso and end_iso values, the caller's name as the summary (e.g. "Intro Call — Jorge"), and {{call.customer.number}} as the attendee_email.
+STEP 4 — Read back and confirm (REQUIRED — never skip):
+Before booking, repeat the details back and wait for a clear yes:
+"Just to confirm — that's [day] at [time] under [name]. Is that right?"
+Do NOT call book_appointment until the caller confirms. Phone transcription is
+imperfect, so this step catches wrong days, times, or misheard names. If the caller
+corrects anything, update it and read it back again.
+
+STEP 5 — Book:
+Only after the caller confirms in Step 4, call book_appointment with: the confirmed slot's start_iso and end_iso values, the caller's name as the summary (e.g. "Intro Call — Jorge"), and {{call.customer.number}} as the attendee_email.
 Confirm warmly: "Done! I've got you down for [day] at [time]. We'll see you then."
 
 EXCEPTION: If the caller names a specific day in their first sentence, skip Step 1 and go straight to Step 2.
 
 TOOL USAGE RULES
 
-get_current_date
-Call this first on every call. Use the returned date to resolve any relative dates like "tomorrow" or "next Tuesday" into YYYY-MM-DD format.
-
 list_available_slots
 Call only after the caller gives a preferred day.
-Pass start_date and end_date as YYYY-MM-DD (use the date from get_current_date to resolve relative days).
+Pass start_date and end_date as YYYY-MM-DD (resolve relative days using today's date stated at the top of this prompt).
 Read back no more than 4–5 slot options.
 
 book_appointment
-Call only when you have: confirmed time slot + caller's name.
+Call only when you have: confirmed time slot + caller's name AND the caller has explicitly confirmed the read-back in Step 4. Never book on unconfirmed or assumed details.
 Parameters:
   - summary: "Intro Call — [caller name]"
   - start_time: the start_iso value shown next to the slot (e.g. 2026-05-29T10:00:00-04:00)
   - end_time: the end_iso value shown next to the slot
   - attendee_email: {{call.customer.number}}
 
+find_booking / reschedule_appointment / cancel_appointment
+When a caller wants to move or cancel an existing appointment:
+1. The caller's number is {{call.customer.number}} — call find_booking with it as contact.
+2. If more than one booking comes back, ask which one. Use the event id from find_booking.
+3. To reschedule: call list_available_slots, confirm the new time with the caller, then call reschedule_appointment with the event id and the new start_iso / end_iso.
+4. To cancel: read back which appointment, get a clear yes, then call cancel_appointment with the event id.
+Never cancel or reschedule without confirming the specific appointment first.
+
+get_pricing
+Call for ANY pricing question (cost, setup fee, monthly fee, "how much"). Returns exact, authoritative numbers. Always use this for prices — never search_knowledge_base, never memory.
+
 search_knowledge_base
-Call for ANY question about services, pricing, FAQs, packages, or company info.
-Never answer pricing or feature questions from memory — always search first.
+Call for questions about services, FAQs, packages, or company info (NOT prices).
+Never answer feature questions from memory — always search first.
 
 transferCall
 Use this VAPI built-in tool when:
@@ -351,14 +372,17 @@ If the caller mentions budget, timeline, or urgency ("ready to start", "ASAP", "
 
 ## Pricing (current)
 
-| Tier | Monthly | Annual |
-|---|---|---|
-| Pilot | $4,250 | $41,700 (−18%) |
-| Growth | $8,500 | $83,600 (−18%) |
-| Scale | $16,500 | $162,000 (−18%) |
-| Enterprise | $28,000+ | Custom |
+Canonical source: `_PRICING` in `tools.py` (returned by the `get_pricing` tool).
+Keep in sync with `orchelix_knowledge_base/13_pricing_tiers.md`.
 
-Pricing model: Base Orchestration Fee + Performance Component tied to results.
+| Package | One-time Setup | Monthly Managed Service |
+|---|---|---|
+| Esmi — AI Virtual Receptionist & Lead Qualification ★ | from $8,500 | from $1,099/mo |
+| AI Sales & Lead Management Assistant | from $9,500 | from $1,299/mo |
+| Firm OS — Custom Multi-Agent Operations System | from $24,000 | from $2,499/mo |
+
+Pricing model: one-time setup fee + monthly managed service (monitoring, optimization,
+updates, support). No long-term contract on the monthly service.
 
 ---
 

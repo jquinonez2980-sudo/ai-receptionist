@@ -9,9 +9,13 @@ COPY . .
 
 EXPOSE 8080
 
-# Google Calendar credentials (base64-encoded JSON, no plaintext secrets)
-ENV GOOGLE_TOKEN_B64=eyJ1bml2ZXJzZV9kb21haW4iOiJnb29nbGVhcGlzLmNvbSIsImNsaWVudF9pZCI6IjU4ODQwNjkxNDEzLTBpZW4zY3JhZmQxYmVsMm9mZWcxM3IzbW4xcTRhcmZpLmFwcHMuZ29vZ2xldXNlcmNvbnRlbnQuY29tIiwiY2xpZW50X3NlY3JldCI6IkdPQ1NQWC1SOEM1M0tockluYTVUbTBEdEZSNEx1SXdqN2p5IiwicmVmcmVzaF90b2tlbiI6IjEvLzAxc3p1dlEydHVWa3NDZ1lJQVJBQUdBRVNOd0YtTDlJcnh5VWFORk5wNHBrejgyM2VyVXgzTGNhQmNDNW56RXdDV0tWNTZOR1RWalJFNmpnVlZxbFJpSjJxdjFiOEZiRjh6WjAiLCJzY29wZXMiOlsiaHR0cHM6Ly93d3cuZ29vZ2xlYXBpcy5jb20vYXV0aC9jYWxlbmRhciJdLCJ0b2tlbl91cmkiOiJodHRwczovL29hdXRoMi5nb29nbGVhcGlzLmNvbS90b2tlbiJ9
-ENV SENDGRID_API_KEY_B64=U0cuYjdGTzdRSDdTb1MyXy1OSVM0RF94US52a2luWVAwZUZXSHFRMDZZcTlTdXRNNktjb0xYaF9TMkh4RjhULVNGYk0w
-ENV VAPI_API_KEY_B64=M2YwNDQ5ZDUtZmVjZC00MTU5LWJhZDAtY2JhZDc2NTQ4N2Rk
+# Secrets are provided at runtime as Railway environment variables — NEVER baked
+# into the image. Set these in the Railway dashboard (environment/shared scope):
+#   GOOGLE_TOKEN_B64       (or GOOGLE_REFRESH_TOKEN + GOOGLE_CLIENT_ID + GOOGLE_CLIENT_SECRET)
+#   SENDGRID_API_KEY       (or SENDGRID_API_KEY_B64)
+#   VAPI_API_KEY           (or VAPI_API_KEY_B64)
+#   VAPI_SERVER_SECRET     (webhook auth — see api.py)
+#   TWILIO_ACCOUNT_SID / TWILIO_AUTH_TOKEN / TWILIO_SMS_FROM
+# tools.py / api.py read all of the above from the process environment.
 
 CMD ["sh", "-c", "uvicorn api:app --host 0.0.0.0 --port ${PORT:-8080}"]
