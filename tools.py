@@ -30,6 +30,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import tempfile
 import threading
 from datetime import datetime, timedelta
@@ -208,6 +209,39 @@ def _get_sendgrid_key() -> str | None:
         except Exception as e:
             log.warning(f"SENDGRID_API_KEY_B64 decode failed: {e}")
     return None
+
+
+# ════════════════════════════════════════════════════════════════════════
+#  SMS CONFIRMATION HELPER  (voice bookings)
+# ════════════════════════════════════════════════════════════════════════
+
+
+def _send_sms_confirmation(to_number: str, when: str) -> None:
+    """Text a booking confirmation to a voice caller. Best-effort — never raises.
+
+    Voice callers leave the call with no email invite (we only have their phone),
+    so this closes the loop. Requires TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, and
+    TWILIO_SMS_FROM (an SMS-capable Twilio number in E.164). If any is missing
+    the send is skipped with a warning.
+    """
+    try:
+        sid = os.environ.get("TWILIO_ACCOUNT_SID")
+        token = os.environ.get("TWILIO_AUTH_TOKEN")
+        from_number = os.environ.get("TWILIO_SMS_FROM")
+        if not (sid and token and from_number):
+            log.warning("Twilio SMS not configured — skipping booking confirmation text.")
+            return
+
+        from twilio.rest import Client
+
+        body = (
+            f"You're confirmed for {when} with Orchelix AI Consulting. "
+            "Reply to this message if anything changes. — Esmi"
+        )
+        Client(sid, token).messages.create(body=body, from_=from_number, to=to_number)
+        log.info("Booking confirmation SMS sent to %s", to_number)
+    except Exception as e:
+        log.warning(f"Booking confirmation SMS failed: {e}")
 
 
 # ════════════════════════════════════════════════════════════════════════
@@ -400,9 +434,88 @@ def search_knowledge_base(query: str) -> str:
         retriever = vs.as_retriever(search_kwargs={"k": 6})
         results = retriever.invoke(query)
         return "\n\n".join(doc.page_content for doc in results)
-    except Exception as e:
+    except Exception:
         log.exception("KB search failed")
-        return f"Knowledge base error: {e}"
+        return (
+            "I couldn't pull that up just now. I can connect you with our team "
+            "to get you an accurate answer."
+        )
+
+
+# ════════════════════════════════════════════════════════════════════════
+#  PRICING — canonical, deterministic (single source of truth)
+# ════════════════════════════════════════════════════════════════════════
+#
+# Pricing is returned from this structured constant — NOT from the vector
+# store — so quoted numbers are always exact. RAG chunking can split a price
+# table and surface a partial/wrong figure, which is the worst failure mode
+# for a sales receptionist. Keep these numbers in sync with
+# orchelix_knowledge_base/13_pricing_tiers.md.
+
+_PRICING = [
+    {
+        "name": "Esmi — AI Virtual Receptionist & Lead Qualification",
+        "popular": True,
+        "setup_from": 8500,
+        "monthly_from": 1099,
+        "best_for": "Any business that receives inbound leads or inquiries and wants 24/7 coverage without missing a lead.",
+        "highlights": [
+            "Never miss another lead",
+            "Intelligent 24/7 qualification and booking",
+            "Bilingual support (EN/ES) available",
+        ],
+    },
+    {
+        "name": "AI Sales & Lead Management Assistant",
+        "popular": False,
+        "setup_from": 9500,
+        "monthly_from": 1299,
+        "best_for": "Sales teams and businesses with active lead flow who want to scale follow-up without burning out their team.",
+        "highlights": [
+            "Scale sales follow-up without burning out your team",
+            "Cleaner pipeline and higher conversion rates",
+        ],
+    },
+    {
+        "name": "Firm OS — Custom Multi-Agent Operations System",
+        "popular": False,
+        "setup_from": 24000,
+        "monthly_from": 2499,
+        "best_for": "Growing businesses ready for coordinated AI operations across multiple departments.",
+        "highlights": [
+            "Multiple specialized agents working together as one team",
+            "Bookkeeping automation available as a module",
+            "One central dashboard for full visibility",
+        ],
+    },
+]
+
+
+@tool
+def get_pricing() -> str:
+    """Return Orchelix's current, canonical pricing for every package.
+
+    Use this for ANY pricing question instead of the knowledge base — these
+    numbers are authoritative and exact. Never quote prices from memory or KB
+    search; always call this tool first.
+    """
+    lines: list[str] = []
+    for p in _PRICING:
+        title = p["name"] + ("  ★ Most Popular" if p["popular"] else "")
+        lines.append(title)
+        lines.append(
+            f"Setup from ${p['setup_from']:,} · ${p['monthly_from']:,}/mo managed service"
+        )
+        for h in p["highlights"]:
+            lines.append(f"- {h}")
+        lines.append(f"Ideal for: {p['best_for']}")
+        lines.append("")
+    lines.append(
+        "Pricing model: a one-time setup fee plus a monthly managed service "
+        "(monitoring, optimization, updates, support). No long-term contract "
+        "on the monthly service."
+    )
+    return "\n".join(lines)
 
 
 # ════════════════════════════════════════════════════════════════════════
@@ -412,6 +525,32 @@ def search_knowledge_base(query: str) -> str:
 _BUSINESS_TZ = "America/Toronto"
 _HOURS = range(9, 17)  # 9 AM – 5 PM
 _SLOT_MIN = 30
+
+# Caller-safe message spoken/shown when the calendar is unreachable. It nudges
+# the voice model to fall back to a human transfer instead of reading a stack trace.
+_CALENDAR_FALLBACK = (
+    "I'm having trouble reaching the calendar right now. "
+    "Let me connect you with someone on our team so we don't lose your spot."
+)
+
+_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
+
+def _looks_like_email(value: str | None) -> bool:
+    """True only for a syntactically valid email. Phone numbers (the voice
+    path passes the caller's number here) return False so we never hand an
+    invalid attendee email to Google Calendar."""
+    return bool(value and _EMAIL_RE.match(value.strip()))
+
+
+def _friendly_when(start_iso: str) -> str:
+    """Render an ISO start time as a spoken-friendly phrase, e.g.
+    'Thursday, May 29 at 10:00 AM'. Falls back to the raw value if unparseable."""
+    try:
+        dt = datetime.fromisoformat(start_iso)
+        return f"{dt.strftime('%A, %B %d')} at {dt.strftime('%I:%M %p').lstrip('0')}"
+    except Exception:
+        return start_iso
 
 
 def _slot_id(start_iso: str) -> str:
@@ -503,10 +642,11 @@ def list_available_slots(start_date: str, end_date: str) -> str:
         return "Available slots:\n" + "\n".join(available[:12])
 
     except RuntimeError as e:
-        return f"⚠️ Calendar not configured: {e}"
+        log.error("list_available_slots: calendar not configured: %s", e)
+        return _CALENDAR_FALLBACK
     except Exception as e:
         log.exception("list_available_slots failed")
-        return f"Calendar error: {e}"
+        return _CALENDAR_FALLBACK
 
 
 # ── Idempotency helpers ──────────────────────────────────────────────────
@@ -559,7 +699,10 @@ def book_appointment(
         summary: Event title.
         start_time: ISO 8601 start (with timezone), e.g. '2026-05-26T10:00:00-04:00'.
         end_time:   ISO 8601 end.
-        attendee_email: Optional invitee email.
+        attendee_email: Optional contact for the booking. A valid email is added
+            as a calendar attendee (and gets an invite). The voice path passes
+            the caller's phone number here instead — that is recorded in the
+            event description, never as an attendee (Google rejects non-emails).
         idempotency_key: Optional. If omitted, derived from the deterministic
             (summary,start,end,email) tuple — so the SAME logical booking
             attempted twice yields ONE event.
@@ -586,18 +729,16 @@ def book_appointment(
                     .get(calendarId="primary", eventId=event_id)
                     .execute()
                 )
-                return (
-                    f"✅ Already booked (idempotent).\n"
-                    f"Title: {existing.get('summary')}\n"
-                    f"Start: {existing['start'].get('dateTime')}\n"
-                    f"End:   {existing['end'].get('dateTime')}\n"
-                    f"Link:  {existing.get('htmlLink', 'N/A')}"
-                )
+                when = _friendly_when(existing["start"].get("dateTime", start_time))
+                return f"That's already booked — you're confirmed for {when}."
             except Exception:
                 return (
                     "⚠️ That time is no longer available — someone else just "
                     "booked it. Could you pick another slot?"
                 )
+
+        contact = (attendee_email or "").strip()
+        has_email = _looks_like_email(contact)
 
         event_body = {
             "id": event_id,
@@ -605,13 +746,20 @@ def book_appointment(
             "start": {"dateTime": start_time, "timeZone": _BUSINESS_TZ},
             "end": {"dateTime": end_time, "timeZone": _BUSINESS_TZ},
         }
-        if attendee_email:
-            event_body["attendees"] = [{"email": attendee_email}]
+        if has_email:
+            event_body["attendees"] = [{"email": contact}]
+        elif contact:
+            # Voice path: contact is a phone number, not an email. Record it in
+            # the description so it never reaches the (validated) attendees field.
+            event_body["description"] = f"Booked by phone. Caller contact: {contact}"
+
+        # Only ask Google to email invites when there is a real attendee.
+        send_updates = "all" if has_email else "none"
 
         try:
             created = (
                 service.events()
-                .insert(calendarId="primary", body=event_body, sendUpdates="all")
+                .insert(calendarId="primary", body=event_body, sendUpdates=send_updates)
                 .execute()
             )
         except Exception as e:
@@ -634,19 +782,156 @@ def book_appointment(
             attendee_email=attendee_email,
         )
 
-        return (
-            f"✅ Appointment booked!\n"
-            f"Title: {summary}\n"
-            f"Start: {start_time}\n"
-            f"End:   {end_time}\n"
-            f"Link:  {created.get('htmlLink', 'N/A')}"
-        )
+        # Voice bookings (phone contact, no email invite) get a confirmation text.
+        if contact and not has_email and any(c.isdigit() for c in contact):
+            _send_sms_confirmation(contact, _friendly_when(start_time))
+
+        return f"Booked — confirmed for {_friendly_when(start_time)}."
 
     except RuntimeError as e:
-        return f"⚠️ Calendar not configured: {e}"
+        log.error("book_appointment: calendar not configured: %s", e)
+        return _CALENDAR_FALLBACK
     except Exception as e:
         log.exception("book_appointment failed")
-        return f"Calendar error: {e}"
+        return _CALENDAR_FALLBACK
+
+
+# ── Manage existing bookings: find / cancel / reschedule ──────────────────
+def _digits(s: str) -> str:
+    return "".join(c for c in s if c.isdigit())
+
+
+def _event_matches_contact(event: dict, contact: str) -> bool:
+    """True if an event belongs to `contact` (an email attendee for chat
+    bookings, or a phone number stored in the description for voice bookings)."""
+    contact = contact.strip()
+    if _looks_like_email(contact):
+        emails = [a.get("email", "").lower() for a in event.get("attendees", [])]
+        return contact.lower() in emails
+    cd = _digits(contact)
+    return bool(cd) and cd in _digits(event.get("description", ""))
+
+
+@tool
+def find_booking(contact: str) -> str:
+    """Find a caller's upcoming appointment(s) by email or phone number.
+
+    Call this before rescheduling or canceling. `contact` is the caller's email
+    (chat) or phone number (voice). Returns each match with an event id that
+    cancel_appointment and reschedule_appointment require.
+    """
+    try:
+        import pytz
+
+        service = _get_calendar_service()
+        tz = pytz.timezone(_BUSINESS_TZ)
+        now = datetime.now(tz)
+        future = now + timedelta(days=60)
+        events = (
+            service.events()
+            .list(
+                calendarId="primary",
+                timeMin=now.isoformat(),
+                timeMax=future.isoformat(),
+                singleEvents=True,
+                orderBy="startTime",
+                maxResults=50,
+            )
+            .execute()
+            .get("items", [])
+        )
+        matches = [e for e in events if _event_matches_contact(e, contact)]
+        if not matches:
+            return "I don't see any upcoming bookings under that contact."
+        lines = ["Found these upcoming bookings:"]
+        for e in matches:
+            when = _friendly_when(e.get("start", {}).get("dateTime", ""))
+            lines.append(f"- {e.get('summary', '(no title)')} on {when} (id: {e['id']})")
+        return "\n".join(lines)
+    except RuntimeError as e:
+        log.error("find_booking: calendar not configured: %s", e)
+        return _CALENDAR_FALLBACK
+    except Exception:
+        log.exception("find_booking failed")
+        return _CALENDAR_FALLBACK
+
+
+@tool
+def cancel_appointment(event_id: str) -> str:
+    """Cancel an existing appointment by its event id (from find_booking).
+
+    Always confirm with the caller before calling this — cancellation is final.
+    """
+    try:
+        service = _get_calendar_service()
+        try:
+            event = (
+                service.events().get(calendarId="primary", eventId=event_id).execute()
+            )
+        except Exception:
+            return "I couldn't find that booking — it may have already been canceled."
+        when = _friendly_when(event.get("start", {}).get("dateTime", ""))
+        send_updates = "all" if event.get("attendees") else "none"
+        service.events().delete(
+            calendarId="primary", eventId=event_id, sendUpdates=send_updates
+        ).execute()
+        return f"Done — I've canceled your appointment for {when}."
+    except RuntimeError as e:
+        log.error("cancel_appointment: calendar not configured: %s", e)
+        return _CALENDAR_FALLBACK
+    except Exception:
+        log.exception("cancel_appointment failed")
+        return _CALENDAR_FALLBACK
+
+
+@tool
+def reschedule_appointment(
+    event_id: str, new_start_time: str, new_end_time: str
+) -> str:
+    """Move an existing appointment to a new time.
+
+    Args:
+        event_id: The booking's event id (from find_booking).
+        new_start_time: ISO 8601 start with timezone, e.g. '2026-05-29T10:00:00-04:00'.
+        new_end_time:   ISO 8601 end with timezone.
+
+    Always confirm the new time with the caller before calling this.
+    """
+    try:
+        service = _get_calendar_service()
+        try:
+            event = (
+                service.events().get(calendarId="primary", eventId=event_id).execute()
+            )
+        except Exception:
+            return (
+                "I couldn't find that booking — it may have been canceled. "
+                "Want me to book a new time?"
+            )
+        if not _slot_still_free(service, new_start_time, new_end_time):
+            return "That new time isn't available — could you pick another slot?"
+
+        event["start"] = {"dateTime": new_start_time, "timeZone": _BUSINESS_TZ}
+        event["end"] = {"dateTime": new_end_time, "timeZone": _BUSINESS_TZ}
+        send_updates = "all" if event.get("attendees") else "none"
+        service.events().update(
+            calendarId="primary", eventId=event_id, body=event, sendUpdates=send_updates
+        ).execute()
+
+        # Re-confirm by SMS for voice (phone) bookings.
+        desc = event.get("description", "")
+        if "Caller contact:" in desc and not event.get("attendees"):
+            phone = desc.split("Caller contact:", 1)[1].strip()
+            if any(c.isdigit() for c in phone):
+                _send_sms_confirmation(phone, _friendly_when(new_start_time))
+
+        return f"Done — I've moved your appointment to {_friendly_when(new_start_time)}."
+    except RuntimeError as e:
+        log.error("reschedule_appointment: calendar not configured: %s", e)
+        return _CALENDAR_FALLBACK
+    except Exception:
+        log.exception("reschedule_appointment failed")
+        return _CALENDAR_FALLBACK
 
 
 # ── Tool: escalate_to_human ───────────────────────────────────────────────

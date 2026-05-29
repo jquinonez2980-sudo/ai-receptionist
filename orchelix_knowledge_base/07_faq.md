@@ -44,7 +44,7 @@ A: Yes. Esmi is fully stateful — she maintains context within a conversation a
 A: 14 days from kickoff to live agent. Week 1: discovery and build. Week 2: shadow mode then go-live. You open Monday morning with your first scorecard.
 
 **Q: Is there a free trial or free audit?**
-A: No free audit. The two-week pilot is the starting point — it ends with a live agent in your tools, not a slide deck. The deployment is included in every plan (no setup fees).
+A: No free audit. The two-week pilot is the starting point — it ends with a live agent in your tools, not a slide deck. The deployment is part of each system's one-time setup fee.
 
 **Q: What does the two-week pilot actually look like?**
 A: Days 1–3: Your consultant maps the workflow, integrations, and the goal you're measuring. Days 4–7: The agent is configured to your branding, knowledge base, scripts, and connected tools. Days 8–12: Shadow mode — agent runs alongside your real workflow while we tune. Days 13–14: Go-live. Monday morning: your first scorecard.
@@ -57,35 +57,34 @@ A: If the agent doesn't move the number we set at kickoff, we don't move forward
 ## Pricing
 
 **Q: What does Orchelix cost?**
-A: Four tiers, hybrid Base Orchestration Fee + Performance Component:
-- **Pilot** — $4,250/month (or $41,700/year, save 18%). One AI agent, system design, integrations, success metrics, monthly optimization.
-- **Growth** — $8,500/month (or $83,600/year, save 18%). 2–4 orchestrated agents focused on lead qualification and appointment setting.
-- **Scale** — $16,500/month (or $162,000/year, save 18%). Full multi-agent Revenue OS with analytics and dashboards.
-- **Enterprise** — Custom, starting at $28,000+/month. Fully custom multi-agent architecture with dedicated support.
+A: Each system has a one-time setup fee plus a monthly managed service (monitoring, optimization, updates, and support). No long-term contract on the monthly service.
+- **Esmi — AI Virtual Receptionist & Lead Qualification** (★ Most Popular) — setup from $8,500, then from $1,099/month.
+- **Revenue Operations Agents (AI Sales & Lead Management)** — setup from $9,500, then from $1,299/month.
+- **Firm OS — Custom Multi-Agent Operations System** — setup from $24,000 (phased), then from $2,499/month.
 
-Annual billing saves 18% on Pilot, Growth, and Scale. Most clients start with Pilot and upgrade once the agent has earned the room.
+Many clients start with Esmi and expand to the Revenue Operations Agents or Firm OS later. For exact, current numbers, confirm with pricing on orchelix.com/pricing.
 
 **Q: Are there setup fees?**
-A: No. The 14-day deployment is included in every plan.
+A: Yes. Every system includes a one-time setup fee — custom build, integrations, testing, deployment, and team training — then the monthly managed service. Setup starts at $8,500 for Esmi, $9,500 for the Revenue Operations Agents, and $24,000 (phased) for the Firm OS.
 
 **Q: What counts as an "agent action"?**
 A: A discrete piece of work the agent performs: a call answered, a lead qualified, a transaction reconciled, a follow-up sent. Read-only operations and internal syncs don't count. The live action count is visible in the operator console — no surprise overages.
 
-**Q: What happens if we exceed our monthly actions?**
-A: Nothing breaks. You're notified at 80% and your consultant works with you on the right next step — staying on the same tier, adding a top-up, or upgrading. No service interruptions, no surprise charges.
+**Q: What happens if our volume grows beyond what we planned for?**
+A: Nothing breaks. Your consultant reviews usage with you and works out the right next step — adjusting the managed service or adding capacity. No service interruptions, no surprise charges.
 
 **Q: Can we cancel?**
-A: Monthly plans cancel anytime, effective end of cycle. Annual plans cancel with 30 days' notice. You keep export access to every agent action and audit log for 60 days after cancellation.
+A: The monthly managed service cancels anytime, effective end of cycle — no long-term contract. You keep export access to every agent action and audit log for 60 days after cancellation.
 
 ---
 
 ## Technical & Compliance
 
 **Q: What languages does Esmi support?**
-A: English and Spanish natively on all plans, with mid-call language switching. French is available as an add-on on Pilot and Growth, and standard on Scale and Enterprise.
+A: English and Spanish natively, with mid-call language switching. French is available as an add-on.
 
 **Q: What calendar and CRM systems do you integrate with?**
-A: Calendar: Google Calendar, Microsoft 365, Calendly, Acuity. CRM: HubSpot, Salesforce, Pipedrive, Zoho. Ledger: QuickBooks, Xero. Phone: included on all plans. Growth and above include unlimited integrations.
+A: Calendar: Google Calendar, Microsoft 365, Calendly, Acuity. CRM: HubSpot, Salesforce, Pipedrive, Zoho. Ledger: QuickBooks, Xero. Phone included. Integrations are configured as part of your setup and managed service.
 
 **Q: Is Orchelix PIPEDA-compliant?**
 A: Yes. PIPEDA-aligned by default. Canadian data residency is available on request. SOC 2 audit is in progress.

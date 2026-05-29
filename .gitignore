@@ -4,6 +4,10 @@
 token.json
 *.key
 *.pem
+orhelix-esmi.txt
+
+# Claude Code local config
+.claude/
 
 # Python
 __pycache__/

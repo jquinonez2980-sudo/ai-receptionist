@@ -11,12 +11,14 @@ Railway:      see railway.toml
 
 from __future__ import annotations
 
+import hmac
 import json
 import logging
+import os
 import re
 from typing import AsyncGenerator
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
@@ -25,7 +27,15 @@ from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
 
 from graph import graph
-from tools import book_appointment, list_available_slots, search_knowledge_base
+from tools import (
+    book_appointment,
+    cancel_appointment,
+    find_booking,
+    get_pricing,
+    list_available_slots,
+    reschedule_appointment,
+    search_knowledge_base,
+)
 
 log = logging.getLogger(__name__)
 
@@ -41,6 +51,34 @@ app.add_middleware(
     allow_methods=["GET", "POST", "OPTIONS"],
     allow_headers=["Content-Type"],
 )
+
+
+# ── VAPI webhook authentication ─────────────────────────────────────────────────
+
+VAPI_SERVER_SECRET = os.environ.get("VAPI_SERVER_SECRET")
+
+
+def _verify_vapi_secret(request: Request) -> None:
+    """Reject VAPI webhook calls that don't carry the shared server secret.
+
+    VAPI sends the assistant's configured Server URL Secret in the
+    `X-Vapi-Secret` header on every webhook. Without this check, anyone who
+    finds the public Railway URL could create calendar events or scrape the KB.
+
+    If VAPI_SERVER_SECRET is unset, we log loudly and allow the request so the
+    live phone line keeps working until the secret is configured on BOTH sides
+    (Railway env var + the VAPI assistant's Server URL Secret field).
+    """
+    if not VAPI_SERVER_SECRET:
+        log.warning(
+            "VAPI_SERVER_SECRET is not set — /voice endpoints are UNAUTHENTICATED. "
+            "Set it in Railway and in the VAPI assistant's Server URL Secret."
+        )
+        return
+    provided = request.headers.get("x-vapi-secret", "")
+    if not hmac.compare_digest(provided, VAPI_SERVER_SECRET):
+        log.warning("Rejected /voice request: bad or missing X-Vapi-Secret header.")
+        raise HTTPException(status_code=401, detail="Unauthorized")
 
 
 # ── Pydantic schema ───────────────────────────────────────────────────────────
@@ -195,9 +233,13 @@ async def health() -> dict:
 
 
 @app.get("/health/env")
-async def health_env() -> dict:
-    """Diagnostic: list env var names and show safe Railway metadata values."""
-    import os
+async def health_env(request: Request) -> dict:
+    """Diagnostic: list env var names and show safe Railway metadata values.
+
+    Enumerating env var names reveals which secrets exist, so this endpoint is
+    gated behind the same VAPI server secret used for the voice webhook.
+    """
+    _verify_vapi_secret(request)
     all_keys = sorted(os.environ.keys())
     safe_values = {
         k: os.environ[k] for k in [
@@ -209,8 +251,9 @@ async def health_env() -> dict:
 
 
 @app.get("/health/sendgrid")
-async def health_sendgrid() -> dict:
+async def health_sendgrid(request: Request) -> dict:
     """Diagnostic: send a test escalation email and report the result."""
+    _verify_vapi_secret(request)
     from tools import _get_sendgrid_key
     api_key = _get_sendgrid_key()
     if not api_key:
@@ -231,9 +274,10 @@ async def health_sendgrid() -> dict:
 
 
 @app.get("/health/calendar")
-async def health_calendar() -> dict:
+async def health_calendar(request: Request) -> dict:
     """Diagnostic: test Google Calendar auth step by step."""
-    import os, json, tempfile, base64
+    _verify_vapi_secret(request)
+    import json, tempfile, base64
     steps = {}
 
     # Step 1: resolve token data from whichever env var is present (matches tools.py priority)
@@ -371,6 +415,8 @@ def _run_voice_tool(name: str, params: dict) -> str:
             f"Today is {today.strftime('%A, %B %d, %Y')}. "
             f"ISO format: {today.isoformat()}."
         )
+    if name == "get_pricing":
+        return str(get_pricing.invoke({}))
     if name == "search_knowledge_base":
         return str(search_knowledge_base.invoke({"query": params["query"]}))
     if name == "list_available_slots":
@@ -386,6 +432,18 @@ def _run_voice_tool(name: str, params: dict) -> str:
             "end_time": params["end_time"],
             "attendee_email": params.get("attendee_email") or params.get("caller_phone"),
         }))
+    if name == "find_booking":
+        return str(find_booking.invoke({
+            "contact": params.get("contact") or params.get("attendee_email") or params.get("caller_phone"),
+        }))
+    if name == "reschedule_appointment":
+        return str(reschedule_appointment.invoke({
+            "event_id": params["event_id"],
+            "new_start_time": params["new_start_time"],
+            "new_end_time": params["new_end_time"],
+        }))
+    if name == "cancel_appointment":
+        return str(cancel_appointment.invoke({"event_id": params["event_id"]}))
     log.warning("VAPI sent unknown tool: %s", name)
     return "Unknown tool."
 
@@ -398,6 +456,7 @@ async def voice_tools(request: Request) -> dict:
       Old: message.functionCall.{name, parameters}
       New: message.toolCallList[].{id, function.{name, arguments}}
     """
+    _verify_vapi_secret(request)
     body = await request.json()
     log.info("VAPI raw payload: %s", json.dumps(body))
 
@@ -438,6 +497,7 @@ async def voice_tools(request: Request) -> dict:
 @app.post("/voice/debug")
 async def voice_debug(request: Request) -> dict:
     """Diagnostic: echo the raw VAPI payload so we can inspect the format."""
+    _verify_vapi_secret(request)
     body = await request.json()
     log.info("VAPI debug payload: %s", json.dumps(body))
     return {"received": body}
