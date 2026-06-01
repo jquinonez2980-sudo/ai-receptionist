@@ -20,10 +20,12 @@ Browser
         └── EsmiChat.tsx  ← "use client" React component
               └── POST /api/chat  ← Next.js API route (server-side proxy)
                     └── POST /chat  ← Railway FastAPI endpoint (SSE)
-                          └── LangGraph ReAct agent
+                          └── LangGraph ReAct agent (8 tools)
                                 ├── search_knowledge_base (FAISS vector store)
+                                ├── get_pricing (canonical exact pricing)
                                 ├── list_available_slots (Google Calendar freebusy)
                                 ├── book_appointment (Google Calendar insert)
+                                ├── find_booking / reschedule_appointment / cancel_appointment
                                 └── escalate_to_human (SendGrid email alert)
 ```
 
@@ -63,22 +65,23 @@ Caller
 | File | Purpose |
 |---|---|
 | `api.py` | FastAPI app. `POST /chat` streams SSE. `POST /voice/tools` for VAPI. Rate-limited. Diagnostic endpoints. |
-| `agents.py` | Esmi persona prompt + `create_react_agent` with 4 tools. |
+| `agents.py` | Esmi persona prompt + `create_react_agent` with 8 tools. Model `gpt-4o`, temp 0. |
 | `graph.py` | `StateGraph` wrapping the agent. Uses `PostgresSaver` (Railway DB) or `MemorySaver` fallback. |
-| `tools.py` | `search_knowledge_base`, `list_available_slots`, `book_appointment`, `escalate_to_human`. |
+| `tools.py` | `search_knowledge_base`, `get_pricing`, `list_available_slots`, `book_appointment`, `find_booking`, `reschedule_appointment`, `cancel_appointment`, `escalate_to_human`. |
 | `state.py` | `AgentState` TypedDict. |
 | `observability.py` | LangSmith tracing init. |
-| `Dockerfile` | `python:3.11-slim`, uvicorn CMD, `GOOGLE_TOKEN_B64` + `SENDGRID_API_KEY_B64` + `VAPI_API_KEY_B64` baked in. |
+| `Dockerfile` | `python:3.11-slim`, uvicorn CMD. **No secrets baked in** — all credentials are read from Railway runtime env vars (see Deployment). |
 | `railway.toml` | `builder = "DOCKERFILE"`. |
 | `orchelix_knowledge_base/` | 14 markdown files — Esmi's knowledge source. |
 
 ### Knowledge Base
 
-FAISS vector index built automatically on startup from `orchelix_knowledge_base/*.md`.
+FAISS vector index built automatically on startup from `orchelix_knowledge_base/*.md`
+(15 files — 14 numbered knowledge docs + a README).
 Index is cached in `.kb_index/` with a content-hash sidecar — rebuilds only when files change.
 
 Key KB files (highest retrieval priority):
-- `13_pricing_tiers.md` — Pilot/Growth/Scale/Enterprise pricing
+- `13_pricing_tiers.md` — per-agent pricing (one-time setup + monthly managed service)
 - `03_services.md` — Esmi, Revenue-Ops, Finance OS descriptions
 - `07_faq.md` — Common Q&As
 - `06_how_we_work.md` — 14-day deployment process
@@ -87,7 +90,7 @@ Key KB files (highest retrieval priority):
 ### Agent Prompt Rules (agents.py)
 - Formatting: no markdown headers, no bold, use `-` for bullet points
 - Booking flow: ask day → show slots → collect name+email → book
-- Pricing/services: always call `search_knowledge_base`, never answer from memory
+- Pricing: always call `get_pricing` (exact, authoritative numbers). Services/FAQs: `search_knowledge_base`. Never answer either from memory
 - Lead capture: after answering pricing/services, offer a calendar check once per conversation
 - Escalation: call `escalate_to_human` if KB search fails twice, or user signals urgency/budget readiness
 - Model: `gpt-4o`, temperature 0
@@ -96,9 +99,13 @@ Key KB files (highest retrieval priority):
 
 | Tool | Trigger | Action |
 |---|---|---|
-| `search_knowledge_base` | Any question about services, pricing, FAQs | FAISS semantic search over KB |
+| `search_knowledge_base` | Questions about services, FAQs, company info (NOT prices) | FAISS semantic search over KB |
+| `get_pricing` | Any pricing/cost/setup/monthly question | Returns canonical exact pricing from `_PRICING` |
 | `list_available_slots` | User gives a preferred day | Google Calendar freebusy, 9–5 Mon–Fri |
 | `book_appointment` | Name + email + slot confirmed | Google Calendar insert, idempotent via SHA256 event ID |
+| `find_booking` | User wants to change/cancel an existing booking | Look up upcoming bookings by email/phone; returns event ids |
+| `reschedule_appointment` | New time confirmed for an existing booking | Move the booking (event id from `find_booking`) |
+| `cancel_appointment` | User confirms which booking to cancel | Cancel the booking (event id from `find_booking`) |
 | `escalate_to_human` | KB fails twice, or urgency/budget/frustration detected | SendGrid email to `jquinonez2980@gmail.com` |
 
 ### Rate Limiting
@@ -146,24 +153,34 @@ Tailwind v4 with `@theme` block in `globals.css`:
 
 ## Deployment — Railway
 
-**URL:** `https://ai-receptionist-production-3446.up.railway.app`
+**⚠ Two Railway services deploy from this same repo (`jquinonez2980-sudo/ai-receptionist`).
+Both auto-deploy on push to `main`.**
+
+| Service / Project | URL | Status | Used by |
+|---|---|---|---|
+| `ai-receptionist` / **`awake-nourishment`** | `https://ai-receptionist-production-5375.up.railway.app` | **LIVE** | The website (`/api/chat` proxy) — this is the real Esmi backend |
+| `ai-receptionist` / `aware-nature` | `https://ai-receptionist-production-3446.up.railway.app` | **BROKEN** (crash-loops on a stale Streamlit dashboard Start Command; `OPEN_API_KEY` typo; missing VAPI/Twilio vars) | Nothing customer-facing — stale duplicate. Either retire it or fix its Start Command + env. |
+
+Because both services watch `main`, a single push redeploys both. The live one is **`-5375`**.
+Verify the VAPI assistant's Server URL points at the live service, not the broken `-3446`.
 
 **Build:** Dockerfile (python:3.11-slim → pip install → uvicorn)
 
-**Environment Variables:**
-| Variable | Where | Notes |
-|---|---|---|
-| `OPENAI_API_KEY` | Railway shared/env var | GPT-4o |
-| `LANGCHAIN_PROJECT` | Railway shared/env var | LangSmith project name |
-| `DATABASE_URL` | Railway PostgreSQL plugin | Thread persistence (auto-set by Railway) |
-| `GOOGLE_TOKEN_B64` | Dockerfile ENV | Base64-encoded Google OAuth JSON (see below) |
-| `SENDGRID_API_KEY_B64` | Dockerfile ENV | Base64-encoded SendGrid API key (see below) |
-| `VAPI_API_KEY_B64` | Dockerfile ENV | Base64-encoded VAPI private API key (see below) |
+**Environment Variables (set on the Railway service — NOT baked into the image):**
+| Variable | Notes |
+|---|---|
+| `OPENAI_API_KEY` | GPT-4o + embeddings. **Must be exactly this name** (the OpenAI SDK/LangChain reads it). The `aware-nature` service has it mis-typed as `OPEN_API_KEY`. |
+| `LANGCHAIN_PROJECT` | LangSmith project name |
+| `DATABASE_URL` | Railway PostgreSQL plugin — thread persistence (auto-set by Railway) |
+| `GOOGLE_TOKEN_B64` | Base64-encoded Google OAuth JSON (see below). Fallbacks: `GOOGLE_REFRESH_TOKEN`, `GOOGLE_TOKEN_JSON` |
+| `SENDGRID_API_KEY` | SendGrid key (or `SENDGRID_API_KEY_B64`) |
+| `VAPI_API_KEY` | VAPI private key (or `VAPI_API_KEY_B64`) |
+| `VAPI_SERVER_SECRET` | Shared secret for `/voice/tools` webhook auth — set the same value in the VAPI assistant's Server URL Secret. If unset, voice endpoints are UNAUTHENTICATED. |
+| `TWILIO_ACCOUNT_SID` / `TWILIO_AUTH_TOKEN` / `TWILIO_SMS_FROM` | Voice booking SMS confirmation. If unset, the confirmation SMS is skipped. |
 
-**Railway Gotcha:** Service-level variables set via CLI or dashboard Variables tab do NOT
-reliably reach the container. Only shared/environment-level variables (set via the Railway
-dashboard environment settings) are injected. For secrets that can't be shared, bake them
-into the Dockerfile as `ENV KEY=value` using base64 encoding to bypass GitHub secret scanning.
+**Secrets are runtime env vars only — never baked into the Docker image.** (They were previously
+baked into the Dockerfile as base64 `ENV` lines; that was removed for security. Those old values
+remain in git history and are compromised — rotate them.)
 
 ---
 
@@ -215,7 +232,7 @@ import base64
 print(base64.b64encode(b"SG.your-key-here").decode())
 ```
 
-4. Put the output in Dockerfile: `ENV SENDGRID_API_KEY_B64=...`
+4. Set it as a Railway env var: `SENDGRID_API_KEY` (plain) or `SENDGRID_API_KEY_B64` (base64). **Do not bake it into the Dockerfile.**
 
 `_get_sendgrid_key()` in `tools.py` checks `SENDGRID_API_KEY` (plain) first, then
 falls back to base64-decoding `SENDGRID_API_KEY_B64`. Both email functions use this helper.
@@ -229,7 +246,7 @@ Escalation emails go to `jquinonez2980@gmail.com`. Booking notifications go to `
 **Phone number:** 561-566-1066
 **Voice:** ElevenLabs Bella
 **Model:** GPT-4o (configured in VAPI dashboard)
-**Server URL:** `https://ai-receptionist-production-3446.up.railway.app/voice/tools`
+**Server URL:** must point at the **live** service → `https://ai-receptionist-production-5375.up.railway.app/voice/tools` (NOT the broken `-3446`). Set the `X-Vapi-Secret` Server URL Secret to match `VAPI_SERVER_SECRET`.
 
 ### Tools configured in VAPI dashboard
 
@@ -354,7 +371,7 @@ If the caller mentions budget, timeline, or urgency ("ready to start", "ASAP", "
 2. Create assistant: GPT-4o, ElevenLabs Bella, server URL pointing to new Railway endpoint
 3. Add 4 tools + `transferCall` with client owner's phone number
 4. Buy VAPI phone number (~$2/mo) → assign to assistant
-5. Base64-encode VAPI key → add to Dockerfile as `VAPI_API_KEY_B64`
+5. Set the VAPI key as a Railway env var `VAPI_API_KEY` (or `VAPI_API_KEY_B64`), plus `VAPI_SERVER_SECRET` matching the assistant's Server URL Secret
 6. Set up ElevenLabs Pronunciation Dictionary for client's brand name
 
 ---
@@ -378,7 +395,7 @@ Keep in sync with `orchelix_knowledge_base/13_pricing_tiers.md`.
 | Package | One-time Setup | Monthly Managed Service |
 |---|---|---|
 | Esmi — AI Virtual Receptionist & Lead Qualification ★ | from $8,500 | from $1,099/mo |
-| AI Sales & Lead Management Assistant | from $9,500 | from $1,299/mo |
+| Revenue Operations Agents (AI Sales & Lead Management) | from $9,500 | from $1,299/mo |
 | Firm OS — Custom Multi-Agent Operations System | from $24,000 | from $2,499/mo |
 
 Pricing model: one-time setup fee + monthly managed service (monitoring, optimization,
@@ -398,12 +415,13 @@ updates, support). No long-term contract on the monthly service.
 
 3. **SendGrid:** Follow setup steps above. Verify the sender domain for each client.
 
-4. **Railway:** Create a new service, connect the repo, set `OPENAI_API_KEY` as a shared variable.
-   Bake `GOOGLE_TOKEN_B64` and `SENDGRID_API_KEY_B64` into the Dockerfile.
+4. **Railway:** Create a new service, connect the repo, and set ALL secrets as Railway env vars
+   (`OPENAI_API_KEY`, `GOOGLE_TOKEN_B64`, `SENDGRID_API_KEY`, `VAPI_API_KEY`, `VAPI_SERVER_SECRET`,
+   `TWILIO_*`). Never bake secrets into the Dockerfile.
 
 5. **Frontend:** The `EsmiChat.tsx` + `api/chat/route.ts` work as-is. Update `RAILWAY_API_URL` in `route.ts`.
 
-6. **Knowledge base:** Update the 14 markdown files. The FAISS index rebuilds automatically on startup.
+6. **Knowledge base:** Update the markdown files in `orchelix_knowledge_base/`. The FAISS index rebuilds automatically on startup.
 
 7. **Voice:** Follow VAPI setup steps above. Update the system prompt in the VAPI dashboard with the new business name and escalation transfer number.
 
@@ -419,6 +437,13 @@ updates, support). No long-term contract on the monthly service.
 - VAPI rate limits apply per account — monitor call volume on the VAPI dashboard
 - Voice bookings store phone number in the `attendee_email` field of Google Calendar (cosmetic only)
 - ElevenLabs Pronunciation Dictionary must be manually updated when new brand terms are added
+- **Duplicate Railway service `-3446` (`aware-nature`) is broken** — crash-loops on a stale Streamlit dashboard Start Command (`$PORT` unexpanded) and has an `OPEN_API_KEY` typo + missing VAPI/Twilio vars. The website uses `-5375` (`awake-nourishment`), so this is not customer-facing. Retire it or fix its Start Command + env if a second environment is actually needed.
+
+## Security — Action Required
+
+- **Rotate exposed credentials.** Secrets were previously baked into the Dockerfile (Google OAuth token + client_secret, SendGrid, VAPI keys); they were removed from the current image but **remain in git history and are compromised** — rotate all of them.
+- **`orhelix-esmi.txt`** (repo root, now git-ignored) holds live plaintext keys (OpenAI `sk-proj-…`, Resend `re_…`, SendGrid `SG.…`). Rotate and delete once the keys live only in Railway env vars.
+- Base64 is encoding, not encryption — never treat a base64 blob as a safe place for a secret.
 
 ## Completed Improvements (May 2026)
 
@@ -435,3 +460,6 @@ updates, support). No long-term contract on the monthly service.
 | 9 | Latin American Spanish — agent uses LATAM vocabulary/register, never Castilian | `agents.py`, `EsmiChat.tsx` |
 | 10 | Google OAuth token refresh — re-ran OAuth, updated all 3 Railway vars (`GOOGLE_TOKEN_B64`, `GOOGLE_TOKEN_JSON`, `GOOGLE_REFRESH_TOKEN`); fixed voice `book_appointment` bug (was using `caller_phone` key instead of `attendee_email`); fixed `/health/calendar` to test correct credential source | `api.py`, Railway vars |
 | 11 | Voice booking UX fix — VAPI system prompt updated to ask for name only (not email); caller's phone auto-injected via `{{call.customer.number}}`; slots read conversationally | VAPI dashboard |
+| 12 | Pricing bug fix — reconciled the KB to the canonical per-agent model (removed the abandoned Pilot/Growth/Scale/Enterprise tiered-subscription wording that made Esmi quote wrong Revenue-Ops pricing) | `07_faq.md`, `06_how_we_work.md`, `00_company_overview.md` |
+| 13 | Revenue-Ops naming fix — renamed the `_PRICING` label "AI Sales & Lead Management Assistant" → "Revenue Operations Agents (AI Sales & Lead Management)" so `get_pricing` resolves when asked by that name (verified live) | `tools.py` |
+| 14 | Secret-handling hardening — removed base64-baked secrets from the Dockerfile (now runtime env vars); git-ignored `orhelix-esmi.txt` and `.claude/` | `Dockerfile`, `.gitignore` |
