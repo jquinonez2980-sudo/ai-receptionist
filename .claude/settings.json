@@ -41,6 +41,24 @@
           }
         ]
       }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python .claude/hooks/pricing-sync.py",
+            "statusMessage": "Checking pricing sync..."
+          },
+          {
+            "type": "command",
+            "command": "python .claude/hooks/smoke-import.py",
+            "statusMessage": "Smoke-importing agent...",
+            "timeout": 120
+          }
+        ]
+      }
     ]
   }
 }
