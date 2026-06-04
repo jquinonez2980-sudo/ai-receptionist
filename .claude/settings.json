@@ -1,0 +1,46 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git *)",
+      "Bash(python *)",
+      "Bash(python3 *)",
+      "Bash(pip show *)",
+      "Bash(npm run *)",
+      "Bash(npx tsc *)",
+      "Bash(npx eslint *)",
+      "Bash(npx next *)",
+      "Bash(railway *)",
+      "PowerShell(railway *)",
+      "PowerShell(Get-Command *)",
+      "PowerShell(Get-ChildItem *)",
+      "PowerShell(Get-Process *)",
+      "PowerShell(Get-NetTCPConnection *)",
+      "PowerShell(Get-CimInstance *)"
+    ],
+    "deny": [
+      "Read(.env)",
+      "Read(.env.local)",
+      "Read(orhelix-esmi.txt)",
+      "Read(orhelix-esmi.*)",
+      "Read(credentials.json)",
+      "Read(.railway_tmp.env)",
+      "Read(.streamlit/**)",
+      "Read(**/*.key)",
+      "Read(**/*.pem)",
+      "Read(token.json)"
+    ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Write|Edit|MultiEdit|NotebookEdit|Bash|PowerShell",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python .claude/hooks/secret-scan.py"
+          }
+        ]
+      }
+    ]
+  }
+}
