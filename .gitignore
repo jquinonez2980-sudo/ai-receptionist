@@ -6,8 +6,9 @@ token.json
 *.pem
 orhelix-esmi.txt
 
-# Claude Code local config
-.claude/
+# Claude Code — commit settings.json + hooks, ignore only machine-local config
+.claude/settings.local.json
+.claude/*.local.json
 
 # Python
 __pycache__/
