@@ -57,24 +57,35 @@ app.add_middleware(
 
 VAPI_SERVER_SECRET = os.environ.get("VAPI_SERVER_SECRET")
 
+# Set ALLOW_UNAUTHENTICATED_VOICE=1 only in local dev when you don't want to
+# configure the full VAPI secret. Never set this on Railway/production.
+_VOICE_UNAUTH_DEV = os.environ.get("ALLOW_UNAUTHENTICATED_VOICE") == "1"
+
 
 def _verify_vapi_secret(request: Request) -> None:
     """Reject VAPI webhook calls that don't carry the shared server secret.
 
-    VAPI sends the assistant's configured Server URL Secret in the
-    `X-Vapi-Secret` header on every webhook. Without this check, anyone who
-    finds the public Railway URL could create calendar events or scrape the KB.
+    Fail-closed: if VAPI_SERVER_SECRET is unset in production, voice endpoints
+    return 503 rather than silently allowing unauthenticated requests. This
+    prevents a misconfiguration from quietly re-opening the endpoint.
 
-    If VAPI_SERVER_SECRET is unset, we log loudly and allow the request so the
-    live phone line keeps working until the secret is configured on BOTH sides
-    (Railway env var + the VAPI assistant's Server URL Secret field).
+    To bypass in LOCAL DEV ONLY: set ALLOW_UNAUTHENTICATED_VOICE=1.
     """
     if not VAPI_SERVER_SECRET:
-        log.warning(
-            "VAPI_SERVER_SECRET is not set — /voice endpoints are UNAUTHENTICATED. "
-            "Set it in Railway and in the VAPI assistant's Server URL Secret."
+        if _VOICE_UNAUTH_DEV:
+            log.warning(
+                "ALLOW_UNAUTHENTICATED_VOICE=1 is set — /voice endpoints are "
+                "UNAUTHENTICATED. Never use this in production."
+            )
+            return
+        log.error(
+            "VAPI_SERVER_SECRET is not set and ALLOW_UNAUTHENTICATED_VOICE is not 1. "
+            "Refusing voice request. Set VAPI_SERVER_SECRET in Railway."
         )
-        return
+        raise HTTPException(
+            status_code=503,
+            detail="Voice endpoint not configured — set VAPI_SERVER_SECRET.",
+        )
     provided = request.headers.get("x-vapi-secret", "")
     if not hmac.compare_digest(provided, VAPI_SERVER_SECRET):
         log.warning("Rejected /voice request: bad or missing X-Vapi-Secret header.")
