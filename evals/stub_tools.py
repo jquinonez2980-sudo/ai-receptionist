@@ -16,9 +16,15 @@ from tools import get_pricing as _real_get_pricing
 # Recorder: list of (tool_name, kwargs) in call order, across a conversation.
 CALLS: list[tuple[str, dict]] = []
 
+# When True, search_knowledge_base returns "no results" — used to drive the
+# KB-failure escalation eval. Set per-run via harness.run_conversation(kb_empty=True).
+KB_EMPTY = False
+
 
 def reset() -> None:
+    global KB_EMPTY
     CALLS.clear()
+    KB_EMPTY = False
 
 
 @tool
@@ -26,6 +32,8 @@ def search_knowledge_base(query: str) -> str:
     """For questions about services, FAQs, packages, branding, or company info (NOT prices).
     Quote the knowledge base — do not paraphrase from memory."""
     CALLS.append(("search_knowledge_base", {"query": query}))
+    if KB_EMPTY:
+        return "No relevant information found in the knowledge base for that query."
     return (
         "Orchelix builds custom AI receptionist and revenue-operations agents, "
         "deployed in ~2-3 weeks. [stub KB result]"

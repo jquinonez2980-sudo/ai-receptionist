@@ -27,7 +27,13 @@ SECRET_PATTERNS = [
     (r"sk-ant-[A-Za-z0-9_-]{20,}", "Anthropic API key (sk-ant-...)"),
     (r"sk-[A-Za-z0-9]{32,}", "OpenAI API key (sk-...)"),
     (r"SG\.[A-Za-z0-9_-]{16,}\.[A-Za-z0-9_-]{16,}", "SendGrid API key (SG....)"),
-    (r"re_[A-Za-z0-9_]{20,}", "Resend API key (re_...)"),
+    # Require the key body to carry an uppercase AND a digit (real keys are
+    # high-entropy) so ordinary snake_case identifiers that happen to embed the
+    # "re_" prefix mid-word don't false-positive.
+    (
+        r"re_(?=[A-Za-z0-9_]{20,})(?=[A-Za-z0-9_]*[A-Z])(?=[A-Za-z0-9_]*\d)[A-Za-z0-9_]+",
+        "Resend API key (re_...)",
+    ),
     (r"GOCSPX-[A-Za-z0-9_-]{20,}", "Google OAuth client secret (GOCSPX-...)"),
     (r"-----BEGIN [A-Z ]*PRIVATE KEY-----", "PEM private key block"),
     (r"AKIA[0-9A-Z]{16}", "AWS access key id (AKIA...)"),

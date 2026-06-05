@@ -13,9 +13,9 @@ from datetime import date
 from pathlib import Path
 
 from dotenv import load_dotenv
-from langchain_core.messages import BaseMessage, SystemMessage
 from langchain_openai import ChatOpenAI
-from langgraph.prebuilt import create_react_agent
+from langchain.agents import create_agent
+from langchain.agents.middleware import dynamic_prompt
 
 from tools import (
     book_appointment,
@@ -35,28 +35,38 @@ llm = ChatOpenAI(model="gpt-4o", temperature=0)
 _PROMPT_PATH = Path(__file__).parent / "prompts" / "esmi_system.md"
 _SYSTEM_PROMPT = _PROMPT_PATH.read_text(encoding="utf-8")
 
+ESMI_TOOLS = [
+    search_knowledge_base,
+    get_pricing,
+    list_available_slots,
+    book_appointment,
+    find_booking,
+    reschedule_appointment,
+    cancel_appointment,
+    escalate_to_human,
+]
 
-def _esmi_prompt(state: dict) -> list[BaseMessage]:
-    today = date.today().isoformat()
-    # .replace (not .format) so literal braces a future prompt edit might add
-    # (e.g. a JSON example) can never break templating.
-    content = _SYSTEM_PROMPT.replace("{today}", today)
-    return [SystemMessage(content=content)] + state["messages"]
+
+def make_prompt_middleware():
+    """Fresh dynamic-prompt middleware that injects today's date per request.
+
+    Using middleware (not a baked system_prompt) keeps {today} correct on a
+    long-running process — the date is resolved at request time, not at boot.
+    .replace (not .format) so literal braces in the prompt can't break templating.
+    """
+
+    @dynamic_prompt
+    def _esmi_system_prompt(request) -> str:
+        today = date.today().isoformat()
+        return _SYSTEM_PROMPT.replace("{today}", today)
+
+    return _esmi_system_prompt
 
 
-receptionist_agent = create_react_agent(
+receptionist_agent = create_agent(
     llm,
-    tools=[
-        search_knowledge_base,
-        get_pricing,
-        list_available_slots,
-        book_appointment,
-        find_booking,
-        reschedule_appointment,
-        cancel_appointment,
-        escalate_to_human,
-    ],
-    prompt=_esmi_prompt,
+    tools=ESMI_TOOLS,
+    middleware=[make_prompt_middleware()],
 )
 
 print("✅ Esmi receptionist agent loaded.")

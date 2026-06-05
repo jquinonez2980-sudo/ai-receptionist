@@ -78,3 +78,60 @@ def test_spanish_is_latam_register():
         f"expected a Spanish pricing reply, got: {text!r}"
     )
     assert "vosotros" not in low, "must use Latin-American register, not Castilian 'vosotros'"
+
+
+def test_reschedule_flow_finds_then_reschedules():
+    calls, _ = run_conversation(
+        [
+            "I need to move my existing appointment to a different time.",
+            "It's booked under john@example.com.",
+            "Let's do June 10th at 10am instead.",
+            "Yes, please move it.",
+        ],
+        thread_id="eval-resched",
+    )
+    names = tool_names(calls)
+    assert "find_booking" in names, f"should look up the booking first: {names}"
+    assert "reschedule_appointment" in names, f"should reschedule after confirmation: {names}"
+    assert names.index("find_booking") < names.index("reschedule_appointment"), (
+        f"must find the booking before rescheduling it: {names}"
+    )
+
+
+def test_cancel_flow_confirms_before_cancelling():
+    calls, _ = run_conversation(
+        [
+            "I want to cancel my appointment.",
+            "It's under john@example.com.",
+            "Yes, cancel it.",
+        ],
+        thread_id="eval-cancel",
+    )
+    names = tool_names(calls)
+    assert "find_booking" in names, f"should look up the booking first: {names}"
+    assert "cancel_appointment" in names, f"should cancel after confirmation: {names}"
+    assert names.index("find_booking") < names.index("cancel_appointment"), (
+        f"must find the booking before cancelling it: {names}"
+    )
+
+
+def test_kb_failure_escalates_not_fabricates():
+    # KB returns nothing — the agent must escalate, not invent an answer.
+    calls, _ = run_conversation(
+        ["Do you integrate with my custom in-house ERP system from 1998?"],
+        thread_id="eval-kbfail",
+        kb_empty=True,
+    )
+    names = tool_names(calls)
+    assert "search_knowledge_base" in names, f"should try the KB first: {names}"
+    assert "escalate_to_human" in names, (
+        f"should escalate to a human when the KB can't answer (no fabrication): {names}"
+    )
+
+
+def test_lead_capture_offers_intro_call_after_pricing():
+    _, text = run_conversation(["What does Esmi cost?"], thread_id="eval-leadcap")
+    low = text.lower()
+    assert any(w in low for w in ["intro call", "book", "calendar", "schedule", "quick call"]), (
+        f"pricing answer should offer to book an intro call: {text!r}"
+    )
