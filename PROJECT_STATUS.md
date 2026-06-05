@@ -217,7 +217,7 @@ print('TOKEN_B64=' + base64.b64encode(json.dumps(data).encode()).decode())
 
 The `refresh_token` auto-renews the expired access token on each API call.
 
-**Important:** If the Google Cloud OAuth app is in **Testing** mode, refresh tokens expire after **7 days**. Re-run the OAuth flow above and update all three Railway vars every time booking breaks. To avoid this, publish the app in Google Cloud Console → OAuth consent screen → Publish App.
+**Note:** The Google Cloud OAuth app is **published** (not in Testing mode), so the `refresh_token` does **not** expire. If it ever reverts to Testing mode, refresh tokens would expire after **7 days** — in that case re-run the OAuth flow above and update all three Railway vars.
 
 ---
 
@@ -429,7 +429,6 @@ updates, support). No long-term contract on the monthly service.
 
 ## Known Issues / Limitations
 
-- Google OAuth refresh tokens expire after **7 days** if the Cloud app is in "Testing" mode — re-run the OAuth flow in the Google Calendar Setup section and update all three `GOOGLE_*` Railway vars. Fix: publish the app in Google Cloud Console → OAuth consent screen
 - `MemorySaver` fallback loses conversation history on Railway restart — `DATABASE_URL` must be set for persistence
 - FAISS index rebuild calls OpenAI embeddings API — costs a small amount on each deploy if KB files changed
 - Slot stripping regex is fragile — if LLM changes time format, slots may not be stripped during streaming
@@ -439,10 +438,16 @@ updates, support). No long-term contract on the monthly service.
 - ElevenLabs Pronunciation Dictionary must be manually updated when new brand terms are added
 - **Duplicate Railway service `-3446` (`aware-nature`) is broken** — crash-loops on a stale Streamlit dashboard Start Command (`$PORT` unexpanded) and has an `OPEN_API_KEY` typo + missing VAPI/Twilio vars. The website uses `-5375` (`awake-nourishment`), so this is not customer-facing. Retire it or fix its Start Command + env if a second environment is actually needed.
 
-## Security — Action Required
+## Security
 
-- **Rotate exposed credentials.** Secrets were previously baked into the Dockerfile (Google OAuth token + client_secret, SendGrid, VAPI keys); they were removed from the current image but **remain in git history and are compromised** — rotate all of them.
-- **`orhelix-esmi.txt`** (repo root, now git-ignored) holds live plaintext keys (OpenAI `sk-proj-…`, Resend `re_…`, SendGrid `SG.…`). Rotate and delete once the keys live only in Railway env vars.
+### Closed
+- **`VAPI_SERVER_SECRET` now set on Railway + enforced** (June 2026). `/voice/tools` and `/voice/debug` previously failed open — anyone who found the Railway URL could invoke `find_booking` (PII disclosure), `cancel_appointment`, or `book_appointment` without auth. Fixed: secret set on `awake-nourishment` / `ai-receptionist` / `production`; `api.py` now fail-closed (returns 503 when the var is absent, 401 on mismatch). Local dev bypass: `ALLOW_UNAUTHENTICATED_VOICE=1`.
+- **Secrets removed from Dockerfile** — previously baked in as base64 `ENV` lines; now Railway runtime env vars only. A PreToolUse hook (`.claude/hooks/secret-scan.py`) blocks re-introduction.
+- **`.claude/`** git-ignored (only `settings.local.json` now; `settings.json` + hooks are committed).
+
+### Action Required
+- **Rotate exposed credentials.** The old base64-baked secrets (Google OAuth token + client_secret, SendGrid, VAPI keys) **remain in git history and are compromised** — rotate all of them even though they're no longer in the Dockerfile.
+- **`orhelix-esmi.txt`** (repo root, git-ignored, NOT in git history) holds live plaintext keys (OpenAI `sk-proj-…`, Resend `re_…`, SendGrid `SG.…`). Rotate and delete once the keys live only in Railway env vars.
 - Base64 is encoding, not encryption — never treat a base64 blob as a safe place for a secret.
 
 ## Completed Improvements (May 2026)
@@ -463,3 +468,9 @@ updates, support). No long-term contract on the monthly service.
 | 12 | Pricing bug fix — reconciled the KB to the canonical per-agent model (removed the abandoned Pilot/Growth/Scale/Enterprise tiered-subscription wording that made Esmi quote wrong Revenue-Ops pricing) | `07_faq.md`, `06_how_we_work.md`, `00_company_overview.md` |
 | 13 | Revenue-Ops naming fix — renamed the `_PRICING` label "AI Sales & Lead Management Assistant" → "Revenue Operations Agents (AI Sales & Lead Management)" so `get_pricing` resolves when asked by that name (verified live) | `tools.py` |
 | 14 | Secret-handling hardening — removed base64-baked secrets from the Dockerfile (now runtime env vars); git-ignored `orhelix-esmi.txt` and `.claude/` | `Dockerfile`, `.gitignore` |
+| 15 | Claude Code hardening — `CLAUDE.md`, `.claude/settings.json` (deny-list + curated allowlist), `secret-scan` PreToolUse hook, `pricing-sync` + `smoke-import` PostToolUse hooks, `/deploy-check` `/verify-pricing` `/new-client` `/run-evals` slash commands | `.claude/` |
+| 16 | Versioned system prompt — extracted from `agents.py` inline string to `prompts/esmi_system.md`; `{today}` resolved per-request via `.replace` | `agents.py`, `prompts/esmi_system.md` |
+| 17 | Behavioral eval harness — 10 pytest invariants (pricing routing, booking flow, reschedule/cancel, KB-miss escalation, LATAM Spanish, SSE streaming); all green vs live gpt-4o | `evals/` |
+| 18 | Dropped-lead escalation bug fixed — agent was saying "someone will follow up" without calling `escalate_to_human` on KB misses (silent dropped leads). Prompt now requires the tool call before promising follow-up | `prompts/esmi_system.md` |
+| 19 | `create_react_agent` → `create_agent` migration — deprecated LangGraph API replaced with `langchain.agents.create_agent` + `dynamic_prompt` middleware; all evals + streaming verified live | `agents.py`, `evals/harness.py` |
+| 20 | Voice webhook secured — `VAPI_SERVER_SECRET` set on Railway; `_verify_vapi_secret` hardened to fail-closed (503 when unset, 401 on mismatch); was silently open (200) before | `api.py`, Railway env vars |
