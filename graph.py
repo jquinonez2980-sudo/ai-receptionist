@@ -32,25 +32,14 @@ USE_MULTI_AGENT = os.getenv("USE_MULTI_AGENT", "0") == "1"
 # We initialise the async pool + saver via asyncio.run() at import time,
 # before uvicorn creates its event loop — safe at module scope.
 
-async def _build_async_postgres_saver(db_url: str) -> BaseCheckpointSaver:
-    from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
-    from psycopg_pool import AsyncConnectionPool
+async def _build_async_checkpointer() -> BaseCheckpointSaver:
+    """Build the async-compatible checkpointer.
 
-    pool = AsyncConnectionPool(
-        conninfo=db_url,
-        max_size=int(os.getenv("DB_POOL_SIZE", "10")),
-        kwargs={"autocommit": True, "prepare_threshold": 0},
-        open=False,
-    )
-    await pool.open()
-    saver = AsyncPostgresSaver(pool)
-    await saver.setup()  # idempotent — creates checkpoint tables if missing
-    return saver
-
-
-def get_checkpointer() -> BaseCheckpointSaver:
-    import asyncio
-
+    Must be called from inside a running event loop (e.g. FastAPI lifespan).
+    AsyncPostgresSaver is required because api.py uses astream_events() which
+    is fully async — the sync PostgresSaver raises NotImplementedError on every
+    await checkpointer.aget_tuple() call.
+    """
     db_url = os.getenv("DATABASE_URL")
     if not db_url:
         log.warning(
@@ -59,16 +48,37 @@ def get_checkpointer() -> BaseCheckpointSaver:
         )
         return MemorySaver()
     try:
-        saver = asyncio.run(_build_async_postgres_saver(db_url))
+        from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
+        from psycopg_pool import AsyncConnectionPool
+
+        pool = AsyncConnectionPool(
+            conninfo=db_url,
+            max_size=int(os.getenv("DB_POOL_SIZE", "10")),
+            kwargs={"autocommit": True, "prepare_threshold": 0},
+            open=False,
+        )
+        await pool.open()
+        saver = AsyncPostgresSaver(pool)
+        await saver.setup()  # idempotent — creates checkpoint tables if missing
         log.info("Checkpointer: AsyncPostgresSaver (connected).")
         return saver
     except Exception as e:
         log.error(
-            "Failed to initialize AsyncPostgresSaver (%s). Falling back to MemorySaver. "
-            "Fix DATABASE_URL before going to production.",
+            "Failed to initialize AsyncPostgresSaver (%s). Falling back to MemorySaver.",
             e,
         )
         return MemorySaver()
+
+
+def get_checkpointer() -> BaseCheckpointSaver:
+    """Sync checkpointer for tests and local dev (always MemorySaver).
+    Production uses build_graph_async() which calls _build_async_checkpointer().
+    """
+    log.warning(
+        "get_checkpointer() returns MemorySaver — for production use "
+        "build_graph_async() from the FastAPI lifespan instead."
+    )
+    return MemorySaver()
 
 
 # ── Phase 1: single-node graph ───────────────────────────────────────────────
@@ -157,16 +167,27 @@ def _build_multi_agent_graph(checkpointer):
 # ── Public graph instance ─────────────────────────────────────────────────────
 
 def build_graph(checkpointer: Optional[BaseCheckpointSaver] = None):
-    cp = checkpointer or get_checkpointer()
+    """Sync builder — used by tests and the module-level dev instance.
+    Uses MemorySaver unless a checkpointer is explicitly injected.
+    """
+    cp = checkpointer or MemorySaver()
     if USE_MULTI_AGENT:
-        log.info("Graph mode: Phase 4 multi-agent (USE_MULTI_AGENT=1).")
         g = _build_multi_agent_graph(cp)
         print("✅ Multi-agent graph built (informer / booker / closer) (checkpointer:", type(cp).__name__ + ")")
     else:
-        log.info("Graph mode: Phase 1 single-agent (USE_MULTI_AGENT=0).")
         g = _build_single_agent_graph(cp)
         print("✅ Single-agent graph built (checkpointer:", type(cp).__name__ + ")")
     return g
 
 
+async def build_graph_async():
+    """Async builder for production — call from FastAPI lifespan.
+    Uses AsyncPostgresSaver when DATABASE_URL is set; MemorySaver otherwise.
+    """
+    cp = await _build_async_checkpointer()
+    return build_graph(checkpointer=cp)
+
+
+# Module-level instance: MemorySaver (tests + local dev).
+# api.py replaces this at startup via build_graph_async().
 graph = build_graph()

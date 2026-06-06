@@ -16,6 +16,7 @@ import json
 import logging
 import os
 import re
+from contextlib import asynccontextmanager
 from typing import AsyncGenerator
 
 from fastapi import FastAPI, HTTPException, Request
@@ -26,7 +27,7 @@ from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
 
-from graph import graph
+import graph as _graph_module
 from tools import (
     book_appointment,
     cancel_appointment,
@@ -41,7 +42,15 @@ log = logging.getLogger(__name__)
 
 limiter = Limiter(key_func=get_remote_address)
 
-app = FastAPI(title="Esmi API", version="1.0")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Initialize the production graph with AsyncPostgresSaver at startup."""
+    _graph_module.graph = await _graph_module.build_graph_async()
+    yield
+
+
+app = FastAPI(title="Esmi API", version="1.0", lifespan=lifespan)
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
@@ -172,7 +181,7 @@ async def _stream_chat(message: str, thread_id: str) -> AsyncGenerator[str, None
     chain_end_text = ""  # fallback if streaming tokens are empty
 
     try:
-        async for event in graph.astream_events(
+        async for event in _graph_module.graph.astream_events(
             {"messages": [{"role": "user", "content": message}]},
             config=config,
             version="v2",
