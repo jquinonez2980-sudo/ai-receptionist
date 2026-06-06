@@ -2,6 +2,8 @@
 scripted multi-turn conversations, returning the recorded tool calls + final text.
 """
 
+import time
+
 from langchain_openai import ChatOpenAI
 from langgraph.checkpoint.memory import MemorySaver
 from langchain.agents import create_agent
@@ -9,6 +11,11 @@ from langchain.agents import create_agent
 from agents import make_prompt_middleware  # the REAL prompt (prompts/esmi_system.md)
 
 from . import stub_tools
+
+# Inter-test throttle: the OpenAI free/starter tier has a 30K TPM cap. Running
+# 12 tests back-to-back exhausts it near the tail. A short pause between calls
+# keeps us inside the window without needing rate-limit retry logic.
+_INTER_CALL_DELAY_S = 5.0
 
 
 def build_test_agent():
@@ -42,6 +49,7 @@ def run_conversation(
     config = {"configurable": {"thread_id": thread_id}}
     final_text = ""
     for user_msg in turns:
+        time.sleep(_INTER_CALL_DELAY_S)
         result = agent.invoke({"messages": [("user", user_msg)]}, config)
         final_text = result["messages"][-1].content
     return list(stub_tools.CALLS), final_text
