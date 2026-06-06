@@ -1,13 +1,9 @@
-# agents.py — Phase 1 / Phase 3
+# agents.py — Phase 1 + Phase 4
 #
-# Phase 1 was correctness-only: the prompt and ReAct shape are unchanged from
-# v0 so behaviour is comparable. Phase 2 will split this into the
-# supervisor + specialists architecture (Greeter / Qualifier / Informer /
-# Booker / Closer) per the architecture review.
-#
-# Phase 3: the system prompt now lives in prompts/esmi_system.md — versioned,
-# reviewable, and exercised by the eval harness (evals/) — instead of an inline
-# string. Behaviour is identical; {today} is substituted at request time.
+# Phase 1: single receptionist_agent with all 8 tools.
+# Phase 4: three specialist agents (informer, booker, closer), each with a
+#          focused prompt and only the tools it needs.  graph.py selects
+#          which architecture to use via the USE_MULTI_AGENT env var.
 
 from datetime import date
 from pathlib import Path
@@ -30,10 +26,25 @@ from tools import (
 
 load_dotenv()
 
-llm = ChatOpenAI(model="gpt-4o", temperature=0)
+_PROMPTS = Path(__file__).parent / "prompts"
 
-_PROMPT_PATH = Path(__file__).parent / "prompts" / "esmi_system.md"
-_SYSTEM_PROMPT = _PROMPT_PATH.read_text(encoding="utf-8")
+# ── Prompt helpers ────────────────────────────────────────────────────────────
+
+def _load_prompt(filename: str) -> str:
+    return (_PROMPTS / filename).read_text(encoding="utf-8")
+
+
+def _make_middleware(prompt_text: str):
+    """Dynamic-prompt middleware that resolves {today} per request."""
+    @dynamic_prompt
+    def _prompt(request) -> str:
+        return prompt_text.replace("{today}", date.today().isoformat())
+    return _prompt
+
+
+# ── Phase 1: single receptionist agent ───────────────────────────────────────
+
+llm = ChatOpenAI(model="gpt-4o", temperature=0)
 
 ESMI_TOOLS = [
     search_knowledge_base,
@@ -46,21 +57,9 @@ ESMI_TOOLS = [
     escalate_to_human,
 ]
 
-
 def make_prompt_middleware():
-    """Fresh dynamic-prompt middleware that injects today's date per request.
-
-    Using middleware (not a baked system_prompt) keeps {today} correct on a
-    long-running process — the date is resolved at request time, not at boot.
-    .replace (not .format) so literal braces in the prompt can't break templating.
-    """
-
-    @dynamic_prompt
-    def _esmi_system_prompt(request) -> str:
-        today = date.today().isoformat()
-        return _SYSTEM_PROMPT.replace("{today}", today)
-
-    return _esmi_system_prompt
+    """Phase 1 middleware — used by harness.py and the Phase 1 graph."""
+    return _make_middleware(_load_prompt("esmi_system.md"))
 
 
 receptionist_agent = create_agent(
@@ -69,4 +68,48 @@ receptionist_agent = create_agent(
     middleware=[make_prompt_middleware()],
 )
 
-print("✅ Esmi receptionist agent loaded.")
+
+# ── Phase 4: specialist agent factories ──────────────────────────────────────
+# Each factory returns a fresh compiled agent. Called once at graph build time.
+
+def make_informer(model=None):
+    """Answers questions about services, pricing, and FAQs.
+    Tools: search_knowledge_base, get_pricing only.
+    """
+    return create_agent(
+        model or llm,
+        tools=[search_knowledge_base, get_pricing],
+        middleware=[_make_middleware(_load_prompt("informer.md"))],
+    )
+
+
+def make_booker(model=None):
+    """Manages all calendar operations — book, find, reschedule, cancel.
+    Tools: list_available_slots, book_appointment, find_booking,
+           reschedule_appointment, cancel_appointment.
+    """
+    return create_agent(
+        model or llm,
+        tools=[
+            list_available_slots,
+            book_appointment,
+            find_booking,
+            reschedule_appointment,
+            cancel_appointment,
+        ],
+        middleware=[_make_middleware(_load_prompt("booker.md"))],
+    )
+
+
+def make_closer(model=None):
+    """Handles hot leads, KB misses, and human hand-offs.
+    Tools: escalate_to_human only.
+    """
+    return create_agent(
+        model or llm,
+        tools=[escalate_to_human],
+        middleware=[_make_middleware(_load_prompt("closer.md"))],
+    )
+
+
+print("✅ Esmi agents loaded.")
