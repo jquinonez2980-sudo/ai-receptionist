@@ -26,23 +26,31 @@ init_observability()
 USE_MULTI_AGENT = os.getenv("USE_MULTI_AGENT", "0") == "1"
 
 # ── Checkpointer factory ──────────────────────────────────────────────────────
+# api.py uses graph.astream_events() which is fully async. The checkpointer
+# must therefore be AsyncPostgresSaver (not the sync PostgresSaver), or it
+# raises NotImplementedError on every await checkpointer.aget_tuple() call.
+# We initialise the async pool + saver via asyncio.run() at import time,
+# before uvicorn creates its event loop — safe at module scope.
 
-def _build_postgres_saver(db_url: str) -> BaseCheckpointSaver:
-    from langgraph.checkpoint.postgres import PostgresSaver
-    from psycopg_pool import ConnectionPool
+async def _build_async_postgres_saver(db_url: str) -> BaseCheckpointSaver:
+    from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
+    from psycopg_pool import AsyncConnectionPool
 
-    pool = ConnectionPool(
+    pool = AsyncConnectionPool(
         conninfo=db_url,
         max_size=int(os.getenv("DB_POOL_SIZE", "10")),
         kwargs={"autocommit": True, "prepare_threshold": 0},
-        open=True,
+        open=False,
     )
-    saver = PostgresSaver(pool)
-    saver.setup()
+    await pool.open()
+    saver = AsyncPostgresSaver(pool)
+    await saver.setup()  # idempotent — creates checkpoint tables if missing
     return saver
 
 
 def get_checkpointer() -> BaseCheckpointSaver:
+    import asyncio
+
     db_url = os.getenv("DATABASE_URL")
     if not db_url:
         log.warning(
@@ -51,12 +59,13 @@ def get_checkpointer() -> BaseCheckpointSaver:
         )
         return MemorySaver()
     try:
-        saver = _build_postgres_saver(db_url)
-        log.info("Checkpointer: PostgresSaver (connected).")
+        saver = asyncio.run(_build_async_postgres_saver(db_url))
+        log.info("Checkpointer: AsyncPostgresSaver (connected).")
         return saver
     except Exception as e:
         log.error(
-            "Failed to initialize PostgresSaver (%s). Falling back to MemorySaver.",
+            "Failed to initialize AsyncPostgresSaver (%s). Falling back to MemorySaver. "
+            "Fix DATABASE_URL before going to production.",
             e,
         )
         return MemorySaver()
@@ -152,11 +161,11 @@ def build_graph(checkpointer: Optional[BaseCheckpointSaver] = None):
     if USE_MULTI_AGENT:
         log.info("Graph mode: Phase 4 multi-agent (USE_MULTI_AGENT=1).")
         g = _build_multi_agent_graph(cp)
-        print("✅ Multi-agent graph built (informer / booker / closer).")
+        print("✅ Multi-agent graph built (informer / booker / closer) (checkpointer:", type(cp).__name__ + ")")
     else:
         log.info("Graph mode: Phase 1 single-agent (USE_MULTI_AGENT=0).")
         g = _build_single_agent_graph(cp)
-        print("✅ Single-agent graph built.")
+        print("✅ Single-agent graph built (checkpointer:", type(cp).__name__ + ")")
     return g
 
 
