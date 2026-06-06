@@ -25,7 +25,8 @@ def _collect_streamed_text(message: str, thread_id: str) -> str:
     """Reproduce api.py's on_chat_model_stream token extraction against the real graph."""
 
     async def go() -> str:
-        from graph import graph  # the production outer graph (real agent + checkpointer)
+        from graph import build_graph
+        graph = build_graph()  # MemorySaver (tests don't need persistence)
 
         tokens: list[str] = []
         async for event in graph.astream_events(
