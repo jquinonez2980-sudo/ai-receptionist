@@ -1,14 +1,22 @@
-"""Builds a test agent with the REAL Esmi prompt + stubbed tools, and runs
-scripted multi-turn conversations, returning the recorded tool calls + final text.
+"""Builds test agents / graphs with the REAL Esmi prompts + stubbed tools, and
+runs scripted multi-turn conversations, returning the recorded tool calls + text.
+
+Two test modes:
+  run_conversation()            — Phase 1 single-agent (harness default).
+  run_multi_agent_conversation() — Phase 4 three-specialist graph topology.
+Both use stub tools so no real Calendar / SendGrid / Twilio calls are made.
 """
 
 import time
 
 from langchain_openai import ChatOpenAI
 from langgraph.checkpoint.memory import MemorySaver
+from langgraph.graph import StateGraph, END
 from langchain.agents import create_agent
 
-from agents import make_prompt_middleware  # the REAL prompt (prompts/esmi_system.md)
+from agents import make_prompt_middleware, _make_middleware, _load_prompt
+from graph import _route
+from state import AgentState
 
 from . import stub_tools
 
@@ -57,3 +65,66 @@ def run_conversation(
 
 def tool_names(calls: list) -> list[str]:
     return [name for name, _ in calls]
+
+
+# ── Phase 4: multi-agent test graph ──────────────────────────────────────────
+
+def build_multi_agent_test_graph():
+    """Phase 4 routing topology with stub tools — no real external calls.
+
+    Mirrors _build_multi_agent_graph() in graph.py exactly:
+    - Same _route() function (imported from graph.py)
+    - Same focused prompts (prompts/informer.md, booker.md, closer.md)
+    - Same tool subsets per specialist
+    The only difference is stub tools instead of real ones.
+    """
+    llm = ChatOpenAI(model="gpt-4o", temperature=0)
+
+    informer = create_agent(
+        llm,
+        tools=stub_tools.INFORMER_STUBS,
+        middleware=[_make_middleware(_load_prompt("informer.md"))],
+    )
+    booker = create_agent(
+        llm,
+        tools=stub_tools.BOOKER_STUBS,
+        middleware=[_make_middleware(_load_prompt("booker.md"))],
+    )
+    closer = create_agent(
+        llm,
+        tools=stub_tools.CLOSER_STUBS,
+        middleware=[_make_middleware(_load_prompt("closer.md"))],
+    )
+
+    workflow = StateGraph(AgentState)
+    workflow.add_node("informer", informer)
+    workflow.add_node("booker",   booker)
+    workflow.add_node("closer",   closer)
+    workflow.set_conditional_entry_point(
+        _route,
+        {"informer": "informer", "booker": "booker", "closer": "closer"},
+    )
+    for node in ("informer", "booker", "closer"):
+        workflow.add_edge(node, END)
+
+    return workflow.compile(checkpointer=MemorySaver())
+
+
+def run_multi_agent_conversation(
+    turns: list[str], thread_id: str = "eval-ma", kb_empty: bool = False
+) -> tuple[list, str]:
+    """Run a conversation through the Phase 4 multi-agent graph with stub tools.
+
+    Same call signature as run_conversation() so tests can be written identically
+    and switched between Phase 1 / Phase 4 by changing one function name.
+    """
+    stub_tools.reset()
+    stub_tools.KB_EMPTY = kb_empty
+    g = build_multi_agent_test_graph()
+    config = {"configurable": {"thread_id": thread_id}}
+    final_text = ""
+    for user_msg in turns:
+        time.sleep(_INTER_CALL_DELAY_S)
+        result = g.invoke({"messages": [("user", user_msg)]}, config)
+        final_text = result["messages"][-1].content
+    return list(stub_tools.CALLS), final_text

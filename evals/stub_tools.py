@@ -130,3 +130,9 @@ ALL_STUBS = [
     cancel_appointment,
     escalate_to_human,
 ]
+
+# Per-specialist subsets — mirrors the tool lists in agents.make_*().
+INFORMER_STUBS = [search_knowledge_base, get_pricing]
+BOOKER_STUBS   = [list_available_slots, book_appointment, find_booking,
+                  reschedule_appointment, cancel_appointment]
+CLOSER_STUBS   = [escalate_to_human]
