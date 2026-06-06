@@ -129,6 +129,54 @@ def test_kb_failure_escalates_not_fabricates():
     )
 
 
+# ── Phase 4 routing invariants ────────────────────────────────────────────────
+# These establish behavioral pre-conditions that the multi-agent graph must
+# preserve. They pass against the current single-agent (Phase 1) and will
+# remain the regression net once the supervisor + specialists are introduced.
+
+def test_pricing_intent_stays_in_informer_domain():
+    """A pricing question must call get_pricing and never trigger booking tools.
+
+    Invariant maps to: Supervisor → Informer (not Booker or Closer).
+    """
+    calls, _ = run_conversation(
+        ["What does Esmi cost?"],
+        thread_id="eval-route-info",
+    )
+    names = tool_names(calls)
+    assert "get_pricing" in names, f"pricing question must call get_pricing: {names}"
+    for booking_tool in ("book_appointment", "list_available_slots", "find_booking"):
+        assert booking_tool not in names, (
+            f"pricing question must not trigger {booking_tool}: {names}"
+        )
+
+
+def test_booking_intent_calls_calendar_not_escalation():
+    """Booking flow: once the user provides a day, list_available_slots is called.
+
+    Phase 1 (single-agent): the booking flow follows Step 1 — agent asks for a
+    preferred day before calling the calendar. So we give a specific day to
+    trigger the tool call, then assert the calendar is checked (not escalated).
+
+    Phase 4 note: this maps to Supervisor → Booker. The Booker node inherits
+    the same 5-step flow, so the assertion stays identical after the migration.
+    """
+    calls, _ = run_conversation(
+        [
+            "I'd like to book an intro call.",
+            "Next Tuesday works for me.",  # give a day so Step 2 fires
+        ],
+        thread_id="eval-route-book",
+    )
+    names = tool_names(calls)
+    assert "list_available_slots" in names, (
+        f"booking flow must check calendar once a day is given: {names}"
+    )
+    assert "escalate_to_human" not in names, (
+        f"a simple booking request must not escalate to a human: {names}"
+    )
+
+
 def test_lead_capture_offers_intro_call_after_pricing():
     _, text = run_conversation(["What does Esmi cost?"], thread_id="eval-leadcap")
     low = text.lower()
