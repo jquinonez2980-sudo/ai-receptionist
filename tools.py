@@ -33,6 +33,7 @@ import os
 import re
 import tempfile
 import threading
+import time
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
@@ -536,6 +537,35 @@ _CALENDAR_FALLBACK = (
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 
+def _retry_calendar(fn, *args, max_attempts: int = 3, **kwargs):
+    """Retry a Google Calendar API call with exponential back-off.
+
+    Returns the function result on success. On exhaustion raises the last
+    exception so the caller can map it to _CALENDAR_FALLBACK.
+
+    Only retries transient errors (network, 5xx). Skips retry on 4xx since
+    those indicate a bad request that won't improve on retry.
+    """
+    last: Exception | None = None
+    for attempt in range(max_attempts):
+        try:
+            return fn(*args, **kwargs)
+        except Exception as e:
+            status = getattr(getattr(e, "resp", None), "status", None)
+            # Don't retry 4xx (bad request / conflict / not-found)
+            if status is not None and 400 <= int(status) < 500:
+                raise
+            last = e
+            if attempt < max_attempts - 1:
+                wait = 1.0 * (2 ** attempt)
+                log.warning(
+                    "Calendar API transient error (%s), retrying in %.1fs (attempt %d/%d)",
+                    type(e).__name__, wait, attempt + 1, max_attempts,
+                )
+                time.sleep(wait)
+    raise last
+
+
 def _looks_like_email(value: str | None) -> bool:
     """True only for a syntactically valid email. Phone numbers (the voice
     path passes the caller's number here) return False so we never hand an
@@ -756,12 +786,15 @@ def book_appointment(
         # Only ask Google to email invites when there is a real attendee.
         send_updates = "all" if has_email else "none"
 
-        try:
-            created = (
+        def _insert():
+            return (
                 service.events()
                 .insert(calendarId="primary", body=event_body, sendUpdates=send_updates)
                 .execute()
             )
+
+        try:
+            created = _retry_calendar(_insert)
         except Exception as e:
             # Google raises HttpError with resp.status==409 on duplicate id.
             status = getattr(getattr(e, "resp", None), "status", None)
@@ -872,9 +905,11 @@ def cancel_appointment(event_id: str) -> str:
             return "I couldn't find that booking — it may have already been canceled."
         when = _friendly_when(event.get("start", {}).get("dateTime", ""))
         send_updates = "all" if event.get("attendees") else "none"
-        service.events().delete(
-            calendarId="primary", eventId=event_id, sendUpdates=send_updates
-        ).execute()
+        _retry_calendar(
+            lambda: service.events()
+            .delete(calendarId="primary", eventId=event_id, sendUpdates=send_updates)
+            .execute()
+        )
         return f"Done — I've canceled your appointment for {when}."
     except RuntimeError as e:
         log.error("cancel_appointment: calendar not configured: %s", e)
@@ -914,9 +949,11 @@ def reschedule_appointment(
         event["start"] = {"dateTime": new_start_time, "timeZone": _BUSINESS_TZ}
         event["end"] = {"dateTime": new_end_time, "timeZone": _BUSINESS_TZ}
         send_updates = "all" if event.get("attendees") else "none"
-        service.events().update(
-            calendarId="primary", eventId=event_id, body=event, sendUpdates=send_updates
-        ).execute()
+        _retry_calendar(
+            lambda: service.events()
+            .update(calendarId="primary", eventId=event_id, body=event, sendUpdates=send_updates)
+            .execute()
+        )
 
         # Re-confirm by SMS for voice (phone) bookings.
         desc = event.get("description", "")

@@ -141,23 +141,155 @@ def _route(state: AgentState) -> str:
     return "informer"
 
 
+# ── Context compression ───────────────────────────────────────────────────────
+
+_SUMMARIZE_AFTER_TURNS = 15  # number of human turns before compressing history
+
+
+def _compress_node(state: AgentState) -> dict:
+    """Summarise old messages once the conversation exceeds _SUMMARIZE_AFTER_TURNS.
+
+    Runs before routing on every turn — a no-op until the threshold is hit.
+    Removes messages older than the last 6 (3 full turns) and replaces them
+    with a single SystemMessage summary so the specialists always see compact
+    context without losing key lead/booking details.
+    """
+    from langchain_core.messages import SystemMessage
+    from langgraph.graph.message import RemoveMessage
+    from langchain_openai import ChatOpenAI
+
+    msgs = state.get("messages") or []
+    human_count = sum(1 for m in msgs if getattr(m, "type", None) == "human")
+    if human_count < _SUMMARIZE_AFTER_TURNS:
+        return {}
+
+    # Keep last 6 messages (roughly 3 full turns) as live context.
+    to_compress = msgs[:-6]
+    if not to_compress:
+        return {}
+
+    # Skip messages that are already summary placeholders.
+    to_summarize = [m for m in to_compress if not (
+        isinstance(m, SystemMessage) and
+        str(getattr(m, "content", "")).startswith("[Earlier conversation]:")
+    )]
+    if not to_summarize:
+        return {}
+
+    history = "\n".join(
+        f"{getattr(m, 'type', 'msg')}: {(m.content or '')[:300]}"
+        for m in to_summarize
+    )
+    llm = ChatOpenAI(model="gpt-4o", temperature=0)
+    resp = llm.invoke([{
+        "role": "user",
+        "content": (
+            "Summarise this AI receptionist conversation for handoff context. "
+            "Preserve: the user's name and email, any booked appointments "
+            "(date/time/event id), pricing discussed, budget/urgency signals, "
+            "open questions. Be concise.\n\n" + history
+        ),
+    }])
+
+    removals = [RemoveMessage(id=m.id) for m in to_compress]
+    summary = SystemMessage(
+        content=f"[Earlier conversation]: {resp.content}"
+    )
+    log.info("Compressed %d messages into a summary.", len(to_compress))
+    return {"messages": removals + [summary]}
+
+
+# ── State-writing specialist wrappers ─────────────────────────────────────────
+
+def _make_informer_node(informer):
+    """Wrap the informer agent to also update lead_score."""
+    def node(state: AgentState) -> dict:
+        result = informer.invoke(state)
+        msgs = result.get("messages", [])
+        last = msgs[-1].content if msgs else ""
+        # Pricing discussed = warmer lead (20 pts); any informer reply = mild intent (5 pts).
+        bump = 20 if any(p in last for p in ["$8,500", "$9,500", "$24,000", "1,099", "1,299", "2,499"]) else 5
+        return {
+            "messages": msgs,
+            "lead_score": min(100, (state.get("lead_score") or 0) + bump),
+        }
+    return node
+
+
+def _make_booker_node(booker):
+    """Wrap the booker agent to populate appointment_details when booking succeeds."""
+    def node(state: AgentState) -> dict:
+        result = booker.invoke(state)
+        msgs = result.get("messages", [])
+
+        appt = state.get("appointment_details")
+        score = state.get("lead_score") or 0
+        qualified = state.get("qualified") or False
+
+        # Scan for a book_appointment tool call in this turn's messages.
+        for m in msgs:
+            tool_calls = getattr(m, "tool_calls", None) or []
+            for tc in tool_calls:
+                if tc.get("name") == "book_appointment":
+                    appt = tc.get("args", {})
+                    score = 90
+                    qualified = True
+
+        return {
+            "messages": msgs,
+            "appointment_details": appt,
+            "lead_score": min(100, score),
+            "qualified": qualified,
+        }
+    return node
+
+
+def _make_closer_node(closer):
+    """Wrap the closer agent to mark lead qualified on escalation."""
+    def node(state: AgentState) -> dict:
+        result = closer.invoke(state)
+        msgs = result.get("messages", [])
+
+        score = state.get("lead_score") or 0
+        qualified = state.get("qualified") or False
+
+        for m in msgs:
+            tool_calls = getattr(m, "tool_calls", None) or []
+            for tc in tool_calls:
+                if tc.get("name") == "escalate_to_human":
+                    score = max(score, 80)
+                    qualified = True
+
+        return {
+            "messages": msgs,
+            "lead_score": min(100, score),
+            "qualified": qualified,
+        }
+    return node
+
+
 def _build_multi_agent_graph(checkpointer):
     informer = make_informer()
     booker   = make_booker()
     closer   = make_closer()
 
     workflow = StateGraph(AgentState)
-    workflow.add_node("informer", informer)
-    workflow.add_node("booker",   booker)
-    workflow.add_node("closer",   closer)
 
-    # Route every incoming turn to the right specialist.
-    workflow.set_conditional_entry_point(
+    # Pre-routing: compress long conversations (no-op until threshold).
+    workflow.add_node("compress", _compress_node)
+
+    # Specialist wrapper nodes — run the agent + write state fields.
+    workflow.add_node("informer", _make_informer_node(informer))
+    workflow.add_node("booker",   _make_booker_node(booker))
+    workflow.add_node("closer",   _make_closer_node(closer))
+
+    # compress → route → specialist → END
+    workflow.set_entry_point("compress")
+    workflow.add_conditional_edges(
+        "compress",
         _route,
         {"informer": "informer", "booker": "booker", "closer": "closer"},
     )
-
-    # Each specialist produces one reply then ends the turn.
     for node in ("informer", "booker", "closer"):
         workflow.add_edge(node, END)
 
