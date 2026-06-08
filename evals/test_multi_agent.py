@@ -70,6 +70,28 @@ def test_ma_booking_intent_routes_to_booker_and_checks_calendar():
     )
 
 
+def test_ma_keyword_free_date_reply_reaches_calendar():
+    """Regression: the exact prod flow that broke booking.
+
+    Turn 1 "Book an appointment" routes to booker (keyword 'book').
+    Turn 2 "june 11 at 10am" has NO booking keyword — without sticky routing
+    it fell through to the informer (no calendar tools) and Esmi replied
+    "I can't book appointments directly". With next='booker' stickiness it
+    stays in booker and checks the calendar.
+    """
+    calls, _ = run_multi_agent_conversation(
+        [
+            "Book an appointment",
+            "june 11 at 10am",
+        ],
+        thread_id="eval-ma-sticky-date",
+    )
+    names = tool_names(calls)
+    assert "list_available_slots" in names, (
+        f"keyword-free date reply must stick to booker and check calendar: {names}"
+    )
+
+
 def test_ma_urgency_routes_to_closer_and_escalates():
     """Through the full graph: urgency signal → closer → escalate_to_human."""
     calls, _ = run_multi_agent_conversation(

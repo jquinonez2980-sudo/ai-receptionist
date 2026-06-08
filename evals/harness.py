@@ -72,12 +72,16 @@ def tool_names(calls: list) -> list[str]:
 def build_multi_agent_test_graph():
     """Phase 4 routing topology with stub tools — no real external calls.
 
-    Mirrors _build_multi_agent_graph() in graph.py exactly:
-    - Same _route() function (imported from graph.py)
-    - Same focused prompts (prompts/informer.md, booker.md, closer.md)
-    - Same tool subsets per specialist
-    The only difference is stub tools instead of real ones.
+    Uses the SAME production node-builders (_compress_node, _make_informer_node,
+    _make_booker_node, _make_closer_node) and _route() from graph.py — only the
+    underlying tools are swapped for recording stubs. This guarantees the test
+    graph exercises the real state-writing logic (lead_score, appointment_details,
+    and crucially `next` for booking stickiness), so harness and prod can't drift.
     """
+    from graph import (
+        _compress_node, _make_informer_node, _make_booker_node, _make_closer_node,
+    )
+
     llm = ChatOpenAI(model="gpt-4o", temperature=0)
 
     informer = create_agent(
@@ -97,10 +101,14 @@ def build_multi_agent_test_graph():
     )
 
     workflow = StateGraph(AgentState)
-    workflow.add_node("informer", informer)
-    workflow.add_node("booker",   booker)
-    workflow.add_node("closer",   closer)
-    workflow.set_conditional_entry_point(
+    workflow.add_node("compress", _compress_node)
+    workflow.add_node("informer", _make_informer_node(informer))
+    workflow.add_node("booker",   _make_booker_node(booker))
+    workflow.add_node("closer",   _make_closer_node(closer))
+
+    workflow.set_entry_point("compress")
+    workflow.add_conditional_edges(
+        "compress",
         _route,
         {"informer": "informer", "booker": "booker", "closer": "closer"},
     )
