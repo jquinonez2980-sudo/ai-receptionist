@@ -70,6 +70,46 @@ def test_appointment_in_progress_stays_in_booker():
     assert _route(state) == "booker"
 
 
+def _sticky_state(human_msg: str, next_node: str):
+    """State where a prior specialist set state['next']."""
+    return {
+        "messages": [HumanMessage(content=human_msg)],
+        "lead_score": None, "qualified": None,
+        "appointment_details": None, "next": next_node,
+    }
+
+
+@pytest.mark.parametrize("msg", [
+    "june 11 at 10am",        # the exact message that broke booking in prod
+    "10am",
+    "yes",
+    "that works",
+    "john@example.com",
+    "tomorrow afternoon",
+    "the first one",
+])
+def test_mid_booking_replies_stick_to_booker(msg):
+    """Keyword-free mid-flow replies must stay in booker when next='booker'.
+
+    Regression guard: 'june 11 at 10am' has no booking keyword, so without
+    sticky routing it fell through to the informer (no calendar tools) and
+    Esmi replied 'I can't book appointments directly'.
+    """
+    assert _route(_sticky_state(msg, "booker")) == "booker", (
+        f"'{msg}' mid-booking should stick to booker, not {_route(_sticky_state(msg, 'booker'))}"
+    )
+
+
+def test_urgency_still_escapes_sticky_booker():
+    """Urgency must override booker stickiness — a hot signal always reaches closer."""
+    assert _route(_sticky_state("actually we need this ASAP", "booker")) == "closer"
+
+
+def test_next_none_does_not_force_booker():
+    """A cleared next (None) routes by keywords normally (default informer)."""
+    assert _route(_sticky_state("what do you offer?", None)) == "informer"
+
+
 # ── Closer routing ────────────────────────────────────────────────────────────
 
 @pytest.mark.parametrize("msg", [

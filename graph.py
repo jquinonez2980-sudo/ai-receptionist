@@ -113,9 +113,13 @@ _URGENCY_KW = frozenset({
 def _route(state: AgentState) -> str:
     """Rule-based router — zero latency, no LLM hop.
 
-    Priority: urgency (closer) > booking intent (booker) > default (informer).
-    Booking-in-progress sticky: if appointment_details is populated the
-    conversation is mid-booking; keep it in the booker's domain.
+    Priority:
+      1. urgency signals → closer (always)
+      2. booking completed (appointment_details set) → booker (post-confirm follow-up)
+      3. sticky: state["next"] == "booker" → booker (mid-flow messages like dates/times
+         that contain no booking keywords, e.g. "june 11 at 10am")
+      4. explicit booking keyword → booker
+      5. default → informer
     """
     msgs = state.get("messages") or []
     # Find the most recent human message.
@@ -125,15 +129,21 @@ def _route(state: AgentState) -> str:
             human_text = (m.content or "").lower()
             break
 
-    # Urgency always wins.
+    # Urgency always wins — even mid-booking.
     if any(kw in human_text for kw in _URGENCY_KW):
         return "closer"
 
-    # Mid-booking: appointment_details was set by a previous booker run.
+    # Booking already confirmed — keep post-booking messages in booker domain.
     if state.get("appointment_details"):
         return "booker"
 
-    # Explicit booking intent.
+    # Sticky: booker set next="booker" after its last turn — stay there.
+    # This handles mid-flow replies (dates, times, "yes", "9am", "john@example.com")
+    # that contain no booking keywords.
+    if state.get("next") == "booker":
+        return "booker"
+
+    # Explicit booking intent keyword.
     if any(kw in human_text for kw in _BOOKING_KW):
         return "booker"
 
@@ -202,7 +212,11 @@ def _compress_node(state: AgentState) -> dict:
 # ── State-writing specialist wrappers ─────────────────────────────────────────
 
 def _make_informer_node(informer):
-    """Wrap the informer agent to also update lead_score."""
+    """Wrap the informer agent to also update lead_score.
+
+    Clears `next` so a prior booker stickiness is released — informer is the
+    safe default, so follow-up questions naturally fall back here.
+    """
     def node(state: AgentState) -> dict:
         result = informer.invoke(state)
         msgs = result.get("messages", [])
@@ -212,12 +226,21 @@ def _make_informer_node(informer):
         return {
             "messages": msgs,
             "lead_score": min(100, (state.get("lead_score") or 0) + bump),
+            "next": None,
         }
     return node
 
 
 def _make_booker_node(booker):
-    """Wrap the booker agent to populate appointment_details when booking succeeds."""
+    """Wrap the booker agent: populate appointment_details on success AND keep
+    the conversation sticky while a booking is mid-flow.
+
+    The booking flow spans multiple turns where the user's replies ("june 11 at
+    10am", "yes", "john@example.com") contain no booking keywords. Without
+    stickiness the router would send those to the informer (which has no calendar
+    tools). Setting next="booker" while mid-flow keeps the conversation here until
+    the booking completes; once book_appointment fires we release (next=None).
+    """
     def node(state: AgentState) -> dict:
         result = booker.invoke(state)
         msgs = result.get("messages", [])
@@ -225,6 +248,7 @@ def _make_booker_node(booker):
         appt = state.get("appointment_details")
         score = state.get("lead_score") or 0
         qualified = state.get("qualified") or False
+        booked = False
 
         # Scan for a book_appointment tool call in this turn's messages.
         for m in msgs:
@@ -234,18 +258,26 @@ def _make_booker_node(booker):
                     appt = tc.get("args", {})
                     score = 90
                     qualified = True
+                    booked = True
+
+        # Booking done → release stickiness. Still mid-flow → stay in booker.
+        next_node = None if booked else "booker"
 
         return {
             "messages": msgs,
             "appointment_details": appt,
             "lead_score": min(100, score),
             "qualified": qualified,
+            "next": next_node,
         }
     return node
 
 
 def _make_closer_node(closer):
-    """Wrap the closer agent to mark lead qualified on escalation."""
+    """Wrap the closer agent to mark lead qualified on escalation.
+
+    Clears `next` — after a hand-off, follow-ups fall back to the informer.
+    """
     def node(state: AgentState) -> dict:
         result = closer.invoke(state)
         msgs = result.get("messages", [])
@@ -264,6 +296,7 @@ def _make_closer_node(closer):
             "messages": msgs,
             "lead_score": min(100, score),
             "qualified": qualified,
+            "next": None,
         }
     return node
 
