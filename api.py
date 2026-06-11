@@ -37,6 +37,7 @@ from tools import (
     reschedule_appointment,
     search_knowledge_base,
 )
+from tenants import tenant_exists, resolve_vapi_tenant, load_tenant, namespaced_thread
 
 log = logging.getLogger(__name__)
 
@@ -106,6 +107,24 @@ def _verify_vapi_secret(request: Request) -> None:
 class ChatRequest(BaseModel):
     message: str
     thread_id: str
+    tenant_id: str | None = None   # optional body fallback; X-Tenant-Id header preferred
+
+
+def _resolve_tenant(request: Request, req: "ChatRequest | None" = None) -> str:
+    """Determine the tenant for a web request.
+
+    Order: X-Tenant-Id header → request body tenant_id → 'default'. An unknown
+    tenant id falls back to 'default' (logged) rather than erroring, so a
+    misconfigured widget degrades gracefully to the base experience.
+    """
+    raw = request.headers.get("X-Tenant-Id")
+    if not raw and req is not None:
+        raw = req.tenant_id
+    tid = (raw or "default").strip().lower() or "default"
+    if not tenant_exists(tid):
+        log.warning("Unknown tenant_id '%s' — falling back to default.", tid)
+        return "default"
+    return tid
 
 
 class VapiToolRequest(BaseModel):
@@ -175,8 +194,14 @@ def _extract_content(content) -> str:
     return ""
 
 
-async def _stream_chat(message: str, thread_id: str) -> AsyncGenerator[str, None]:
-    config = {"configurable": {"thread_id": thread_id}}
+async def _stream_chat(
+    message: str, thread_id: str, tenant_id: str = "default"
+) -> AsyncGenerator[str, None]:
+    # Namespace the checkpoint thread per tenant so two tenants can never share
+    # a conversation. 'default' is left unprefixed to keep existing Orchelix
+    # threads addressable byte-for-byte across this deploy.
+    ns_thread = namespaced_thread(tenant_id, thread_id)
+    config = {"configurable": {"thread_id": ns_thread, "tenant_id": tenant_id}}
     full_text = ""
     chain_end_text = ""  # fallback if streaming tokens are empty
 
@@ -184,6 +209,7 @@ async def _stream_chat(message: str, thread_id: str) -> AsyncGenerator[str, None
         async for event in _graph_module.graph.astream_events(
             {"messages": [{"role": "user", "content": message}]},
             config=config,
+            context={"tenant_id": tenant_id},   # reaches the prompt via runtime.context
             version="v2",
             include_subgraphs=True,
         ):
@@ -378,8 +404,9 @@ async def health_calendar(request: Request) -> dict:
 @app.post("/chat")
 @limiter.limit("10/minute")
 async def chat(request: Request, req: ChatRequest) -> StreamingResponse:
+    tenant_id = _resolve_tenant(request, req)
     return StreamingResponse(
-        _stream_chat(req.message, req.thread_id),
+        _stream_chat(req.message, req.thread_id, tenant_id),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
@@ -389,7 +416,7 @@ async def chat(request: Request, req: ChatRequest) -> StreamingResponse:
     )
 
 
-def _enhance_slots_for_voice(slots_text: str) -> str:
+def _enhance_slots_for_voice(slots_text: str, tenant_id: str = "default") -> str:
     """Append ISO timestamps to each slot line so the voice agent can pass them to book_appointment.
 
     Input line:  "Tuesday, May 27 10:00 AM – 10:30 AM"
@@ -398,7 +425,7 @@ def _enhance_slots_for_voice(slots_text: str) -> str:
     import pytz
     from datetime import datetime, date as _date
 
-    tz = pytz.timezone("America/Toronto")
+    tz = pytz.timezone(load_tenant(tenant_id).business_tz)
     year = _date.today().year
     slot_re = re.compile(
         r"^(.+?,\s+\w+\s+\d+)\s+(\d{1,2}:\d{2}\s*(?:AM|PM))\s*[–\-]\s*(\d{1,2}:\d{2}\s*(?:AM|PM))$",
@@ -426,8 +453,14 @@ def _enhance_slots_for_voice(slots_text: str) -> str:
     return "\n".join(lines)
 
 
-def _run_voice_tool(name: str, params: dict) -> str:
-    """Execute a named voice tool and return a plain-text result."""
+def _run_voice_tool(name: str, params: dict, tenant_id: str = "default") -> str:
+    """Execute a named voice tool and return a plain-text result.
+
+    The voice path calls tools directly (bypassing the graph), so it must pass
+    config={"configurable":{"tenant_id":...}} on every .invoke for the tool's
+    RunnableConfig injection to resolve the right tenant.
+    """
+    cfg = {"configurable": {"tenant_id": tenant_id}}
     if name == "get_current_date":
         from datetime import date
         today = date.today()
@@ -436,34 +469,34 @@ def _run_voice_tool(name: str, params: dict) -> str:
             f"ISO format: {today.isoformat()}."
         )
     if name == "get_pricing":
-        return str(get_pricing.invoke({}))
+        return str(get_pricing.invoke({}, config=cfg))
     if name == "search_knowledge_base":
-        return str(search_knowledge_base.invoke({"query": params["query"]}))
+        return str(search_knowledge_base.invoke({"query": params["query"]}, config=cfg))
     if name == "list_available_slots":
         raw = str(list_available_slots.invoke({
             "start_date": params["start_date"],
             "end_date": params["end_date"],
-        }))
-        return _enhance_slots_for_voice(raw)
+        }, config=cfg))
+        return _enhance_slots_for_voice(raw, tenant_id)
     if name == "book_appointment":
         return str(book_appointment.invoke({
-            "summary": params.get("summary", "Orchelix Intro Call"),
+            "summary": params.get("summary", load_tenant(tenant_id).voice_default_summary),
             "start_time": params["start_time"],
             "end_time": params["end_time"],
             "attendee_email": params.get("attendee_email") or params.get("caller_phone"),
-        }))
+        }, config=cfg))
     if name == "find_booking":
         return str(find_booking.invoke({
             "contact": params.get("contact") or params.get("attendee_email") or params.get("caller_phone"),
-        }))
+        }, config=cfg))
     if name == "reschedule_appointment":
         return str(reschedule_appointment.invoke({
             "event_id": params["event_id"],
             "new_start_time": params["new_start_time"],
             "new_end_time": params["new_end_time"],
-        }))
+        }, config=cfg))
     if name == "cancel_appointment":
-        return str(cancel_appointment.invoke({"event_id": params["event_id"]}))
+        return str(cancel_appointment.invoke({"event_id": params["event_id"]}, config=cfg))
     log.warning("VAPI sent unknown tool: %s", name)
     return "Unknown tool."
 
@@ -480,6 +513,10 @@ async def voice_tools(request: Request) -> dict:
     body = await request.json()
     log.info("VAPI raw payload: %s", json.dumps(body))
 
+    # Each tenant has its own VAPI assistant / phone number; map it to a tenant.
+    tenant_id = resolve_vapi_tenant(body)
+    log.info("VAPI tenant resolved: %s", tenant_id)
+
     msg = body.get("message", body)  # some VAPI versions omit the outer wrapper
     msg_type = msg.get("type", "")
 
@@ -494,7 +531,7 @@ async def voice_tools(request: Request) -> dict:
             params = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
             log.info("VAPI tool-calls: %s | params: %s", name, params)
             try:
-                result = _run_voice_tool(name, params)
+                result = _run_voice_tool(name, params, tenant_id)
             except Exception:
                 log.exception("VAPI tool %s failed", name)
                 result = "Something went wrong — I'll connect you with our team."
@@ -507,7 +544,7 @@ async def voice_tools(request: Request) -> dict:
     params = fn.get("parameters", {})
     log.info("VAPI function-call: %s | params: %s", name, params)
     try:
-        result = _run_voice_tool(name, params)
+        result = _run_voice_tool(name, params, tenant_id)
     except Exception:
         log.exception("VAPI tool %s failed", name)
         result = "Something went wrong — I'll connect you with our team."

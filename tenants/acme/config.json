@@ -1,0 +1,42 @@
+{
+  "company_name": "Acme Dental Care",
+  "business_tz": "America/New_York",
+  "business_hours": [8, 18],
+  "slot_minutes": 30,
+  "emails": {
+    "from": "hello@acmedental.example",
+    "booking_to": "frontdesk@acmedental.example",
+    "escalation_to": "drsmith@acmedental.example"
+  },
+  "sms_signature": "Acme Dental Care",
+  "voice_default_summary": "Acme Dental Consultation",
+  "pricing": [
+    {
+      "name": "New Patient Cleaning & Exam",
+      "popular": true,
+      "setup_from": 0,
+      "monthly_from": 149,
+      "best_for": "First-time patients who want a full cleaning, exam, and X-rays.",
+      "highlights": [
+        "Comprehensive exam and digital X-rays",
+        "Professional cleaning included",
+        "Same-week appointments available"
+      ]
+    },
+    {
+      "name": "Invisalign Clear Aligners",
+      "popular": false,
+      "setup_from": 4500,
+      "monthly_from": 0,
+      "best_for": "Adults and teens who want to straighten their teeth discreetly.",
+      "highlights": [
+        "Free consultation and 3D scan",
+        "Flexible monthly payment plans"
+      ]
+    }
+  ],
+  "vapi": {
+    "assistant_ids": ["acme-vapi-assistant-001"],
+    "phone_number_ids": ["acme-phone-001"]
+  }
+}

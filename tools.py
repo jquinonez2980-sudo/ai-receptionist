@@ -41,12 +41,26 @@ from typing import Optional
 from dotenv import load_dotenv
 from langchain_community.document_loaders import DirectoryLoader, TextLoader
 from langchain_community.vectorstores import FAISS
+from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import tool
 from langchain_openai import OpenAIEmbeddings
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
+from tenants import load_tenant, tenant_secret
+
 load_dotenv()
 log = logging.getLogger(__name__)
+
+
+def _tenant_from_config(config: RunnableConfig | None) -> str:
+    """Extract tenant_id from an injected RunnableConfig (default when absent).
+
+    LangGraph injects `config` into any @tool that declares a `config:
+    RunnableConfig` param, and `configurable` is inherited from the top-level
+    astream_events config through every subgraph + the ToolNode. The voice path
+    passes config explicitly on `.invoke(..., config={"configurable":{...}})`.
+    """
+    return ((config or {}).get("configurable") or {}).get("tenant_id") or "default"
 
 
 # ════════════════════════════════════════════════════════════════════════
@@ -192,17 +206,17 @@ def _get_vapi_key() -> str | None:
     return None
 
 
-def _get_sendgrid_key() -> str | None:
-    """Return the SendGrid API key, decoding from base64 if needed.
+def _get_sendgrid_key(tenant_id: str = "default") -> str | None:
+    """Return the SendGrid API key for a tenant, decoding from base64 if needed.
 
-    Checks in order:
-      1. SENDGRID_API_KEY      — plain text (Railway shared var)
-      2. SENDGRID_API_KEY_B64  — base64-encoded (baked into Dockerfile)
+    Resolves per-tenant via tenant_secret (TENANT_<ID>_SENDGRID_API_KEY for
+    non-default tenants; the global SENDGRID_API_KEY for default). Falls back to
+    the _B64 variant the same way.
     """
-    key = os.environ.get("SENDGRID_API_KEY")
+    key = tenant_secret(tenant_id, "SENDGRID_API_KEY")
     if key:
         return key
-    key_b64 = os.environ.get("SENDGRID_API_KEY_B64")
+    key_b64 = tenant_secret(tenant_id, "SENDGRID_API_KEY_B64")
     if key_b64:
         try:
             import base64
@@ -217,26 +231,27 @@ def _get_sendgrid_key() -> str | None:
 # ════════════════════════════════════════════════════════════════════════
 
 
-def _send_sms_confirmation(to_number: str, when: str) -> None:
+def _send_sms_confirmation(to_number: str, when: str, tenant_id: str = "default") -> None:
     """Text a booking confirmation to a voice caller. Best-effort — never raises.
 
     Voice callers leave the call with no email invite (we only have their phone),
     so this closes the loop. Requires TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, and
-    TWILIO_SMS_FROM (an SMS-capable Twilio number in E.164). If any is missing
-    the send is skipped with a warning.
+    TWILIO_SMS_FROM (an SMS-capable Twilio number in E.164), resolved per-tenant.
+    If any is missing the send is skipped with a warning.
     """
     try:
-        sid = os.environ.get("TWILIO_ACCOUNT_SID")
-        token = os.environ.get("TWILIO_AUTH_TOKEN")
-        from_number = os.environ.get("TWILIO_SMS_FROM")
+        sid = tenant_secret(tenant_id, "TWILIO_ACCOUNT_SID")
+        token = tenant_secret(tenant_id, "TWILIO_AUTH_TOKEN")
+        from_number = tenant_secret(tenant_id, "TWILIO_SMS_FROM")
         if not (sid and token and from_number):
             log.warning("Twilio SMS not configured — skipping booking confirmation text.")
             return
 
         from twilio.rest import Client
 
+        cfg = load_tenant(tenant_id)
         body = (
-            f"You're confirmed for {when} with Orchelix AI Consulting. "
+            f"You're confirmed for {when} with {cfg.sms_signature}. "
             "Reply to this message if anything changes. — Esmi"
         )
         Client(sid, token).messages.create(body=body, from_=from_number, to=to_number)
@@ -255,13 +270,15 @@ def _send_booking_notification(
     start_time: str,
     end_time: str,
     attendee_email: Optional[str] = None,
+    tenant_id: str = "default",
 ) -> None:
     """Send a branded ops email on every booking. Best-effort."""
     try:
-        api_key = _get_sendgrid_key()
+        api_key = _get_sendgrid_key(tenant_id)
         if not api_key:
             log.warning("SendGrid key not found — skipping booking email.")
             return
+        cfg = load_tenant(tenant_id)
 
         from sendgrid import SendGridAPIClient
         from sendgrid.helpers.mail import Mail
@@ -288,7 +305,7 @@ def _send_booking_notification(
                 <h1 style="color: #ffffff; margin: 0; font-size: 20px;">📅 New Appointment Booked</h1>
                 <p style="color: #00D4EE; margin: 4px 0 0; font-size: 12px;
                            letter-spacing: 0.06em; text-transform: uppercase;">
-                    Orchelix AI Consulting — Esmi Receptionist
+                    {cfg.company_name} — Esmi Receptionist
                 </p>
             </div>
             <div style="background: #f8f9fa; padding: 28px; border: 1px solid #e2e8f0;
@@ -309,8 +326,8 @@ def _send_booking_notification(
         """
 
         message = Mail(
-            from_email="info@orchelix.com",
-            to_emails="info@orchelix.com",
+            from_email=cfg.email_from,
+            to_emails=cfg.email_booking_to,
             subject=subject,
             html_content=html_content,
         )
@@ -329,11 +346,14 @@ _KB_CACHE: dict[str, FAISS] = {}
 
 
 def _kb_dir(tenant_id: str = "default") -> Path:
-    """Source folder for KB markdown files. Tenant hook in place for Phase 2."""
-    base = Path(os.getenv("KB_SOURCE_DIR", "orchelix_knowledge_base"))
+    """Source folder for KB markdown files.
+
+    default → the legacy KB_SOURCE_DIR (orchelix_knowledge_base/).
+    other   → tenants/<id>/kb/  (co-located with the tenant's config.json).
+    """
     if tenant_id == "default":
-        return base
-    return base.parent / f"{base.name}__{tenant_id}"
+        return Path(os.getenv("KB_SOURCE_DIR", "orchelix_knowledge_base"))
+    return Path(__file__).parent / "tenants" / tenant_id / "kb"
 
 
 def _kb_index_dir(tenant_id: str = "default") -> Path:
@@ -426,10 +446,10 @@ def _get_kb_index(tenant_id: str = "default") -> Optional[FAISS]:
 
 # ── Tool: search_knowledge_base ──────────────────────────────────────────
 @tool
-def search_knowledge_base(query: str) -> str:
-    """Search the Orchelix AI knowledge base (all .md files) by semantic similarity."""
+def search_knowledge_base(query: str, config: RunnableConfig = None) -> str:
+    """Search the knowledge base (all .md files) by semantic similarity."""
     try:
-        vs = _get_kb_index()
+        vs = _get_kb_index(_tenant_from_config(config))
         if vs is None:
             return "Knowledge base unavailable. (No docs loaded.)"
         retriever = vs.as_retriever(search_kwargs={"k": 6})
@@ -493,15 +513,16 @@ _PRICING = [
 
 
 @tool
-def get_pricing() -> str:
-    """Return Orchelix's current, canonical pricing for every package.
+def get_pricing(config: RunnableConfig = None) -> str:
+    """Return the current, canonical pricing for every package.
 
     Use this for ANY pricing question instead of the knowledge base — these
     numbers are authoritative and exact. Never quote prices from memory or KB
     search; always call this tool first.
     """
+    pricing = load_tenant(_tenant_from_config(config)).pricing
     lines: list[str] = []
-    for p in _PRICING:
+    for p in pricing:
         title = p["name"] + ("  ★ Most Popular" if p["popular"] else "")
         lines.append(title)
         lines.append(
@@ -590,9 +611,10 @@ def _slot_id(start_iso: str) -> str:
 
 
 @tool
-def list_available_slots(start_date: str, end_date: str) -> str:
-    """List 30-min slots between start_date and end_date (inclusive), Mon–Fri, 9–5,
-    America/Toronto. One freebusy call covers the whole range.
+def list_available_slots(start_date: str, end_date: str, config: RunnableConfig = None) -> str:
+    """List bookable slots between start_date and end_date (inclusive), Mon–Fri,
+    during business hours in the business timezone. One freebusy call covers the
+    whole range.
 
     Args:
         start_date: ISO date 'YYYY-MM-DD'
@@ -601,8 +623,10 @@ def list_available_slots(start_date: str, end_date: str) -> str:
     try:
         import pytz
 
-        service = _get_calendar_service()
-        tz = pytz.timezone(_BUSINESS_TZ)
+        tenant_id = _tenant_from_config(config)
+        cfg = load_tenant(tenant_id)
+        service = _get_calendar_service(tenant_id)
+        tz = pytz.timezone(cfg.business_tz)
 
         start_dt = datetime.strptime(start_date, "%Y-%m-%d")
         end_dt = datetime.strptime(end_date, "%Y-%m-%d")
@@ -616,7 +640,7 @@ def list_available_slots(start_date: str, end_date: str) -> str:
                 body={
                     "timeMin": window_start.isoformat(),
                     "timeMax": window_end.isoformat(),
-                    "timeZone": _BUSINESS_TZ,
+                    "timeZone": cfg.business_tz,
                     "items": [{"id": "primary"}],
                 }
             )
@@ -634,14 +658,14 @@ def list_available_slots(start_date: str, end_date: str) -> str:
         current = start_dt
         while current <= end_dt:
             if current.weekday() < 5:  # Mon–Fri only
-                for hour in _HOURS:
+                for hour in cfg.hours_range:
                     for minute in (0, 30):
                         slot_start = tz.localize(
                             current.replace(
                                 hour=hour, minute=minute, second=0, microsecond=0
                             )
                         )
-                        slot_end = slot_start + timedelta(minutes=_SLOT_MIN)
+                        slot_end = slot_start + timedelta(minutes=cfg.slot_minutes)
 
                         is_busy = any(
                             bs < slot_end and be > slot_start
@@ -691,7 +715,7 @@ def _idem_event_id(idem_key: str) -> str:
     return hashlib.sha256(idem_key.encode()).hexdigest()
 
 
-def _slot_still_free(service, start_iso: str, end_iso: str) -> bool:
+def _slot_still_free(service, start_iso: str, end_iso: str, business_tz: str = _BUSINESS_TZ) -> bool:
     """Re-verify a slot is free immediately before insert. Closes the window
     where two simultaneous callers could both pass the LLM's list step and
     then both try to book."""
@@ -702,7 +726,7 @@ def _slot_still_free(service, start_iso: str, end_iso: str) -> bool:
                 body={
                     "timeMin": start_iso,
                     "timeMax": end_iso,
-                    "timeZone": _BUSINESS_TZ,
+                    "timeZone": business_tz,
                     "items": [{"id": "primary"}],
                 }
             )
@@ -722,6 +746,7 @@ def book_appointment(
     end_time: str,
     attendee_email: Optional[str] = None,
     idempotency_key: Optional[str] = None,
+    config: RunnableConfig = None,
 ) -> str:
     """Book a confirmed appointment in Google Calendar (idempotent).
 
@@ -746,11 +771,13 @@ def book_appointment(
                 [summary or "", start_time, end_time, (attendee_email or "").lower()]
             )
 
-        service = _get_calendar_service()
+        tenant_id = _tenant_from_config(config)
+        cfg = load_tenant(tenant_id)
+        service = _get_calendar_service(tenant_id)
         event_id = _idem_event_id(idempotency_key)
 
         # Pre-flight race check (best-effort; insert is the source of truth).
-        if not _slot_still_free(service, start_time, end_time):
+        if not _slot_still_free(service, start_time, end_time, cfg.business_tz):
             # The slot is busy — check whether the conflict IS our own event
             # (idempotent re-attempt), in which case we just return success.
             try:
@@ -773,8 +800,8 @@ def book_appointment(
         event_body = {
             "id": event_id,
             "summary": summary,
-            "start": {"dateTime": start_time, "timeZone": _BUSINESS_TZ},
-            "end": {"dateTime": end_time, "timeZone": _BUSINESS_TZ},
+            "start": {"dateTime": start_time, "timeZone": cfg.business_tz},
+            "end": {"dateTime": end_time, "timeZone": cfg.business_tz},
         }
         if has_email:
             event_body["attendees"] = [{"email": contact}]
@@ -813,11 +840,12 @@ def book_appointment(
             start_time=start_time,
             end_time=end_time,
             attendee_email=attendee_email,
+            tenant_id=tenant_id,
         )
 
         # Voice bookings (phone contact, no email invite) get a confirmation text.
         if contact and not has_email and any(c.isdigit() for c in contact):
-            _send_sms_confirmation(contact, _friendly_when(start_time))
+            _send_sms_confirmation(contact, _friendly_when(start_time), tenant_id)
 
         return f"Booked — confirmed for {_friendly_when(start_time)}."
 
@@ -846,7 +874,7 @@ def _event_matches_contact(event: dict, contact: str) -> bool:
 
 
 @tool
-def find_booking(contact: str) -> str:
+def find_booking(contact: str, config: RunnableConfig = None) -> str:
     """Find a caller's upcoming appointment(s) by email or phone number.
 
     Call this before rescheduling or canceling. `contact` is the caller's email
@@ -856,8 +884,10 @@ def find_booking(contact: str) -> str:
     try:
         import pytz
 
-        service = _get_calendar_service()
-        tz = pytz.timezone(_BUSINESS_TZ)
+        tenant_id = _tenant_from_config(config)
+        cfg = load_tenant(tenant_id)
+        service = _get_calendar_service(tenant_id)
+        tz = pytz.timezone(cfg.business_tz)
         now = datetime.now(tz)
         future = now + timedelta(days=60)
         events = (
@@ -890,13 +920,13 @@ def find_booking(contact: str) -> str:
 
 
 @tool
-def cancel_appointment(event_id: str) -> str:
+def cancel_appointment(event_id: str, config: RunnableConfig = None) -> str:
     """Cancel an existing appointment by its event id (from find_booking).
 
     Always confirm with the caller before calling this — cancellation is final.
     """
     try:
-        service = _get_calendar_service()
+        service = _get_calendar_service(_tenant_from_config(config))
         try:
             event = (
                 service.events().get(calendarId="primary", eventId=event_id).execute()
@@ -921,7 +951,7 @@ def cancel_appointment(event_id: str) -> str:
 
 @tool
 def reschedule_appointment(
-    event_id: str, new_start_time: str, new_end_time: str
+    event_id: str, new_start_time: str, new_end_time: str, config: RunnableConfig = None
 ) -> str:
     """Move an existing appointment to a new time.
 
@@ -933,7 +963,9 @@ def reschedule_appointment(
     Always confirm the new time with the caller before calling this.
     """
     try:
-        service = _get_calendar_service()
+        tenant_id = _tenant_from_config(config)
+        cfg = load_tenant(tenant_id)
+        service = _get_calendar_service(tenant_id)
         try:
             event = (
                 service.events().get(calendarId="primary", eventId=event_id).execute()
@@ -943,11 +975,11 @@ def reschedule_appointment(
                 "I couldn't find that booking — it may have been canceled. "
                 "Want me to book a new time?"
             )
-        if not _slot_still_free(service, new_start_time, new_end_time):
+        if not _slot_still_free(service, new_start_time, new_end_time, cfg.business_tz):
             return "That new time isn't available — could you pick another slot?"
 
-        event["start"] = {"dateTime": new_start_time, "timeZone": _BUSINESS_TZ}
-        event["end"] = {"dateTime": new_end_time, "timeZone": _BUSINESS_TZ}
+        event["start"] = {"dateTime": new_start_time, "timeZone": cfg.business_tz}
+        event["end"] = {"dateTime": new_end_time, "timeZone": cfg.business_tz}
         send_updates = "all" if event.get("attendees") else "none"
         _retry_calendar(
             lambda: service.events()
@@ -960,7 +992,7 @@ def reschedule_appointment(
         if "Caller contact:" in desc and not event.get("attendees"):
             phone = desc.split("Caller contact:", 1)[1].strip()
             if any(c.isdigit() for c in phone):
-                _send_sms_confirmation(phone, _friendly_when(new_start_time))
+                _send_sms_confirmation(phone, _friendly_when(new_start_time), tenant_id)
 
         return f"Done — I've moved your appointment to {_friendly_when(new_start_time)}."
     except RuntimeError as e:
@@ -973,8 +1005,8 @@ def reschedule_appointment(
 
 # ── Tool: escalate_to_human ───────────────────────────────────────────────
 @tool
-def escalate_to_human(reason: str, user_summary: str) -> str:
-    """Notify the Orchelix team that a lead needs human follow-up.
+def escalate_to_human(reason: str, user_summary: str, config: RunnableConfig = None) -> str:
+    """Notify the team that a lead needs human follow-up.
 
     Call this when:
     - You searched the knowledge base twice and still cannot answer accurately.
@@ -986,7 +1018,9 @@ def escalate_to_human(reason: str, user_summary: str) -> str:
         user_summary: 2-3 sentences summarising what the user needs.
     """
     try:
-        api_key = _get_sendgrid_key()
+        tenant_id = _tenant_from_config(config)
+        cfg = load_tenant(tenant_id)
+        api_key = _get_sendgrid_key(tenant_id)
         if not api_key:
             log.warning("SendGrid key not found — escalation email skipped.")
             return "I've flagged this for our team and someone will follow up with you shortly."
@@ -1003,7 +1037,7 @@ def escalate_to_human(reason: str, user_summary: str) -> str:
                 <h1 style="color: #ffffff; margin: 0; font-size: 20px;">🚨 Esmi Escalation</h1>
                 <p style="color: #00D4EE; margin: 4px 0 0; font-size: 12px;
                            letter-spacing: 0.06em; text-transform: uppercase;">
-                    Orchelix AI Consulting — Action Required
+                    {cfg.company_name} — Action Required
                 </p>
             </div>
             <div style="background: #f8f9fa; padding: 28px; border: 1px solid #e2e8f0;
@@ -1021,8 +1055,8 @@ def escalate_to_human(reason: str, user_summary: str) -> str:
         """
 
         message = Mail(
-            from_email="info@orchelix.com",
-            to_emails="jquinonez2980@gmail.com",
+            from_email=cfg.email_from,
+            to_emails=cfg.email_escalation_to,
             subject=subject,
             html_content=html_content,
         )
