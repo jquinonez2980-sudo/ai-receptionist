@@ -1,13 +1,19 @@
 #!/usr/bin/env python
 """PostToolUse pricing-sync hook.
 
-Pricing lives in two places that MUST agree on the numbers:
+Scope: the DEFAULT tenant (Orchelix) only. Other tenants keep their pricing in
+tenants/<id>/config.json alongside their own KB and are NOT checked here — they
+own their own consistency.
+
+For the default tenant, pricing lives in two places that MUST agree on the numbers:
   - _PRICING in tools.py  (canonical source returned by the get_pricing tool)
   - orchelix_knowledge_base/13_pricing_tiers.md  (what KB search / the website show)
 
 If an edit to either file leaves a setup_from / monthly_from amount that is no
 longer present in the KB markdown, warn Claude so the two don't drift. (Names
 intentionally differ between the two — only the dollar amounts are checked.)
+The RELEVANT set excludes tenant config.json files, so editing a tenant's
+pricing never false-triggers this check.
 
 Contract (Claude Code PostToolUse hook):
   - stdin: {"tool_name": ..., "tool_input": {"file_path": ...}, ...}

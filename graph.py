@@ -12,6 +12,7 @@ import logging
 import os
 from typing import Optional
 
+from langchain_core.runnables import RunnableConfig
 from langgraph.graph import StateGraph, END
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.checkpoint.memory import MemorySaver
@@ -217,8 +218,10 @@ def _make_informer_node(informer):
     Clears `next` so a prior booker stickiness is released — informer is the
     safe default, so follow-up questions naturally fall back here.
     """
-    def node(state: AgentState) -> dict:
-        result = informer.invoke(state)
+    def node(state: AgentState, config: RunnableConfig) -> dict:
+        # Forward config so the sub-agent's tools (RunnableConfig injection) and
+        # prompt (runtime.context) both see the per-request tenant_id.
+        result = informer.invoke(state, config=config)
         msgs = result.get("messages", [])
         last = msgs[-1].content if msgs else ""
         # Pricing discussed = warmer lead (20 pts); any informer reply = mild intent (5 pts).
@@ -241,8 +244,8 @@ def _make_booker_node(booker):
     tools). Setting next="booker" while mid-flow keeps the conversation here until
     the booking completes; once book_appointment fires we release (next=None).
     """
-    def node(state: AgentState) -> dict:
-        result = booker.invoke(state)
+    def node(state: AgentState, config: RunnableConfig) -> dict:
+        result = booker.invoke(state, config=config)
         msgs = result.get("messages", [])
 
         appt = state.get("appointment_details")
@@ -278,8 +281,8 @@ def _make_closer_node(closer):
 
     Clears `next` — after a hand-off, follow-ups fall back to the informer.
     """
-    def node(state: AgentState) -> dict:
-        result = closer.invoke(state)
+    def node(state: AgentState, config: RunnableConfig) -> dict:
+        result = closer.invoke(state, config=config)
         msgs = result.get("messages", [])
 
         score = state.get("lead_score") or 0

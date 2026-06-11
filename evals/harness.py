@@ -87,17 +87,17 @@ def build_multi_agent_test_graph():
     informer = create_agent(
         llm,
         tools=stub_tools.INFORMER_STUBS,
-        middleware=[_make_middleware(_load_prompt("informer.md"))],
+        middleware=[_make_middleware("informer.md")],
     )
     booker = create_agent(
         llm,
         tools=stub_tools.BOOKER_STUBS,
-        middleware=[_make_middleware(_load_prompt("booker.md"))],
+        middleware=[_make_middleware("booker.md")],
     )
     closer = create_agent(
         llm,
         tools=stub_tools.CLOSER_STUBS,
-        middleware=[_make_middleware(_load_prompt("closer.md"))],
+        middleware=[_make_middleware("closer.md")],
     )
 
     workflow = StateGraph(AgentState)

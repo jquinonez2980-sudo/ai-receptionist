@@ -23,10 +23,12 @@ from tools import (
     reschedule_appointment,
     search_knowledge_base,
 )
+from tenants import load_tenant
 
 load_dotenv()
 
 _PROMPTS = Path(__file__).parent / "prompts"
+_TENANTS_DIR = Path(__file__).parent / "tenants"
 
 # ── Prompt helpers ────────────────────────────────────────────────────────────
 
@@ -34,11 +36,35 @@ def _load_prompt(filename: str) -> str:
     return (_PROMPTS / filename).read_text(encoding="utf-8")
 
 
-def _make_middleware(prompt_text: str):
-    """Dynamic-prompt middleware that resolves {today} per request."""
+def _load_tenant_prompt(prompt_name: str, tenant_id: str) -> str:
+    """Resolve a prompt for a tenant.
+
+    Uses tenants/<id>/prompts/<name> if that override file exists, else the
+    shared base prompt in prompts/<name>; then fills {company} from the tenant
+    config. The default tenant fills {company} → "Orchelix AI Consulting", so
+    its prompts are byte-identical to before.
+    """
+    override = _TENANTS_DIR / tenant_id / "prompts" / prompt_name
+    if tenant_id != "default" and override.exists():
+        text = override.read_text(encoding="utf-8")
+    else:
+        text = _load_prompt(prompt_name)
+    return text.replace("{company}", load_tenant(tenant_id).company_name)
+
+
+def _make_middleware(prompt_name: str):
+    """Dynamic-prompt middleware: resolves the tenant's prompt at request time.
+
+    tenant_id comes from runtime.context (seeded by api.py via context=...).
+    {company} is filled from the tenant config; {today} from the clock. Using
+    .replace (not .format) keeps literal braces in prompts safe.
+    """
     @dynamic_prompt
     def _prompt(request) -> str:
-        return prompt_text.replace("{today}", date.today().isoformat())
+        ctx = getattr(getattr(request, "runtime", None), "context", None) or {}
+        tenant_id = (ctx.get("tenant_id") if isinstance(ctx, dict) else "default") or "default"
+        text = _load_tenant_prompt(prompt_name, tenant_id)
+        return text.replace("{today}", date.today().isoformat())
     return _prompt
 
 
@@ -59,7 +85,7 @@ ESMI_TOOLS = [
 
 def make_prompt_middleware():
     """Phase 1 middleware — used by harness.py and the Phase 1 graph."""
-    return _make_middleware(_load_prompt("esmi_system.md"))
+    return _make_middleware("esmi_system.md")
 
 
 receptionist_agent = create_agent(
@@ -79,7 +105,7 @@ def make_informer(model=None):
     return create_agent(
         model or llm,
         tools=[search_knowledge_base, get_pricing],
-        middleware=[_make_middleware(_load_prompt("informer.md"))],
+        middleware=[_make_middleware("informer.md")],
     )
 
 
@@ -97,7 +123,7 @@ def make_booker(model=None):
             reschedule_appointment,
             cancel_appointment,
         ],
-        middleware=[_make_middleware(_load_prompt("booker.md"))],
+        middleware=[_make_middleware("booker.md")],
     )
 
 
@@ -108,7 +134,7 @@ def make_closer(model=None):
     return create_agent(
         model or llm,
         tools=[escalate_to_human],
-        middleware=[_make_middleware(_load_prompt("closer.md"))],
+        middleware=[_make_middleware("closer.md")],
     )
 
 

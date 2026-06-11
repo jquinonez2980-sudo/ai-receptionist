@@ -1,0 +1,3 @@
+{
+  "_comment": "Default tenant = Orchelix. Intentionally empty: load_tenant('default') builds its config from the canonical constants in tools.py (_PRICING, _BUSINESS_TZ, _HOURS, _SLOT_MIN) so the live deployment stays byte-identical. Do not add fields here unless you intend to override Orchelix."
+}
