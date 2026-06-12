@@ -1,0 +1,30 @@
+# Secrets — never bake into image layers
+.env
+.env.*
+credentials.json
+token.json
+orhelix-esmi.txt
+.railway_tmp.env
+*.key
+*.pem
+
+# Auth / config dirs
+.streamlit/
+.claude/
+
+# Dev artifacts
+venv/
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+
+# Large non-app assets
+.kb_index/
+kb/
+sales/
+logo.jpg
+Esmi.jpg
+
+# Git metadata
+.git/

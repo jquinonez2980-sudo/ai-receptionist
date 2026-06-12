@@ -7,15 +7,17 @@ Python backend. The web frontend lives in a separate repo (`orhelix-website`).
 voice setup, and runbooks. This file is the short, must-not-violate summary.
 
 ## Stack
-- **Agent:** LangGraph `create_react_agent` (GPT-4o, temp 0) in `agents.py`, wrapped by a
-  one-node `StateGraph` in `graph.py`. Phase 1 = single agent; Phase 2 (supervisor +
-  specialists) is planned, not built.
+- **Agent:** LangGraph `create_agent` (GPT-4o, temp 0) in `agents.py`, wrapped by a
+  `StateGraph` in `graph.py`. Two modes controlled by `USE_MULTI_AGENT` env var:
+  - `USE_MULTI_AGENT=0` (default): single `receptionist_agent` with all 8 tools.
+  - `USE_MULTI_AGENT=1`: three specialist agents — informer, booker, closer — with
+    rule-based routing + LLM fallback. Both modes expose the same `graph` API surface.
 - **API:** FastAPI in `api.py` — `POST /chat` (SSE streaming, web) and `POST /voice/tools`
   (sync, VAPI phone). Rate-limited 10/min/IP via `slowapi`.
 - **Tools:** 8 LangChain `@tool`s in `tools.py` — KB search (FAISS), pricing, calendar
   slots/book/find/reschedule/cancel, escalate-to-human (SendGrid).
-- **Persistence:** LangGraph `PostgresSaver` (Railway `DATABASE_URL`); `MemorySaver` fallback
-  loses history on restart.
+- **Persistence:** LangGraph `AsyncPostgresSaver` (Railway `DATABASE_URL`); `MemorySaver`
+  fallback loses history on restart.
 - **Channels:** web chat + VAPI voice (561-566-1066, ElevenLabs Bella). Voice prompt lives in
   the VAPI dashboard (mirrored in `PROJECT_STATUS.md`), not in this repo.
 
@@ -30,10 +32,11 @@ voice setup, and runbooks. This file is the short, must-not-violate summary.
 3. **Pushing to `main` redeploys BOTH Railway services.** The LIVE customer backend is
    `ai-receptionist-production-5375` (`awake-nourishment`). `-3446` (`aware-nature`) is a
    broken stale duplicate — never assume a push only hit the live one; verify `-5375`.
-4. **The agent persona, booking flow, and tool-usage rules are authoritative in the
-   `_SYSTEM_PROMPT` string in `agents.py`.** Voice has its own prompt in the VAPI dashboard —
-   keep the two behaviorally consistent (booking read-back before `book_appointment`,
-   escalate on budget/timeline/urgency, LATAM Spanish not Castilian).
+4. **The agent persona, booking flow, and tool-usage rules are authoritative in
+   `prompts/esmi_system.md`** (per-tenant overrides in `tenants/<id>/prompts/`).
+   Voice has its own prompt in the VAPI dashboard — keep the two behaviorally consistent
+   (booking read-back before `book_appointment`, escalate on budget/timeline/urgency,
+   LATAM Spanish not Castilian).
 5. **Don't read or echo secret files** (`.env`, `orhelix-esmi.txt`, `credentials.json`,
    `.railway_tmp.env`, `.streamlit/`, `*.key`, `*.pem`). They are git-ignored and deny-listed.
 
@@ -44,10 +47,13 @@ voice setup, and runbooks. This file is the short, must-not-violate summary.
 - Health checks (live): `/health`, `/health/calendar`, `/health/env`, `/health/sendgrid`
 
 ## Layout
-- `agents.py` — persona prompt + ReAct agent (8 tools)
+- `agents.py` — single receptionist agent + specialist factory functions (informer/booker/closer)
 - `tools.py` — tool implementations, `_PRICING`, `_BUSINESS_TZ`, `_HOURS`, calendar/SendGrid/SMS helpers
-- `graph.py` — checkpointer factory + StateGraph
+- `graph.py` — checkpointer factory + StateGraph (single-agent or multi-agent per `USE_MULTI_AGENT`)
 - `api.py` — FastAPI: `/chat` (SSE), `/voice/tools`, health endpoints
 - `state.py` — `AgentState` TypedDict
+- `tenants.py` — tenant registry, per-tenant config/secrets, `load_tenant()`
+- `prompts/` — system prompt files (`esmi_system.md`, `informer.md`, `booker.md`, `closer.md`)
+- `tenants/` — per-tenant overrides (config.json, prompts/, kb/)
 - `orchelix_knowledge_base/` — 14 markdown KB docs (FAISS index auto-builds to `.kb_index/`)
 - `PROJECT_STATUS.md` — the deep reference for everything above
