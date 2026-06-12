@@ -12,6 +12,9 @@ bilingual (EN/ES)**. Sequence: founder-led sales → first 5 founder customers (
   IG/LinkedIn DMs, referral ask, agency reseller pitch. Copy-paste ready.
 - **`demo-tenant-checklist.md`** — spin up a prospect-branded Esmi in ~15 min before a call,
   using the multi-tenant backend. Turns "I built you a working version" into a repeatable move.
+- **Branded demo links — LIVE.** `orchelix.com/try-esmi?tenant=<slug>&company=<Name>` serves a
+  prospect-branded demo (their KB/pricing/persona) on the live site. Drop a `tenants/<slug>/`
+  folder, text the link. (Frontend: `orhelix-website` commit `53169b4`.)
 
 ## How to use the ROI calculator
 - **Quick:** double-click `roi-calculator.html` — runs in the browser, no server.
@@ -19,12 +22,12 @@ bilingual (EN/ES)**. Sequence: founder-led sales → first 5 founder customers (
   orchelix.com. Then text the link to prospects after a call.
 
 ## Next assets (ask Claude to build)
-1. **`?tenant=` demo link** (frontend, orhelix-website repo) — read a `?tenant=` query param on
-   try-esmi and pass it as `X-Tenant-Id` so you can send branded demo links like
-   `orchelix.com/try-esmi?tenant=acme-hvac`. **Highest-leverage unlock** for the demo motion.
-2. **One-page sales sheet** (PDF/print) — problem, solution, ROI, pricing, proof.
-3. **Demo video script** — the 2-minute Loom you put on the landing page and in cold emails.
-4. **Objection-handling one-pager** — expanded from the plan's cheat sheet.
-5. **Case study template** — fill after founder win #1.
-6. **Founder-deal proposal template** + Stripe setup notes (billing).
-7. **Landing-page copy** refresh for the try-esmi page (headline, ROI, social proof, CTA).
+1. **One-page sales sheet** (PDF/print) — problem, solution, ROI, pricing, proof.
+2. **Demo video script** — the 2-minute Loom you put on the landing page and in cold emails.
+3. **Objection-handling one-pager** — expanded from the plan's cheat sheet.
+4. **Case study template** — fill after founder win #1.
+5. **Founder-deal proposal template** + Stripe setup notes (billing).
+6. **Landing-page copy** refresh for the try-esmi page (headline, ROI, social proof, CTA).
+
+## Done
+- ✅ **`?tenant=` branded demo link** — live on orchelix.com/try-esmi (see above).

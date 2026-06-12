@@ -45,11 +45,13 @@ Create `tenants/<slug>/kb/services.md` — paste their services, service area, h
 
 ## Step 4 — Demo it
 
-**Web chat (works today):** hit the chat API with the `X-Tenant-Id: <slug>` header. Esmi answers
-as their business, with their services and pricing, in EN/ES.
-- *Unlock:* a shareable branded link like `orchelix.com/try-esmi?tenant=acme-hvac` needs a small
-  frontend tweak (read `?tenant=` → send `X-Tenant-Id`). **Ask Claude to build this once** — then
-  every demo is just a link you text the prospect. Highest-leverage upgrade to this whole motion.
+**Web chat (LIVE — just send a link):**
+`https://www.orchelix.com/try-esmi?tenant=<slug>` — Esmi answers as their business (their KB,
+pricing, persona) in EN/ES. Add `&company=Acme%20HVAC` to control the exact display name in the
+welcome + heading ("Talk to Acme HVAC's receptionist — right now"). If you omit `company`, it
+prettifies the slug (`acme-hvac` → "Acme Hvac"). No `?tenant` = the normal Orchelix demo.
+- Example: `orchelix.com/try-esmi?tenant=acme-hvac&company=Acme+Air+Conditioning`
+- This is the move: drop the tenant folder (Steps 1–3), text the prospect the link, done.
 
 **Voice (the magic):** the live 561 number currently answers as Orchelix (default tenant). Two ways
 to run a voice demo:
