@@ -224,6 +224,10 @@ async def _stream_chat(
                 yield f"data: {json.dumps({'type': 'tool_end'})}\n\n"
 
             elif kind == "on_chat_model_stream":
+                # Drop the internal router classifier's tokens — its one-word
+                # answer ("booker"/"informer"/"closer") must never reach the user.
+                if "esmi-router-internal" in (event.get("tags") or []):
+                    continue
                 chunk = event["data"].get("chunk")
                 if chunk is None:
                     continue

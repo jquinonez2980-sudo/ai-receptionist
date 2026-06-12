@@ -117,6 +117,9 @@ _URGENCY_KW = frozenset({
 # that the keyword lists miss. Web-chat only — the voice path routes via VAPI.
 _LLM_ROUTER_ENABLED = os.getenv("USE_LLM_ROUTER", "1") == "1"
 _ROUTER_NODES = ("informer", "booker", "closer")
+# Tag on the router classifier's LLM call. api.py drops on_chat_model_stream
+# events carrying this tag so the one-word classification never reaches the user.
+_ROUTER_STREAM_TAG = "esmi-router-internal"
 _ROUTER_SYSTEM = (
     "You are the router for an AI receptionist. Classify the user's latest message "
     "into exactly one of:\n"
@@ -145,8 +148,11 @@ def _llm_route(human_text: str) -> str:
     if not text:
         return "informer"
     try:
+        # Tag the call so the SSE layer (api.py) can filter the classifier's
+        # one-word output out of the user-facing token stream.
         resp = _get_router_llm().invoke(
-            [("system", _ROUTER_SYSTEM), ("user", text)]
+            [("system", _ROUTER_SYSTEM), ("user", text)],
+            config={"tags": [_ROUTER_STREAM_TAG]},
         )
         ans = (resp.content or "").strip().lower()
         for node in ("booker", "closer", "informer"):  # booker/closer before informer
