@@ -111,44 +111,93 @@ _URGENCY_KW = frozenset({
 })
 
 
-def _route(state: AgentState) -> str:
-    """Rule-based router — zero latency, no LLM hop.
+# Phase 2: when the deterministic rules don't match, classify with a cheap LLM
+# instead of blindly defaulting to informer. Catches keyword-free booking
+# ("can you get me on your calendar") and escalation ("I've waited for days")
+# that the keyword lists miss. Web-chat only — the voice path routes via VAPI.
+_LLM_ROUTER_ENABLED = os.getenv("USE_LLM_ROUTER", "1") == "1"
+_ROUTER_NODES = ("informer", "booker", "closer")
+_ROUTER_SYSTEM = (
+    "You are the router for an AI receptionist. Classify the user's latest message "
+    "into exactly one of:\n"
+    "- booker: wants to book, reschedule, or cancel an appointment, OR is giving a "
+    "date/time/availability in an ongoing booking.\n"
+    "- closer: a hot lead mentioning budget, timeline, or urgency; expresses "
+    "frustration; or asks to speak with a human.\n"
+    "- informer: anything else — questions about services, pricing, the company, or "
+    "general conversation.\n"
+    "Reply with ONLY one word: informer, booker, or closer."
+)
+_router_llm = None
+
+
+def _get_router_llm():
+    global _router_llm
+    if _router_llm is None:
+        from langchain_openai import ChatOpenAI
+        _router_llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
+    return _router_llm
+
+
+def _llm_route(human_text: str) -> str:
+    """Classify a keyword-miss message. Fail-safe: returns 'informer' on any error."""
+    text = (human_text or "").strip()
+    if not text:
+        return "informer"
+    try:
+        resp = _get_router_llm().invoke(
+            [("system", _ROUTER_SYSTEM), ("user", text)]
+        )
+        ans = (resp.content or "").strip().lower()
+        for node in ("booker", "closer", "informer"):  # booker/closer before informer
+            if node in ans:
+                log.info("LLM router classified %r → %s", text[:60], node)
+                return node
+    except Exception:
+        log.warning("LLM router failed; defaulting to informer.", exc_info=True)
+    return "informer"
+
+
+def _last_human_text(state: AgentState) -> str:
+    for m in reversed(state.get("messages") or []):
+        if getattr(m, "type", None) == "human":
+            return (m.content or "").lower()
+    return ""
+
+
+def _route_rules(state: AgentState) -> str | None:
+    """Deterministic, zero-latency routing tier. Returns a node name when a rule
+    fires with high confidence, or None when no rule matches (caller decides the
+    fallback). Kept pure + side-effect-free so the routing unit tests need no model.
 
     Priority:
-      1. urgency signals → closer (always)
-      2. booking completed (appointment_details set) → booker (post-confirm follow-up)
-      3. sticky: state["next"] == "booker" → booker (mid-flow messages like dates/times
-         that contain no booking keywords, e.g. "june 11 at 10am")
+      1. urgency signals → closer (always, even mid-booking)
+      2. booking completed (appointment_details set) → booker
+      3. sticky: state["next"] == "booker" → booker (keyword-free mid-flow replies)
       4. explicit booking keyword → booker
-      5. default → informer
+      5. no match → None
     """
-    msgs = state.get("messages") or []
-    # Find the most recent human message.
-    human_text = ""
-    for m in reversed(msgs):
-        if getattr(m, "type", None) == "human":
-            human_text = (m.content or "").lower()
-            break
+    human_text = _last_human_text(state)
 
-    # Urgency always wins — even mid-booking.
     if any(kw in human_text for kw in _URGENCY_KW):
         return "closer"
-
-    # Booking already confirmed — keep post-booking messages in booker domain.
     if state.get("appointment_details"):
         return "booker"
-
-    # Sticky: booker set next="booker" after its last turn — stay there.
-    # This handles mid-flow replies (dates, times, "yes", "9am", "john@example.com")
-    # that contain no booking keywords.
     if state.get("next") == "booker":
         return "booker"
-
-    # Explicit booking intent keyword.
     if any(kw in human_text for kw in _BOOKING_KW):
         return "booker"
+    return None
 
-    # Default: answer questions.
+
+def _route(state: AgentState) -> str:
+    """Conditional-edge router. Deterministic rules first; on no match, the LLM
+    classifier (if enabled) instead of a blind informer default."""
+    decided = _route_rules(state)
+    if decided is not None:
+        return decided
+    if _LLM_ROUTER_ENABLED:
+        return _llm_route(_last_human_text(state))
     return "informer"
 
 

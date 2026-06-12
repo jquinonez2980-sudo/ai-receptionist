@@ -12,10 +12,20 @@ and network. Run on demand:  pytest evals/ -v
 """
 
 import os
+from datetime import date, timedelta
 
 import pytest
 
 from .harness import run_conversation, tool_names
+
+
+def _future_weekday_phrase(days_ahead: int = 3) -> str:
+    """A near-future weekday like 'Wednesday, June 17' so the booking eval never
+    goes stale as the calendar advances (a hardcoded date becomes the past)."""
+    d = date.today() + timedelta(days=days_ahead)
+    while d.weekday() >= 5:
+        d += timedelta(days=1)
+    return d.strftime("%A, %B %d").replace(" 0", " ")
 
 pytestmark = pytest.mark.skipif(
     not os.getenv("OPENAI_API_KEY"),
@@ -46,7 +56,7 @@ def test_no_booking_before_confirmation():
 def test_booking_after_explicit_confirmation():
     calls, _ = run_conversation(
         [
-            "I'd like to book an intro call for June 10th.",
+            f"I'd like to book an intro call for {_future_weekday_phrase()}.",
             "9 am works.",
             "My name is John Doe and my email is john@example.com.",
             "Yes, that's all correct — please book it.",
@@ -85,8 +95,9 @@ def test_reschedule_flow_finds_then_reschedules():
         [
             "I need to move my existing appointment to a different time.",
             "It's booked under john@example.com.",
-            "Let's do June 10th at 10am instead.",
-            "Yes, please move it.",
+            f"Please move it to {_future_weekday_phrase(5)}.",
+            "10 am works for me.",
+            "Yes, that's correct — please move it.",
         ],
         thread_id="eval-resched",
     )
