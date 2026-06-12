@@ -14,6 +14,9 @@ import asyncio
 import os
 
 import pytest
+from dotenv import load_dotenv
+
+load_dotenv()  # so the skipif below sees OPENAI_API_KEY when run standalone
 
 pytestmark = pytest.mark.skipif(
     not os.getenv("OPENAI_API_KEY"),
@@ -36,6 +39,39 @@ def _collect_streamed_text(message: str, thread_id: str) -> str:
             include_subgraphs=True,
         ):
             if event["event"] == "on_chat_model_stream":
+                # Mirror api.py: drop the internal router classifier's tokens.
+                if "esmi-router-internal" in (event.get("tags") or []):
+                    continue
+                chunk = event["data"].get("chunk")
+                if chunk is None:
+                    continue
+                content = getattr(chunk, "content", "")
+                if isinstance(content, str) and content:
+                    tokens.append(content)
+        return "".join(tokens)
+
+    return asyncio.run(go())
+
+
+def _collect_multi_agent_stream(message: str, thread_id: str) -> str:
+    """Stream through the REAL multi-agent graph, applying api.py's router-tag
+    filter. Used to prove the router classifier's one-word answer never leaks."""
+    from langgraph.checkpoint.memory import MemorySaver
+    from graph import _build_multi_agent_graph
+
+    async def go() -> str:
+        graph = _build_multi_agent_graph(MemorySaver())
+        tokens: list[str] = []
+        async for event in graph.astream_events(
+            {"messages": [{"role": "user", "content": message}]},
+            config={"configurable": {"thread_id": thread_id, "tenant_id": "default"}},
+            context={"tenant_id": "default"},
+            version="v2",
+            include_subgraphs=True,
+        ):
+            if event["event"] == "on_chat_model_stream":
+                if "esmi-router-internal" in (event.get("tags") or []):
+                    continue
                 chunk = event["data"].get("chunk")
                 if chunk is None:
                     continue
@@ -76,4 +112,23 @@ def test_chat_model_tokens_surface_after_tool_call():
     assert "$8,500" in text or "8,500" in text, (
         f"canonical pricing not present in streamed text — tokens may be arriving "
         f"via fallback path rather than incremental stream. Got: {text[:300]!r}"
+    )
+
+
+def test_router_classification_does_not_leak_into_stream():
+    """The LLM router's one-word answer must never reach the user.
+
+    A keyword-free booking phrase triggers the router (→ 'booker'). That token is
+    tagged 'esmi-router-internal' and filtered by api.py. This guards against the
+    classifier's output bleeding into the reply ('bookerWhat day works?').
+    """
+    text = _collect_multi_agent_stream(
+        "hey could you get me on your calendar sometime?",
+        thread_id="eval-stream-router-leak",
+    )
+    assert text.strip(), "no user-facing tokens surfaced"
+    low = text.lower()
+    # The reply should be the booker's question, not the classifier's word.
+    assert not low.startswith(("booker", "informer", "closer")), (
+        f"router classification leaked into the user stream: {text[:80]!r}"
     )
