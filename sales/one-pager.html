@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Esmi — AI Receptionist · Orchelix · One-Pager</title>
+<style>
+  :root{
+    --navy:#0A2540; --navy2:#0e3460; --cyan:#00D4EE; --ink:#0A2540;
+    --muted:#5b6b7e; --line:#e2e8f0; --good:#0fae6e; --bg:#eef3f9;
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;}
+  body{
+    background:var(--bg); color:var(--ink);
+    font-family:Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif;
+    line-height:1.45; -webkit-print-color-adjust:exact; print-color-adjust:exact;
+  }
+  .page{
+    width:8.5in; min-height:11in; margin:18px auto; background:#fff;
+    box-shadow:0 10px 40px rgba(10,37,64,.10); display:flex; flex-direction:column;
+  }
+  /* Header */
+  header{ background:linear-gradient(135deg,var(--navy),var(--navy2)); color:#fff; padding:24px 34px; }
+  .htop{ display:flex; justify-content:space-between; align-items:flex-start; gap:16px; }
+  .brand{ color:var(--cyan); font-size:11px; letter-spacing:.16em; text-transform:uppercase; font-weight:800; }
+  header h1{ margin:6px 0 0; font-size:25px; letter-spacing:-.01em; }
+  header h1 b{ color:var(--cyan); }
+  .contact{ text-align:right; font-size:12px; color:#c7d6e6; line-height:1.7; white-space:nowrap; }
+  .contact b{ color:#fff; }
+  .tag{ margin:12px 0 0; font-size:14px; color:#dce6f1; max-width:560px; }
+  .chips{ display:flex; flex-wrap:wrap; gap:7px; margin-top:14px; }
+  .chip{ font-size:11px; font-weight:700; color:#04121a; background:var(--cyan);
+    border-radius:999px; padding:5px 11px; }
+  .chip.ghost{ background:transparent; color:var(--cyan); border:1px solid rgba(0,212,238,.5); }
+  /* Body */
+  .body{ padding:22px 34px; flex:1; }
+  .sec-label{ font-size:11px; font-weight:800; letter-spacing:.12em; text-transform:uppercase;
+    color:var(--cyan); margin:0 0 10px; }
+  .pain{ display:grid; grid-template-columns:1fr 1fr 1fr; gap:12px; margin-bottom:22px; }
+  .pain div{ background:#fafcff; border:1px solid var(--line); border-left:3px solid #e11d48;
+    border-radius:8px; padding:11px 13px; }
+  .pain .n{ font-size:21px; font-weight:800; color:#e11d48; }
+  .pain .t{ font-size:12.5px; color:var(--muted); }
+  h2.block{ font-size:16px; margin:0 0 12px; }
+  .caps{ display:grid; grid-template-columns:1fr 1fr; gap:12px 22px; margin-bottom:22px; }
+  .cap{ display:flex; gap:11px; }
+  .cap .dot{ width:30px;height:30px;flex:0 0 30px; border-radius:8px; background:rgba(0,212,238,.10);
+    border:1px solid rgba(0,212,238,.35); color:var(--navy); display:flex; align-items:center;
+    justify-content:center; font-weight:800; font-size:14px; }
+  .cap h3{ margin:0 0 2px; font-size:14px; }
+  .cap p{ margin:0; font-size:12.5px; color:var(--muted); }
+  .split{ display:grid; grid-template-columns:1.15fr 1fr; gap:18px; margin-bottom:20px; }
+  .roi{ background:linear-gradient(135deg,#ecfeff,#e0f2fe); border:1px solid #bae6fd;
+    border-radius:12px; padding:16px 18px; }
+  .roi h3{ margin:0 0 8px; font-size:14px; color:var(--navy); }
+  .roi .row{ display:flex; justify-content:space-between; font-size:13px; padding:4px 0; }
+  .roi .big{ font-size:22px; font-weight:800; color:var(--good); }
+  .roi .fine{ font-size:11px; color:var(--muted); margin-top:8px; }
+  .value{ background:#fafcff; border:1px solid var(--line); border-radius:12px; padding:16px 18px; }
+  .value h3{ margin:0 0 8px; font-size:14px; }
+  .value ul{ margin:0; padding-left:18px; font-size:12.5px; color:var(--muted); }
+  .value li{ margin:4px 0; }
+  .quote{ background:var(--navy); color:#fff; border-radius:12px; padding:16px 20px; }
+  .quote p{ margin:0; font-size:13.5px; line-height:1.6; color:#e7eef6; }
+  .quote .who{ margin-top:10px; font-size:12px; color:var(--cyan); font-weight:700; }
+  /* CTA footer */
+  footer{ background:linear-gradient(135deg,var(--navy2),var(--navy)); color:#fff;
+    padding:18px 34px; display:flex; justify-content:space-between; align-items:center; gap:16px; }
+  footer .c h3{ margin:0 0 3px; font-size:16px; }
+  footer .c p{ margin:0; font-size:12.5px; color:#c7d6e6; }
+  .pill{ background:var(--cyan); color:#04121a; font-weight:800; font-size:14px;
+    border-radius:10px; padding:12px 18px; white-space:nowrap; }
+  @media print{
+    body{ background:#fff; }
+    .page{ box-shadow:none; margin:0; width:auto; min-height:auto; }
+    @page{ size:Letter; margin:0; }
+  }
+</style>
+</head>
+<body>
+<div class="page">
+  <header>
+    <div class="htop">
+      <div>
+        <div class="brand">Orchelix · AI Receptionist</div>
+        <h1>Meet <b>Esmi</b> — your 24/7 bilingual receptionist.</h1>
+      </div>
+      <div class="contact">
+        <b>561-566-1066</b><br>
+        orchelix.com/try-esmi<br>
+        hello@orchelix.com
+      </div>
+    </div>
+    <p class="tag">Esmi answers every call the moment it comes in — day, night, weekends — books the
+      appointment on your calendar, and hands hot leads to your team. In English and Spanish.</p>
+    <div class="chips">
+      <span class="chip">EN · ES bilingual</span>
+      <span class="chip">Answers 24/7</span>
+      <span class="chip">Books &amp; confirms</span>
+      <span class="chip ghost">Never misses a call</span>
+    </div>
+  </header>
+
+  <div class="body">
+    <p class="sec-label">The problem</p>
+    <div class="pain">
+      <div><div class="n">1 in 4</div><div class="t">calls to local businesses go unanswered — straight to voicemail.</div></div>
+      <div><div class="n">~85%</div><div class="t">of people who hit voicemail hang up and call your competitor.</div></div>
+      <div><div class="n">$0</div><div class="t">is what a missed after-hours call is worth — except to the business that answered.</div></div>
+    </div>
+
+    <h2 class="block">What Esmi does on day one</h2>
+    <div class="caps">
+      <div class="cap"><div class="dot">📅</div><div><h3>Books appointments end-to-end</h3>
+        <p>Reads your live calendar, offers real slots, books the visit, and texts a bilingual confirmation — on one call.</p></div></div>
+      <div class="cap"><div class="dot">💬</div><div><h3>Answers every question</h3>
+        <p>Pricing, services, hours, service area — accurately, from your knowledge base. Never makes it up.</p></div></div>
+      <div class="cap"><div class="dot">🌎</div><div><h3>English &amp; Spanish, automatically</h3>
+        <p>Detects the caller's language and switches mid-conversation. No second line, no extra staff.</p></div></div>
+      <div class="cap"><div class="dot">🚨</div><div><h3>Qualifies &amp; escalates hot leads</h3>
+        <p>Spots budget, urgency, or frustration and pages your team with the full context in seconds.</p></div></div>
+    </div>
+
+    <div class="split">
+      <div class="roi">
+        <h3>The math (typical home-services shop)</h3>
+        <div class="row"><span>Missed calls / month</span><b>~90</b></div>
+        <div class="row"><span>Jobs recovered (conservative)</span><b>~18</b></div>
+        <div class="row"><span>Avg. value per job</span><b>$500</b></div>
+        <div class="row"><span>Recovered revenue / month</span><span class="big">$9,000</span></div>
+        <div class="fine">One recovered job usually covers the whole month. See your own numbers at
+          orchelix.com/try-esmi.</div>
+      </div>
+      <div class="value">
+        <h3>Why owners switch</h3>
+        <ul>
+          <li>A human receptionist: ~$3,000+/mo, 40 hrs, English only, takes lunch.</li>
+          <li>An answering service: takes a message — then you still call back and lose the lead.</li>
+          <li><b>Esmi:</b> 24/7, bilingual, <b>books the job</b> — for a fraction of either.</li>
+          <li>Live in days. No new hardware. No long-term contract on the monthly service.</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="quote">
+      <p>"The receptionist agent picked up 412 calls in its first month — bilingually, on weekends,
+        and without missing a single appointment. It paid for itself before the pilot ended."</p>
+      <div class="who">Marisol Santiago · Office Manager, Riverstone Clinic</div>
+    </div>
+  </div>
+
+  <footer>
+    <div class="c">
+      <h3>See Esmi on your own business — free.</h3>
+      <p>We'll train a version on your services and pricing. Call it yourself and try to stump it.</p>
+    </div>
+    <div class="pill">Try it → orchelix.com/try-esmi</div>
+  </footer>
+</div>
+</body>
+</html>

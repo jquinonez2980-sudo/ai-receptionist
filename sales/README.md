@@ -15,6 +15,10 @@ bilingual (EN/ES)**. Sequence: founder-led sales → first 5 founder customers (
 - **Branded demo links — LIVE.** `orchelix.com/try-esmi?tenant=<slug>&company=<Name>` serves a
   prospect-branded demo (their KB/pricing/persona) on the live site. Drop a `tenants/<slug>/`
   folder, text the link. (Frontend: `orhelix-website` commit `53169b4`.)
+- **`one-pager.html`** — branded, print-ready sales sheet (Ctrl+P → clean one-page PDF). Leave-behind
+  after a visit, attach to proposals/emails. Problem → what Esmi does → ROI → proof → CTA.
+- **`demo-video-script.md`** — word-for-word 2-minute demo script (landing page + cold email) plus a
+  30-second cut for IG/FB/ads, with shot directions and caption hooks to A/B test.
 
 ## How to use the ROI calculator
 - **Quick:** double-click `roi-calculator.html` — runs in the browser, no server.
@@ -22,12 +26,11 @@ bilingual (EN/ES)**. Sequence: founder-led sales → first 5 founder customers (
   orchelix.com. Then text the link to prospects after a call.
 
 ## Next assets (ask Claude to build)
-1. **One-page sales sheet** (PDF/print) — problem, solution, ROI, pricing, proof.
-2. **Demo video script** — the 2-minute Loom you put on the landing page and in cold emails.
-3. **Objection-handling one-pager** — expanded from the plan's cheat sheet.
-4. **Case study template** — fill after founder win #1.
-5. **Founder-deal proposal template** + Stripe setup notes (billing).
-6. **Landing-page copy** refresh for the try-esmi page (headline, ROI, social proof, CTA).
+1. **Objection-handling one-pager** — expanded from the plan's cheat sheet.
+2. **Case study template** — fill after founder win #1.
+3. **Founder-deal proposal template** + Stripe setup notes (billing).
+4. **Landing-page copy** refresh for the try-esmi page (headline, ROI, social proof, CTA).
 
 ## Done
-- ✅ **`?tenant=` branded demo link** — live on orchelix.com/try-esmi (see above).
+- ✅ **`?tenant=` branded demo link** — live on orchelix.com/try-esmi.
+- ✅ **ROI calculator**, **outreach scripts**, **demo-tenant runbook**, **one-pager**, **demo video script**.
