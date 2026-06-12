@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Esmi ROI Calculator · Orchelix</title>
+<style>
+  :root {
+    --navy: #0A2540;
+    --navy2: #0e3460;
+    --cyan: #00D4EE;
+    --ink: #0A2540;
+    --muted: #64748b;
+    --line: #e2e8f0;
+    --bg: #f4f7fb;
+    --good: #0fae6e;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg);
+    font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif;
+    color: var(--ink); line-height: 1.5;
+  }
+  .wrap { max-width: 920px; margin: 0 auto; padding: 24px; }
+  .card { background: #fff; border: 1px solid var(--line); border-radius: 16px; overflow: hidden;
+    box-shadow: 0 10px 30px rgba(10,37,64,.06); }
+  header {
+    background: linear-gradient(135deg, var(--navy), var(--navy2));
+    color: #fff; padding: 28px 32px;
+  }
+  header .brand { color: var(--cyan); font-size: 12px; letter-spacing: .14em; text-transform: uppercase; font-weight: 700; }
+  header h1 { margin: 6px 0 4px; font-size: 24px; }
+  header p { margin: 0; color: #c7d2e0; font-size: 14px; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0; }
+  @media (max-width: 760px) { .grid { grid-template-columns: 1fr; } }
+  .inputs { padding: 28px 32px; border-right: 1px solid var(--line); }
+  @media (max-width: 760px) { .inputs { border-right: none; border-bottom: 1px solid var(--line); } }
+  .results { padding: 28px 32px; background: #fbfdff; }
+  .presets { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 22px; }
+  .preset { border: 1px solid var(--line); background: #fff; border-radius: 999px; padding: 7px 14px;
+    font-size: 13px; cursor: pointer; color: var(--navy); font-weight: 600; transition: all .15s; }
+  .preset:hover { border-color: var(--cyan); }
+  .preset.active { background: var(--navy); color: #fff; border-color: var(--navy); }
+  label { display: block; font-size: 13px; font-weight: 600; margin: 16px 0 6px; }
+  .hint { font-weight: 400; color: var(--muted); font-size: 12px; }
+  .field { display: flex; align-items: center; border: 1px solid var(--line); border-radius: 10px;
+    overflow: hidden; background: #fff; }
+  .field span { padding: 0 12px; color: var(--muted); background: #f8fafc; align-self: stretch;
+    display: flex; align-items: center; font-size: 14px; border-right: 1px solid var(--line); }
+  .field input { border: 0; padding: 11px 12px; width: 100%; font-size: 15px; outline: none; color: var(--ink); }
+  .field input:focus { background: #f0fdff; }
+  .bignum { font-size: 13px; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; font-weight: 700; }
+  .lost { font-size: 40px; font-weight: 800; color: #e11d48; margin: 2px 0 0; letter-spacing: -.02em; }
+  .row { display: flex; justify-content: space-between; padding: 13px 0; border-bottom: 1px solid var(--line); font-size: 15px; }
+  .row:last-child { border-bottom: 0; }
+  .row b { font-weight: 700; }
+  .roi { margin-top: 18px; background: linear-gradient(135deg, #ecfeff, #e0f2fe);
+    border: 1px solid #bae6fd; border-radius: 12px; padding: 16px 18px; }
+  .roi .x { font-size: 34px; font-weight: 800; color: var(--navy); }
+  .roi .lbl { font-size: 13px; color: var(--muted); }
+  .be { margin-top: 12px; font-size: 14px; color: var(--navy); background: #f0fdf4;
+    border: 1px solid #bbf7d0; border-radius: 10px; padding: 12px 14px; }
+  .cta { display: block; text-align: center; margin-top: 18px; background: var(--cyan); color: var(--navy);
+    font-weight: 800; text-decoration: none; padding: 14px; border-radius: 10px; font-size: 15px; }
+  .cta:hover { filter: brightness(1.05); }
+  footer { text-align: center; color: var(--muted); font-size: 12px; padding: 16px; }
+  .disc { font-size: 11px; color: var(--muted); margin-top: 14px; }
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="card">
+      <header>
+        <div class="brand">Orchelix · Esmi</div>
+        <h1>What are missed calls costing you?</h1>
+        <p>Every unanswered call is a customer who called your competitor next. See the number.</p>
+      </header>
+      <div class="grid">
+        <div class="inputs">
+          <div class="presets" id="presets">
+            <button class="preset" data-k="home">Home Services</button>
+            <button class="preset" data-k="medspa">Med Spa</button>
+            <button class="preset" data-k="dental">Dental</button>
+            <button class="preset" data-k="custom">Custom</button>
+          </div>
+
+          <label>Calls per day <span class="hint">(inbound, all sources)</span></label>
+          <div class="field"><span>#</span><input id="calls" type="number" min="0" value="15"></div>
+
+          <label>% of calls you miss <span class="hint">(after-hours, busy, lunch, voicemail)</span></label>
+          <div class="field"><input id="missed" type="number" min="0" max="100" value="20"><span>%</span></div>
+
+          <label>Average value of a new customer <span class="hint">(per job or lifetime)</span></label>
+          <div class="field"><span>$</span><input id="value" type="number" min="0" value="500"></div>
+
+          <label>Of missed calls, % that would book if answered <span class="hint">(be conservative)</span></label>
+          <div class="field"><input id="capture" type="number" min="0" max="100" value="20"><span>%</span></div>
+
+          <label>Esmi monthly price</label>
+          <div class="field"><span>$</span><input id="price" type="number" min="0" value="799"></div>
+        </div>
+
+        <div class="results">
+          <div class="bignum">Estimated revenue lost / month</div>
+          <div class="lost" id="lost">$0</div>
+
+          <div style="margin-top:18px">
+            <div class="row"><span>Missed calls / month</span><b id="mcalls">0</b></div>
+            <div class="row"><span>New customers lost / month</span><b id="custs">0</b></div>
+            <div class="row"><span>Recovered revenue with Esmi / mo</span><b id="rev" style="color:var(--good)">$0</b></div>
+            <div class="row"><span>Recovered revenue / year</span><b id="yr" style="color:var(--good)">$0</b></div>
+          </div>
+
+          <div class="roi">
+            <div class="x" id="roix">0×</div>
+            <div class="lbl">return on Esmi — recovered revenue ÷ cost</div>
+          </div>
+
+          <div class="be" id="be">You only need <b>1</b> recovered customer/month to break even.</div>
+
+          <a class="cta" href="https://www.orchelix.com/try-esmi" target="_blank" rel="noopener">
+            Try Esmi free → orchelix.com/try-esmi
+          </a>
+          <div class="disc">Directional estimate based on your inputs. Esmi answers 24/7 in English &amp; Spanish, books appointments, and escalates hot leads to your team.</div>
+        </div>
+      </div>
+    </div>
+    <footer>© Orchelix AI Consulting · Esmi AI Receptionist</footer>
+  </div>
+
+<script>
+  // Conservative-but-compelling defaults. A demo dies if the numbers look inflated —
+  // these land ~10-13x ROI, which is believable to a skeptical owner. Adjust live
+  // with the prospect's real figures (that's the point of the tool).
+  var PRESETS = {
+    home:   { calls: 15, missed: 20, value: 500,  capture: 20 },
+    medspa: { calls: 10, missed: 25, value: 700,  capture: 15 },
+    dental: { calls: 15, missed: 15, value: 1000, capture: 15 },
+    custom: null
+  };
+  var $ = function(id){ return document.getElementById(id); };
+  var ids = ["calls","missed","value","capture","price"];
+
+  function money(n){
+    return "$" + Math.round(n).toLocaleString("en-US");
+  }
+  function calc(){
+    var calls = +$("calls").value || 0;
+    var missed = (+$("missed").value || 0) / 100;
+    var value = +$("value").value || 0;
+    var capture = (+$("capture").value || 0) / 100;
+    var price = +$("price").value || 0;
+
+    var missedMo = calls * missed * 30;               // Esmi answers every day, incl. after-hours/weekends
+    var custsMo = missedMo * capture;
+    var revMo = custsMo * value;
+    var lostMo = revMo;                               // what you lose today = what Esmi recovers
+    var roi = price > 0 ? revMo / price : 0;
+    var breakeven = value > 0 ? Math.max(1, Math.ceil(price / value)) : 1;
+
+    $("lost").textContent = money(lostMo);
+    $("mcalls").textContent = Math.round(missedMo).toLocaleString("en-US");
+    $("custs").textContent = (Math.round(custsMo*10)/10).toLocaleString("en-US");
+    $("rev").textContent = money(revMo);
+    $("yr").textContent = money(revMo * 12);
+    $("roix").textContent = (Math.round(roi*10)/10) + "×";
+    $("be").innerHTML = "You only need <b>" + breakeven +
+      "</b> recovered customer" + (breakeven>1?"s":"") + "/month to break even.";
+  }
+  function setPreset(k){
+    document.querySelectorAll(".preset").forEach(function(b){
+      b.classList.toggle("active", b.dataset.k === k);
+    });
+    var p = PRESETS[k];
+    if (p){ $("calls").value=p.calls; $("missed").value=p.missed; $("value").value=p.value; $("capture").value=p.capture; }
+    calc();
+  }
+  document.getElementById("presets").addEventListener("click", function(e){
+    var b = e.target.closest(".preset"); if(!b) return; setPreset(b.dataset.k);
+  });
+  ids.forEach(function(id){ $(id).addEventListener("input", function(){
+    document.querySelectorAll(".preset").forEach(function(b){
+      if(b.dataset.k==="custom") b.classList.add("active"); else b.classList.remove("active");
+    });
+    calc();
+  }); });
+
+  setPreset("home");
+</script>
+</body>
+</html>
