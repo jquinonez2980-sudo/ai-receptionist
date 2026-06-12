@@ -454,6 +454,11 @@ def search_knowledge_base(query: str, config: RunnableConfig = None) -> str:
             return "Knowledge base unavailable. (No docs loaded.)"
         retriever = vs.as_retriever(search_kwargs={"k": 6})
         results = retriever.invoke(query)
+        if not results:
+            return (
+                "NO_RESULTS: the knowledge base has no relevant information for "
+                "this question. Do not guess — escalate to a human."
+            )
         return "\n\n".join(doc.page_content for doc in results)
     except Exception:
         log.exception("KB search failed")

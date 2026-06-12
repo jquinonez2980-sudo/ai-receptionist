@@ -100,11 +100,15 @@ receptionist_agent = create_agent(
 
 def make_informer(model=None):
     """Answers questions about services, pricing, and FAQs.
-    Tools: search_knowledge_base, get_pricing only.
+    Tools: search_knowledge_base, get_pricing, escalate_to_human.
+
+    escalate_to_human lets the informer hand off when the KB can't answer a
+    question — closing the Phase 4 gap where off-script questions got weak,
+    fabricated answers instead of a human follow-up.
     """
     return create_agent(
         model or llm,
-        tools=[search_knowledge_base, get_pricing],
+        tools=[search_knowledge_base, get_pricing, escalate_to_human],
         middleware=[_make_middleware("informer.md")],
     )
 

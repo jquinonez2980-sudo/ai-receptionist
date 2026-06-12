@@ -13,11 +13,10 @@ a specialist literally cannot call a tool it was not given. Tests assert
 the positive (right tool called) not the negative (wrong tool not called),
 because the negative is already structurally impossible.
 
-KB-miss limitation:
-  In the Phase 4 graph, routing happens on USER INPUT — before tools run.
-  If informer's KB search returns nothing, informer cannot re-route to closer
-  mid-turn (no tool available). This is a known Phase 4 trade-off; the
-  KB-miss escalation invariant is Phase 1 only (test_evals.py covers it).
+KB-miss escalation (Phase 2):
+  The informer now has escalate_to_human, so when its KB search returns
+  NO_RESULTS it escalates instead of fabricating — closing the earlier Phase 4
+  gap. test_ma_informer_escalates_on_kb_miss covers this end-to-end.
 
 These tests call gpt-4o for real — need OPENAI_API_KEY. Rate-limit guard
 via conftest.py autouse fixture (5s before each test).
@@ -125,6 +124,25 @@ def test_ma_pricing_then_booking_crosses_specialists():
     assert "list_available_slots" in names, (
         f"third turn must have called list_available_slots: {names}"
     )
+
+
+def test_ma_informer_escalates_on_kb_miss():
+    """Phase 2: when the KB can't answer, the informer escalates — never fabricates.
+
+    An obscure off-script question routes to the informer, whose KB search returns
+    NO_RESULTS (kb_empty=True). The informer must call escalate_to_human rather than
+    guessing. Proves the closed Phase 4 gap end-to-end through the real graph.
+    """
+    calls, _ = run_multi_agent_conversation(
+        ["Do you provide on-site helicopter maintenance certification?"],
+        thread_id="eval-ma-kbmiss",
+        kb_empty=True,
+    )
+    names = tool_names(calls)
+    assert "escalate_to_human" in names, (
+        f"informer must escalate on KB miss, not fabricate: {names}"
+    )
+    assert "book_appointment" not in names
 
 
 def test_ma_no_booking_before_step4_confirmation():
