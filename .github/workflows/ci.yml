@@ -1,0 +1,50 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  import-check:
+    name: Import smoke check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Smoke-import agent and graph
+        env:
+          OPENAI_API_KEY: sk-test-ci-placeholder
+        run: |
+          python -c "from agents import receptionist_agent; print('agents OK')"
+          python -c "from graph import graph; print('graph OK')"
+
+  unit-tests:
+    name: Unit tests (no model)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run unit tests
+        env:
+          PYTHONUTF8: "1"
+          # OPENAI_API_KEY intentionally absent — all model-gated tests auto-skip
+          # CI=true is set automatically by GitHub Actions — conftest skips rate-limit sleep
+        run: pytest evals/ -v --tb=short
