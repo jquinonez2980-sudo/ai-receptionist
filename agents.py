@@ -70,7 +70,16 @@ def _make_middleware(prompt_name: str):
 
 # ── Phase 1: single receptionist agent ───────────────────────────────────────
 
-llm = ChatOpenAI(model="gpt-4o", temperature=0)
+# Lazy init: ChatOpenAI validates the API key at construction time, which
+# crashes any import of this module in environments without OPENAI_API_KEY
+# (e.g. CI unit tests, linters). Wrapping in try/except lets the module
+# load cleanly; actual agent calls will fail at invocation time as expected.
+try:
+    llm = ChatOpenAI(model="gpt-4o", temperature=0)
+    _llm_ready = True
+except Exception:
+    llm = None
+    _llm_ready = False
 
 ESMI_TOOLS = [
     search_knowledge_base,
@@ -88,10 +97,9 @@ def make_prompt_middleware():
     return _make_middleware("esmi_system.md")
 
 
-receptionist_agent = create_agent(
-    llm,
-    tools=ESMI_TOOLS,
-    middleware=[make_prompt_middleware()],
+receptionist_agent = (
+    create_agent(llm, tools=ESMI_TOOLS, middleware=[make_prompt_middleware()])
+    if _llm_ready else None
 )
 
 
