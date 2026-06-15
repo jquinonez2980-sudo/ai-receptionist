@@ -11,6 +11,7 @@ Railway:      see railway.toml
 
 from __future__ import annotations
 
+import asyncio
 import hmac
 import json
 import logging
@@ -55,17 +56,29 @@ app = FastAPI(title="Esmi API", version="1.0", lifespan=lifespan)
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
+# Comma-separated list of allowed CORS origins, e.g.:
+#   ALLOWED_ORIGINS=https://orchelix.com,https://www.orchelix.com
+# Falls back to ["*"] when unset (local dev only).
+_ALLOWED_ORIGINS = [
+    o.strip() for o in os.environ.get("ALLOWED_ORIGINS", "").split(",") if o.strip()
+] or ["*"]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],   # Next.js proxies all requests; browser never hits this directly
+    allow_origins=_ALLOWED_ORIGINS,
     allow_methods=["GET", "POST", "OPTIONS"],
-    allow_headers=["Content-Type"],
+    allow_headers=["Content-Type", "X-Chat-Secret"],
 )
 
 
-# ── VAPI webhook authentication ─────────────────────────────────────────────────
+# ── Auth helpers ──────────────────────────────────────────────────────────────
 
 VAPI_SERVER_SECRET = os.environ.get("VAPI_SERVER_SECRET")
+
+# Shared secret the Next.js proxy sends on every /chat request.
+# Fail-open when unset (logs a warning) so the endpoint stays usable before
+# the secret is wired up in Railway + Vercel. Once set, missing/wrong header → 401.
+CHAT_PROXY_SECRET = os.environ.get("CHAT_PROXY_SECRET")
 
 # Set ALLOW_UNAUTHENTICATED_VOICE=1 only in local dev when you don't want to
 # configure the full VAPI secret. Never set this on Railway/production.
@@ -99,6 +112,24 @@ def _verify_vapi_secret(request: Request) -> None:
     provided = request.headers.get("x-vapi-secret", "")
     if not hmac.compare_digest(provided, VAPI_SERVER_SECRET):
         log.warning("Rejected /voice request: bad or missing X-Vapi-Secret header.")
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+
+def _verify_chat_secret(request: Request) -> None:
+    """Reject /chat requests missing the shared proxy secret.
+
+    Fail-open when CHAT_PROXY_SECRET is not set in Railway (logs a warning so the
+    misconfiguration is visible). Once the secret IS set, any request without the
+    correct X-Chat-Secret header is rejected with 401.
+    """
+    if not CHAT_PROXY_SECRET:
+        log.warning(
+            "CHAT_PROXY_SECRET not set — /chat is open to direct access. "
+            "Set CHAT_PROXY_SECRET in Railway and X-Chat-Secret in the Next.js proxy."
+        )
+        return
+    provided = request.headers.get("X-Chat-Secret", "")
+    if not hmac.compare_digest(provided, CHAT_PROXY_SECRET):
         raise HTTPException(status_code=401, detail="Unauthorized")
 
 
@@ -408,6 +439,7 @@ async def health_calendar(request: Request) -> dict:
 @app.post("/chat")
 @limiter.limit("10/minute")
 async def chat(request: Request, req: ChatRequest) -> StreamingResponse:
+    _verify_chat_secret(request)
     tenant_id = _resolve_tenant(request, req)
     return StreamingResponse(
         _stream_chat(req.message, req.thread_id, tenant_id),
@@ -535,7 +567,7 @@ async def voice_tools(request: Request) -> dict:
             params = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
             log.info("VAPI tool-calls: %s | params: %s", name, params)
             try:
-                result = _run_voice_tool(name, params, tenant_id)
+                result = await asyncio.to_thread(_run_voice_tool, name, params, tenant_id)
             except Exception:
                 log.exception("VAPI tool %s failed", name)
                 result = "Something went wrong — I'll connect you with our team."
@@ -548,7 +580,7 @@ async def voice_tools(request: Request) -> dict:
     params = fn.get("parameters", {})
     log.info("VAPI function-call: %s | params: %s", name, params)
     try:
-        result = _run_voice_tool(name, params, tenant_id)
+        result = await asyncio.to_thread(_run_voice_tool, name, params, tenant_id)
     except Exception:
         log.exception("VAPI tool %s failed", name)
         result = "Something went wrong — I'll connect you with our team."
