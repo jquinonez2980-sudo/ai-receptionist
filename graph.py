@@ -413,4 +413,9 @@ async def build_graph_async():
 
 # Module-level instance: MemorySaver (tests + local dev).
 # api.py replaces this at startup via build_graph_async().
-graph = build_graph()
+# Wrapped in try/except so the module can be imported without OPENAI_API_KEY
+# (e.g. CI unit tests, linters). Production always has the key set via Railway.
+try:
+    graph = build_graph()
+except Exception:
+    graph = None
