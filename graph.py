@@ -13,13 +13,13 @@ import os
 from typing import Optional
 
 from langchain_core.runnables import RunnableConfig
-from langgraph.graph import StateGraph, END
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.checkpoint.memory import MemorySaver
+from langgraph.graph import END, StateGraph
 
-from state import AgentState
-from agents import receptionist_agent, make_informer, make_booker, make_closer
+from agents import make_booker, make_closer, make_informer, receptionist_agent
 from observability import init_observability
+from state import AgentState
 
 log = logging.getLogger(__name__)
 init_observability()
@@ -221,8 +221,8 @@ def _compress_node(state: AgentState) -> dict:
     context without losing key lead/booking details.
     """
     from langchain_core.messages import SystemMessage
-    from langgraph.graph.message import RemoveMessage
     from langchain_openai import ChatOpenAI
+    from langgraph.graph.message import RemoveMessage
 
     msgs = state.get("messages") or []
     human_count = sum(1 for m in msgs if getattr(m, "type", None) == "human")
@@ -280,7 +280,11 @@ def _make_informer_node(informer):
         msgs = result.get("messages", [])
         last = msgs[-1].content if msgs else ""
         # Pricing discussed = warmer lead (20 pts); any informer reply = mild intent (5 pts).
-        bump = 20 if any(p in last for p in ["$8,500", "$9,500", "$24,000", "1,099", "1,299", "2,499"]) else 5
+        from tenants import load_tenant
+        tenant_id = ((config or {}).get("configurable") or {}).get("tenant_id") or "default"
+        _tenant_cfg = load_tenant(tenant_id)
+        pricing_signals = [str(v) for p in _tenant_cfg.pricing for v in (p.get("setup_from"), p.get("monthly_from")) if v]
+        bump = 20 if any(p in last for p in pricing_signals) else 5
         return {
             "messages": msgs,
             "lead_score": min(100, (state.get("lead_score") or 0) + bump),
@@ -308,8 +312,11 @@ def _make_booker_node(booker):
         qualified = state.get("qualified") or False
         booked = False
 
-        # Scan for a book_appointment tool call in this turn's messages.
-        for m in msgs:
+        # Scan only the new messages added this turn (not the full history) to
+        # avoid re-firing booked=True on tool calls from earlier turns.
+        prior_count = len(state.get("messages") or [])
+        new_msgs = msgs[prior_count:] if len(msgs) > prior_count else msgs
+        for m in new_msgs:
             tool_calls = getattr(m, "tool_calls", None) or []
             for tc in tool_calls:
                 if tc.get("name") == "book_appointment":
