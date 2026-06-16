@@ -1,3 +1,14 @@
 # Dev/test-only dependencies. NOT installed on Railway (production uses
 # requirements.txt). Install locally with:  pip install -r requirements-dev.txt
 pytest>=8.0
+ruff>=0.4
+
+# Streamlit dev UI (not deployed)
+streamlit
+altair
+pandas
+pyarrow
+pydeck
+GitPython
+watchdog
+pillow
