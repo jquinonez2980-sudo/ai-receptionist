@@ -27,6 +27,7 @@
 from __future__ import annotations
 
 import hashlib
+import html
 import json
 import logging
 import os
@@ -34,7 +35,7 @@ import re
 import tempfile
 import threading
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -71,15 +72,124 @@ _CAL_SERVICE_CACHE: dict[str, object] = {}
 _CAL_LOCK = threading.Lock()
 
 
+def resolve_google_credentials(tenant_id: str = "default"):
+    """Resolve Google Calendar OAuth credentials for a tenant.
+
+    For "default": tries GOOGLE_TOKEN_B64 → individual env vars →
+      GOOGLE_TOKEN_JSON → local token.json.
+    For other tenants: tries per-tenant GOOGLE_TOKEN_B64 via tenant_secret,
+      then per-tenant individual vars. Raises RuntimeError if no credentials
+      are found — callers catch this and return _CALENDAR_FALLBACK.
+    """
+    from google.oauth2.credentials import Credentials
+
+    def _creds_from_token_data(data: dict):
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+            json.dump(data, f)
+            tmp_path = f.name
+        try:
+            return Credentials.from_authorized_user_file(tmp_path)
+        finally:
+            os.unlink(tmp_path)
+
+    if tenant_id != "default":
+        # Per-tenant only — never fall back to the default/Orchelix token.
+        token_b64 = tenant_secret(tenant_id, "GOOGLE_TOKEN_B64")
+        if token_b64:
+            try:
+                import base64
+                data = json.loads(base64.b64decode(token_b64).decode("utf-8"))
+                creds = _creds_from_token_data(data)
+                log.info("Google Calendar: credentials loaded from per-tenant GOOGLE_TOKEN_B64 (%s).", tenant_id)
+                return creds
+            except Exception as e:
+                log.warning("Per-tenant GOOGLE_TOKEN_B64 decode failed for %s: %s", tenant_id, e)
+
+        refresh_token = tenant_secret(tenant_id, "GOOGLE_REFRESH_TOKEN")
+        client_id = tenant_secret(tenant_id, "GOOGLE_CLIENT_ID")
+        client_secret = tenant_secret(tenant_id, "GOOGLE_CLIENT_SECRET")
+        if refresh_token and client_id and client_secret:
+            try:
+                data = {
+                    "refresh_token": refresh_token,
+                    "client_id": client_id,
+                    "client_secret": client_secret,
+                    "token_uri": tenant_secret(tenant_id, "GOOGLE_TOKEN_URI") or "https://oauth2.googleapis.com/token",
+                    "scopes": ["https://www.googleapis.com/auth/calendar"],
+                }
+                return _creds_from_token_data(data)
+            except Exception as e:
+                log.warning("Per-tenant individual Google creds failed for %s: %s", tenant_id, e)
+
+        raise RuntimeError(f"Calendar not configured for tenant {tenant_id}")
+
+    # Default tenant — full resolution chain.
+    creds = None
+
+    token_b64 = os.environ.get("GOOGLE_TOKEN_B64")
+    if token_b64:
+        try:
+            import base64
+            data = json.loads(base64.b64decode(token_b64).decode("utf-8"))
+            creds = _creds_from_token_data(data)
+            log.info("Google Calendar: credentials loaded from GOOGLE_TOKEN_B64.")
+        except Exception as e:
+            log.warning("GOOGLE_TOKEN_B64 decode failed: %s", e)
+
+    if creds is None:
+        refresh_token = os.environ.get("GOOGLE_REFRESH_TOKEN")
+        client_id = os.environ.get("GOOGLE_CLIENT_ID")
+        client_secret = os.environ.get("GOOGLE_CLIENT_SECRET")
+        if refresh_token and client_id and client_secret:
+            try:
+                data = {
+                    "refresh_token": refresh_token,
+                    "client_id": client_id,
+                    "client_secret": client_secret,
+                    "token_uri": os.environ.get("GOOGLE_TOKEN_URI", "https://oauth2.googleapis.com/token"),
+                    "scopes": ["https://www.googleapis.com/auth/calendar"],
+                }
+                creds = _creds_from_token_data(data)
+            except Exception as e:
+                log.warning("Individual Google credential env vars failed: %s", e)
+
+    if creds is None:
+        token_json_env = os.environ.get("GOOGLE_TOKEN_JSON")
+        if token_json_env:
+            try:
+                data = json.loads(token_json_env.strip().strip("'\""))
+                creds = _creds_from_token_data(data)
+            except Exception as e:
+                log.warning("GOOGLE_TOKEN_JSON env var parse failed: %s", e)
+
+    if creds is None:
+        try:
+            import streamlit as st  # type: ignore
+            data = json.loads(st.secrets["GOOGLE_TOKEN_JSON"])
+            creds = _creds_from_token_data(data)
+        except Exception:
+            pass
+
+    if creds is None:
+        token_path = os.getenv("GOOGLE_TOKEN_PATH", "token.json")
+        if os.path.exists(token_path):
+            creds = Credentials.from_authorized_user_file(token_path)
+
+    if creds is None:
+        raise RuntimeError(
+            "Google Calendar credentials not found. "
+            "Set GOOGLE_TOKEN_B64, GOOGLE_REFRESH_TOKEN, or GOOGLE_TOKEN_JSON "
+            "in Railway env vars, or provide a local token.json (gitignored)."
+        )
+
+    return creds
+
+
 def _get_calendar_service(tenant_id: str = "default"):
-    """Return a cached Google Calendar service client.
+    """Return a cached Google Calendar service client for a tenant.
 
-    Tries (in order):
-      1. Streamlit secret  GOOGLE_TOKEN_JSON  (recommended for Streamlit Cloud)
-      2. Local token.json file                (works locally; must be gitignored!)
-
-    Tenant_id is a forward-looking hook — Phase 2 will look up per-tenant
-    tokens by this key. Phase 1 always uses the global token.
+    Raises RuntimeError for non-default tenants with no credentials configured.
+    Every tool catches RuntimeError and returns _CALENDAR_FALLBACK.
     """
     if tenant_id in _CAL_SERVICE_CACHE:
         return _CAL_SERVICE_CACHE[tenant_id]
@@ -88,100 +198,9 @@ def _get_calendar_service(tenant_id: str = "default"):
         if tenant_id in _CAL_SERVICE_CACHE:
             return _CAL_SERVICE_CACHE[tenant_id]
 
-        from google.oauth2.credentials import Credentials
         from googleapiclient.discovery import build
 
-        creds = None
-
-        # Method 1: Base64-encoded token blob (from .env baked into Docker image)
-        token_b64 = os.environ.get("GOOGLE_TOKEN_B64")
-        if token_b64:
-            try:
-                import base64
-                token_data = json.loads(base64.b64decode(token_b64).decode("utf-8"))
-                with tempfile.NamedTemporaryFile(
-                    mode="w", suffix=".json", delete=False
-                ) as f:
-                    json.dump(token_data, f)
-                    tmp_path = f.name
-                creds = Credentials.from_authorized_user_file(tmp_path)
-                os.unlink(tmp_path)
-                log.info("Google Calendar: credentials loaded from GOOGLE_TOKEN_B64.")
-            except Exception as e:
-                log.warning(f"GOOGLE_TOKEN_B64 decode failed: {e}")
-
-        # Method 2: Individual env vars — no JSON quoting issues (preferred for Railway)
-        # Set GOOGLE_REFRESH_TOKEN, GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET in Railway vars.
-        refresh_token = os.environ.get("GOOGLE_REFRESH_TOKEN")
-        client_id = os.environ.get("GOOGLE_CLIENT_ID")
-        client_secret = os.environ.get("GOOGLE_CLIENT_SECRET")
-        if refresh_token and client_id and client_secret:
-            try:
-                token_data = {
-                    "refresh_token": refresh_token,
-                    "client_id": client_id,
-                    "client_secret": client_secret,
-                    "token_uri": os.environ.get(
-                        "GOOGLE_TOKEN_URI", "https://oauth2.googleapis.com/token"
-                    ),
-                    "scopes": ["https://www.googleapis.com/auth/calendar"],
-                }
-                with tempfile.NamedTemporaryFile(
-                    mode="w", suffix=".json", delete=False
-                ) as f:
-                    json.dump(token_data, f)
-                    tmp_path = f.name
-                creds = Credentials.from_authorized_user_file(tmp_path)
-                os.unlink(tmp_path)
-            except Exception as e:
-                log.warning(f"Individual Google credential env vars failed: {e}")
-
-        # Method 2: GOOGLE_TOKEN_JSON env var (full JSON blob)
-        if creds is None:
-            token_json_env = os.environ.get("GOOGLE_TOKEN_JSON")
-            if token_json_env:
-                try:
-                    stripped = token_json_env.strip().strip("'\"")
-                    token_data = json.loads(stripped)
-                    with tempfile.NamedTemporaryFile(
-                        mode="w", suffix=".json", delete=False
-                    ) as f:
-                        json.dump(token_data, f)
-                        tmp_path = f.name
-                    creds = Credentials.from_authorized_user_file(tmp_path)
-                    os.unlink(tmp_path)
-                except Exception as e:
-                    log.warning(f"GOOGLE_TOKEN_JSON env var parse failed: {e}")
-
-        # Method 3: Streamlit Cloud secret (legacy)
-        if creds is None:
-            try:
-                import streamlit as st  # type: ignore
-
-                token_data = json.loads(st.secrets["GOOGLE_TOKEN_JSON"])
-                with tempfile.NamedTemporaryFile(
-                    mode="w", suffix=".json", delete=False
-                ) as f:
-                    json.dump(token_data, f)
-                    tmp_path = f.name
-                creds = Credentials.from_authorized_user_file(tmp_path)
-                os.unlink(tmp_path)
-            except Exception:
-                pass
-
-        # Method 4: Local token.json file
-        if creds is None:
-            token_path = os.getenv("GOOGLE_TOKEN_PATH", "token.json")
-            if os.path.exists(token_path):
-                creds = Credentials.from_authorized_user_file(token_path)
-
-        if creds is None:
-            raise RuntimeError(
-                "Google Calendar credentials not found. "
-                "Set GOOGLE_TOKEN_JSON in Streamlit secrets, or provide a "
-                "local token.json (gitignored). See .env.example."
-            )
-
+        creds = resolve_google_credentials(tenant_id)
         service = build("calendar", "v3", credentials=creds, cache_discovery=False)
         _CAL_SERVICE_CACHE[tenant_id] = service
         return service
@@ -297,7 +316,7 @@ def _send_booking_notification(
         except Exception:
             formatted_end_time = end_time
 
-        subject = f"📅 New Booking — {summary}"
+        subject = f"📅 New Booking — {html.escape(summary)}"
         html_content = f"""
         <div style="font-family: Inter, Arial, sans-serif; max-width: 600px; margin: 0 auto;">
             <div style="background: linear-gradient(135deg, #0A2540, #0e3460);
@@ -305,7 +324,7 @@ def _send_booking_notification(
                 <h1 style="color: #ffffff; margin: 0; font-size: 20px;">📅 New Appointment Booked</h1>
                 <p style="color: #00D4EE; margin: 4px 0 0; font-size: 12px;
                            letter-spacing: 0.06em; text-transform: uppercase;">
-                    {cfg.company_name} — Esmi Receptionist
+                    {html.escape(cfg.company_name)} — Esmi Receptionist
                 </p>
             </div>
             <div style="background: #f8f9fa; padding: 28px; border: 1px solid #e2e8f0;
@@ -313,13 +332,13 @@ def _send_booking_notification(
                 <p style="color: #0A2540; font-size: 15px;">A new appointment booked through <b>Esmi</b>:</p>
                 <table style="width: 100%; border-collapse: collapse; margin-top: 12px;">
                     <tr><td style="color:#94a3b8;text-transform:uppercase;font-size:12px;padding:10px 0;width:140px;">Title</td>
-                        <td style="color:#0A2540;font-weight:600;">{summary}</td></tr>
+                        <td style="color:#0A2540;font-weight:600;">{html.escape(summary)}</td></tr>
                     <tr><td style="color:#94a3b8;text-transform:uppercase;font-size:12px;padding:10px 0;">Date</td>
-                        <td style="color:#0A2540;font-weight:600;">{formatted_date}</td></tr>
+                        <td style="color:#0A2540;font-weight:600;">{html.escape(formatted_date)}</td></tr>
                     <tr><td style="color:#94a3b8;text-transform:uppercase;font-size:12px;padding:10px 0;">Time</td>
-                        <td style="color:#0A2540;font-weight:600;">{formatted_time} – {formatted_end_time}</td></tr>
+                        <td style="color:#0A2540;font-weight:600;">{html.escape(formatted_time)} – {html.escape(formatted_end_time)}</td></tr>
                     <tr><td style="color:#94a3b8;text-transform:uppercase;font-size:12px;padding:10px 0;">Client</td>
-                        <td>{attendee_email or "Not provided"}</td></tr>
+                        <td>{html.escape(attendee_email) if attendee_email else "Not provided"}</td></tr>
                 </table>
             </div>
         </div>
@@ -639,6 +658,7 @@ def list_available_slots(start_date: str, end_date: str, config: RunnableConfig 
         window_start = tz.localize(start_dt.replace(hour=0, minute=0, second=0))
         window_end = tz.localize(end_dt.replace(hour=23, minute=59, second=59))
 
+        cal_id = cfg.calendar_id
         result = (
             service.freebusy()
             .query(
@@ -646,12 +666,12 @@ def list_available_slots(start_date: str, end_date: str, config: RunnableConfig 
                     "timeMin": window_start.isoformat(),
                     "timeMax": window_end.isoformat(),
                     "timeZone": cfg.business_tz,
-                    "items": [{"id": "primary"}],
+                    "items": [{"id": cal_id}],
                 }
             )
             .execute()
         )
-        busy_periods = result["calendars"]["primary"]["busy"]
+        busy_periods = result["calendars"][cal_id]["busy"]
 
         busy_ranges = []
         for period in busy_periods:
@@ -703,7 +723,7 @@ def list_available_slots(start_date: str, end_date: str, config: RunnableConfig 
     except RuntimeError as e:
         log.error("list_available_slots: calendar not configured: %s", e)
         return _CALENDAR_FALLBACK
-    except Exception as e:
+    except Exception:
         log.exception("list_available_slots failed")
         return _CALENDAR_FALLBACK
 
@@ -720,7 +740,10 @@ def _idem_event_id(idem_key: str) -> str:
     return hashlib.sha256(idem_key.encode()).hexdigest()
 
 
-def _slot_still_free(service, start_iso: str, end_iso: str, business_tz: str = _BUSINESS_TZ) -> bool:
+def _slot_still_free(
+    service, start_iso: str, end_iso: str,
+    business_tz: str = _BUSINESS_TZ, calendar_id: str = "primary",
+) -> bool:
     """Re-verify a slot is free immediately before insert. Closes the window
     where two simultaneous callers could both pass the LLM's list step and
     then both try to book."""
@@ -732,12 +755,12 @@ def _slot_still_free(service, start_iso: str, end_iso: str, business_tz: str = _
                     "timeMin": start_iso,
                     "timeMax": end_iso,
                     "timeZone": business_tz,
-                    "items": [{"id": "primary"}],
+                    "items": [{"id": calendar_id}],
                 }
             )
             .execute()
         )
-        return len(result["calendars"]["primary"]["busy"]) == 0
+        return len(result["calendars"][calendar_id]["busy"]) == 0
     except Exception as e:
         log.warning(f"Pre-book freebusy check failed: {e}. Proceeding with insert.")
         return True  # fail-open; the insert itself is still idempotent
@@ -781,14 +804,15 @@ def book_appointment(
         service = _get_calendar_service(tenant_id)
         event_id = _idem_event_id(idempotency_key)
 
+        cal_id = cfg.calendar_id
         # Pre-flight race check (best-effort; insert is the source of truth).
-        if not _slot_still_free(service, start_time, end_time, cfg.business_tz):
+        if not _slot_still_free(service, start_time, end_time, cfg.business_tz, cal_id):
             # The slot is busy — check whether the conflict IS our own event
             # (idempotent re-attempt), in which case we just return success.
             try:
                 existing = (
                     service.events()
-                    .get(calendarId="primary", eventId=event_id)
+                    .get(calendarId=cal_id, eventId=event_id)
                     .execute()
                 )
                 when = _friendly_when(existing["start"].get("dateTime", start_time))
@@ -821,21 +845,17 @@ def book_appointment(
         def _insert():
             return (
                 service.events()
-                .insert(calendarId="primary", body=event_body, sendUpdates=send_updates)
+                .insert(calendarId=cal_id, body=event_body, sendUpdates=send_updates)
                 .execute()
             )
 
         try:
-            created = _retry_calendar(_insert)
+            _retry_calendar(_insert)
         except Exception as e:
             # Google raises HttpError with resp.status==409 on duplicate id.
             status = getattr(getattr(e, "resp", None), "status", None)
             if status == 409:
-                created = (
-                    service.events()
-                    .get(calendarId="primary", eventId=event_id)
-                    .execute()
-                )
+                service.events().get(calendarId=cal_id, eventId=event_id).execute()
                 log.info(f"book_appointment: idempotent hit ({event_id[:8]}…)")
             else:
                 raise
@@ -857,7 +877,7 @@ def book_appointment(
     except RuntimeError as e:
         log.error("book_appointment: calendar not configured: %s", e)
         return _CALENDAR_FALLBACK
-    except Exception as e:
+    except Exception:
         log.exception("book_appointment failed")
         return _CALENDAR_FALLBACK
 
@@ -898,7 +918,7 @@ def find_booking(contact: str, config: RunnableConfig = None) -> str:
         events = (
             service.events()
             .list(
-                calendarId="primary",
+                calendarId=cfg.calendar_id,
                 timeMin=now.isoformat(),
                 timeMax=future.isoformat(),
                 singleEvents=True,
@@ -931,10 +951,13 @@ def cancel_appointment(event_id: str, config: RunnableConfig = None) -> str:
     Always confirm with the caller before calling this — cancellation is final.
     """
     try:
-        service = _get_calendar_service(_tenant_from_config(config))
+        tenant_id = _tenant_from_config(config)
+        cfg = load_tenant(tenant_id)
+        service = _get_calendar_service(tenant_id)
+        cal_id = cfg.calendar_id
         try:
             event = (
-                service.events().get(calendarId="primary", eventId=event_id).execute()
+                service.events().get(calendarId=cal_id, eventId=event_id).execute()
             )
         except Exception:
             return "I couldn't find that booking — it may have already been canceled."
@@ -942,7 +965,7 @@ def cancel_appointment(event_id: str, config: RunnableConfig = None) -> str:
         send_updates = "all" if event.get("attendees") else "none"
         _retry_calendar(
             lambda: service.events()
-            .delete(calendarId="primary", eventId=event_id, sendUpdates=send_updates)
+            .delete(calendarId=cal_id, eventId=event_id, sendUpdates=send_updates)
             .execute()
         )
         return f"Done — I've canceled your appointment for {when}."
@@ -971,16 +994,17 @@ def reschedule_appointment(
         tenant_id = _tenant_from_config(config)
         cfg = load_tenant(tenant_id)
         service = _get_calendar_service(tenant_id)
+        cal_id = cfg.calendar_id
         try:
             event = (
-                service.events().get(calendarId="primary", eventId=event_id).execute()
+                service.events().get(calendarId=cal_id, eventId=event_id).execute()
             )
         except Exception:
             return (
                 "I couldn't find that booking — it may have been canceled. "
                 "Want me to book a new time?"
             )
-        if not _slot_still_free(service, new_start_time, new_end_time, cfg.business_tz):
+        if not _slot_still_free(service, new_start_time, new_end_time, cfg.business_tz, cal_id):
             return "That new time isn't available — could you pick another slot?"
 
         event["start"] = {"dateTime": new_start_time, "timeZone": cfg.business_tz}
@@ -988,7 +1012,7 @@ def reschedule_appointment(
         send_updates = "all" if event.get("attendees") else "none"
         _retry_calendar(
             lambda: service.events()
-            .update(calendarId="primary", eventId=event_id, body=event, sendUpdates=send_updates)
+            .update(calendarId=cal_id, eventId=event_id, body=event, sendUpdates=send_updates)
             .execute()
         )
 
@@ -1033,8 +1057,8 @@ def escalate_to_human(reason: str, user_summary: str, config: RunnableConfig = N
         from sendgrid import SendGridAPIClient
         from sendgrid.helpers.mail import Mail
 
-        ts = datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
-        subject = f"[Esmi Escalation] {reason}"
+        ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+        subject = f"[Esmi Escalation] {html.escape(reason)}"
         html_content = f"""
         <div style="font-family: Inter, Arial, sans-serif; max-width: 600px; margin: 0 auto;">
             <div style="background: linear-gradient(135deg, #0A2540, #0e3460);
@@ -1042,18 +1066,18 @@ def escalate_to_human(reason: str, user_summary: str, config: RunnableConfig = N
                 <h1 style="color: #ffffff; margin: 0; font-size: 20px;">🚨 Esmi Escalation</h1>
                 <p style="color: #00D4EE; margin: 4px 0 0; font-size: 12px;
                            letter-spacing: 0.06em; text-transform: uppercase;">
-                    {cfg.company_name} — Action Required
+                    {html.escape(cfg.company_name)} — Action Required
                 </p>
             </div>
             <div style="background: #f8f9fa; padding: 28px; border: 1px solid #e2e8f0;
                         border-radius: 0 0 12px 12px;">
                 <table style="width: 100%; border-collapse: collapse; margin-top: 4px;">
                     <tr><td style="color:#94a3b8;text-transform:uppercase;font-size:12px;padding:10px 0;width:140px;">Reason</td>
-                        <td style="color:#0A2540;font-weight:600;">{reason}</td></tr>
+                        <td style="color:#0A2540;font-weight:600;">{html.escape(reason)}</td></tr>
                     <tr><td style="color:#94a3b8;text-transform:uppercase;font-size:12px;padding:10px 0;">Time</td>
                         <td style="color:#0A2540;">{ts}</td></tr>
                     <tr><td style="color:#94a3b8;text-transform:uppercase;font-size:12px;padding:10px 0;vertical-align:top;">Summary</td>
-                        <td style="color:#0A2540;">{user_summary}</td></tr>
+                        <td style="color:#0A2540;">{html.escape(user_summary)}</td></tr>
                 </table>
             </div>
         </div>

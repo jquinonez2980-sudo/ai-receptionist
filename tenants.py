@@ -19,6 +19,7 @@ import json
 import logging
 import os
 import threading
+import warnings
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
@@ -53,6 +54,7 @@ class TenantConfig:
     pricing: list = field(default_factory=list)   # list[dict] (see tools._PRICING shape)
     vapi_assistant_ids: tuple[str, ...] = ()
     vapi_phone_number_ids: tuple[str, ...] = ()
+    calendar_id: str = "primary"  # Google Calendar identifier
 
     @property
     def hours_range(self) -> range:
@@ -73,7 +75,7 @@ def _default_config() -> TenantConfig:
     Late import avoids an import cycle (tools.py imports this module at top).
     Called only at request time, never during module import.
     """
-    from tools import _PRICING, _BUSINESS_TZ, _HOURS, _SLOT_MIN
+    from tools import _BUSINESS_TZ, _HOURS, _PRICING, _SLOT_MIN
 
     return TenantConfig(
         tenant_id="default",
@@ -114,6 +116,7 @@ def _config_from_file(tenant_id: str, data: dict) -> TenantConfig:
         pricing=data.get("pricing") or list(base.pricing),
         vapi_assistant_ids=tuple(vapi.get("assistant_ids") or ()),
         vapi_phone_number_ids=tuple(vapi.get("phone_number_ids") or ()),
+        calendar_id=data.get("calendar_id", "primary"),
     )
 
 
@@ -146,6 +149,13 @@ def load_tenant(tenant_id: str = "default") -> TenantConfig:
         if cached is not None:
             return cached
         cfg = _build(tid)
+        if tid != "default":
+            if cfg.email_from == _DEFAULT_EMAIL_FROM or cfg.email_booking_to == _DEFAULT_EMAIL_BOOKING_TO:
+                warnings.warn(
+                    f"Tenant '{tid}' is inheriting Orchelix email config. "
+                    f"Set emails.from / emails.booking_to in tenants/{tid}/config.json.",
+                    stacklevel=2,
+                )
         _cache[tid] = cfg
         return cfg
 
