@@ -16,10 +16,13 @@ from dotenv import load_dotenv
 
 load_dotenv()  # populate OPENAI_API_KEY before the skipif below is evaluated
 
-from tenants import (
-    load_tenant, tenant_secret, tenant_exists, resolve_vapi_tenant, namespaced_thread,
+from tenants import (  # noqa: E402
+    load_tenant,
+    namespaced_thread,
+    resolve_vapi_tenant,
+    tenant_exists,
+    tenant_secret,
 )
-
 
 # ── Tenant config isolation (no model) ───────────────────────────────────────
 
@@ -107,6 +110,31 @@ def test_prompt_company_substitution():
     assert "{company}" not in a
 
 
+# ── Per-tenant calendar isolation (no model) ─────────────────────────────────
+
+def test_calendar_service_raises_for_unconfigured_tenant(monkeypatch):
+    """_get_calendar_service raises RuntimeError for a tenant with no credentials."""
+    from tools import _CAL_SERVICE_CACHE, _get_calendar_service
+
+    # Clear cache so our tenant isn't accidentally served from a prior test run
+    _CAL_SERVICE_CACHE.pop("acme", None)
+
+    # Ensure no TENANT_ACME_GOOGLE_TOKEN_B64 or individual vars exist
+    monkeypatch.delenv("TENANT_ACME_GOOGLE_TOKEN_B64", raising=False)
+    monkeypatch.delenv("TENANT_ACME_GOOGLE_REFRESH_TOKEN", raising=False)
+    monkeypatch.delenv("TENANT_ACME_GOOGLE_CLIENT_ID", raising=False)
+    monkeypatch.delenv("TENANT_ACME_GOOGLE_CLIENT_SECRET", raising=False)
+
+    with pytest.raises(RuntimeError, match="Calendar not configured for tenant acme"):
+        _get_calendar_service("acme")
+
+
+def test_calendar_id_defaults_to_primary():
+    """TenantConfig.calendar_id defaults to 'primary' for unconfigured tenants."""
+    cfg = load_tenant("default")
+    assert cfg.calendar_id == "primary"
+
+
 # ── End-to-end: Acme through the REAL multi-agent graph (model) ──────────────
 
 @pytest.mark.skipif(
@@ -121,6 +149,7 @@ def test_acme_pricing_end_to_end_real_graph():
     pricing). Proves tenant context propagates through every layer at once.
     """
     from langgraph.checkpoint.memory import MemorySaver
+
     from graph import _build_multi_agent_graph
 
     g = _build_multi_agent_graph(MemorySaver())
