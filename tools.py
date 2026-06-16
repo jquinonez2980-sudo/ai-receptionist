@@ -571,6 +571,7 @@ def get_pricing(config: RunnableConfig = None) -> str:
 _BUSINESS_TZ = "America/Toronto"
 _HOURS = range(9, 17)  # 9 AM – 5 PM
 _SLOT_MIN = 30
+_BUSINESS_DAYS = (0, 1, 2, 3, 4)  # Mon–Fri (datetime.weekday(): Monday=0 ... Sunday=6)
 
 # Caller-safe message spoken/shown when the calendar is unreachable. It nudges
 # the voice model to fall back to a human transfer instead of reading a stack trace.
@@ -634,11 +635,28 @@ def _slot_id(start_iso: str) -> str:
     return hashlib.sha1(start_iso.encode()).hexdigest()[:16]
 
 
+def _closed_day_message(start_iso: str, business_days: tuple[int, ...]) -> Optional[str]:
+    """Return a caller-facing message if start_iso falls on a day the tenant is
+    closed, else None. Defense in depth: book_appointment and
+    reschedule_appointment can be called directly (voice path, retries) without
+    ever going through list_available_slots, so the day-of-week filter must be
+    enforced here too, not just at the listing step."""
+    try:
+        dt = datetime.fromisoformat(start_iso)
+    except Exception:
+        return None  # unparseable — let the existing calendar-side validation handle it
+    if dt.weekday() in business_days:
+        return None
+    return (
+        f"We're closed on {dt.strftime('%A')}s — could you pick a different day?"
+    )
+
+
 @tool
 def list_available_slots(start_date: str, end_date: str, config: RunnableConfig = None) -> str:
-    """List bookable slots between start_date and end_date (inclusive), Mon–Fri,
-    during business hours in the business timezone. One freebusy call covers the
-    whole range.
+    """List bookable slots between start_date and end_date (inclusive), on the
+    tenant's configured business days, during business hours in the business
+    timezone. One freebusy call covers the whole range.
 
     Args:
         start_date: ISO date 'YYYY-MM-DD'
@@ -682,7 +700,7 @@ def list_available_slots(start_date: str, end_date: str, config: RunnableConfig 
         available: list[str] = []
         current = start_dt
         while current <= end_dt:
-            if current.weekday() < 5:  # Mon–Fri only
+            if current.weekday() in cfg.business_days:  # tenant's configured days
                 for hour in cfg.hours_range:
                     for minute in (0, 30):
                         slot_start = tz.localize(
@@ -801,6 +819,11 @@ def book_appointment(
 
         tenant_id = _tenant_from_config(config)
         cfg = load_tenant(tenant_id)
+
+        closed_msg = _closed_day_message(start_time, cfg.business_days)
+        if closed_msg:
+            return closed_msg
+
         service = _get_calendar_service(tenant_id)
         event_id = _idem_event_id(idempotency_key)
 
@@ -993,6 +1016,11 @@ def reschedule_appointment(
     try:
         tenant_id = _tenant_from_config(config)
         cfg = load_tenant(tenant_id)
+
+        closed_msg = _closed_day_message(new_start_time, cfg.business_days)
+        if closed_msg:
+            return closed_msg
+
         service = _get_calendar_service(tenant_id)
         cal_id = cfg.calendar_id
         try:
@@ -1044,6 +1072,9 @@ def escalate_to_human(reason: str, user_summary: str, config: RunnableConfig = N
 
     Args:
         reason: Short label, e.g. "hot lead — mentioned budget" or "out of scope question".
+            For a visitor who wants Esmi for their own business, use
+            "New Esmi Lead: [name] — [business type]" (omit "— [business type]" if
+            unknown) — this exact format becomes the email subject verbatim.
         user_summary: 2-3 sentences summarising what the user needs.
     """
     try:
@@ -1058,7 +1089,13 @@ def escalate_to_human(reason: str, user_summary: str, config: RunnableConfig = N
         from sendgrid.helpers.mail import Mail
 
         ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
-        subject = f"[Esmi Escalation] {html.escape(reason)}"
+        # Hot-lead-for-Esmi-itself escalations carry their own pre-formatted
+        # subject (reason == "New Esmi Lead: ..."); other escalations keep the
+        # "[Esmi Escalation]" prefix.
+        if reason.strip().lower().startswith("new esmi lead"):
+            subject = html.escape(reason)
+        else:
+            subject = f"[Esmi Escalation] {html.escape(reason)}"
         html_content = f"""
         <div style="font-family: Inter, Arial, sans-serif; max-width: 600px; margin: 0 auto;">
             <div style="background: linear-gradient(135deg, #0A2540, #0e3460);

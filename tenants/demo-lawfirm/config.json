@@ -1,0 +1,39 @@
+{
+  "company_name": "Ramirez Immigration & Family Law",
+  "business_tz": "America/New_York",
+  "business_hours": [9, 17],
+  "business_days": [0, 1, 2, 3, 4],
+  "slot_minutes": 60,
+  "emails": {
+    "from": "hello@ramirezlawfl.com",
+    "booking_to": "office@ramirezlawfl.com",
+    "escalation_to": "office@ramirezlawfl.com"
+  },
+  "sms_signature": "Ramirez Immigration & Family Law",
+  "voice_default_summary": "Legal Consultation",
+  "pricing": [
+    {
+      "name": "Consultation",
+      "popular": true,
+      "setup_from": 0,
+      "monthly_from": 250,
+      "best_for": "Anyone who needs to discuss their immigration or family law matter with the attorney.",
+      "highlights": [
+        "Billed at $250/hour",
+        "Direct time with the attorney",
+        "Payment plans available"
+      ]
+    },
+    {
+      "name": "Case Review",
+      "popular": false,
+      "setup_from": 0,
+      "monthly_from": 500,
+      "best_for": "Clients who want a thorough review of existing documents or a prior case.",
+      "highlights": [
+        "Flat fee — $500",
+        "Payment plans available"
+      ]
+    }
+  ]
+}

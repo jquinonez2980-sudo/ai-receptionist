@@ -1,0 +1,68 @@
+{
+  "company_name": "Fresh Cuts Barbershop",
+  "business_tz": "America/New_York",
+  "business_hours": [9, 19],
+  "business_days": [0, 1, 2, 3, 4, 5],
+  "slot_minutes": 45,
+  "emails": {
+    "from": "hello@freshcutsboca.com",
+    "booking_to": "owner@freshcutsboca.com",
+    "escalation_to": "owner@freshcutsboca.com"
+  },
+  "sms_signature": "Fresh Cuts Barbershop",
+  "voice_default_summary": "Haircut Appointment",
+  "pricing": [
+    {
+      "name": "Classic Haircut",
+      "popular": true,
+      "setup_from": 0,
+      "monthly_from": 35,
+      "best_for": "Regular haircut with clippers and scissors, any style.",
+      "highlights": [
+        "Fade, taper, or scissor cut",
+        "Hot towel neck cleanup included",
+        "45 minutes"
+      ]
+    },
+    {
+      "name": "Haircut + Beard Trim",
+      "popular": false,
+      "setup_from": 0,
+      "monthly_from": 50,
+      "best_for": "Full grooming session — hair and beard in one visit.",
+      "highlights": [
+        "Haircut of your choice",
+        "Beard shaping and lineup",
+        "Hot towel finish"
+      ]
+    },
+    {
+      "name": "Kids Cut (12 & under)",
+      "popular": false,
+      "setup_from": 0,
+      "monthly_from": 25,
+      "best_for": "Quick, clean cut for kids — patient barbers, no rushing.",
+      "highlights": [
+        "All styles welcome",
+        "Patient and kid-friendly",
+        "30 minutes"
+      ]
+    },
+    {
+      "name": "Straight Razor Shave",
+      "popular": false,
+      "setup_from": 0,
+      "monthly_from": 40,
+      "best_for": "Traditional hot lather straight razor shave.",
+      "highlights": [
+        "Pre-shave hot towel",
+        "Hot lather and straight razor",
+        "Post-shave cold towel and balm"
+      ]
+    }
+  ],
+  "vapi": {
+    "assistant_ids": ["fresh-cuts-vapi-demo"],
+    "phone_number_ids": ["fresh-cuts-phone-demo"]
+  }
+}

@@ -55,6 +55,10 @@ class TenantConfig:
     vapi_assistant_ids: tuple[str, ...] = ()
     vapi_phone_number_ids: tuple[str, ...] = ()
     calendar_id: str = "primary"  # Google Calendar identifier
+    # Which weekdays the business is open, Python datetime.weekday() values
+    # (Monday=0 ... Sunday=6). Default Mon-Fri for backward compatibility with
+    # tenants that predate this field.
+    business_days: tuple[int, ...] = (0, 1, 2, 3, 4)
 
     @property
     def hours_range(self) -> range:
@@ -75,7 +79,7 @@ def _default_config() -> TenantConfig:
     Late import avoids an import cycle (tools.py imports this module at top).
     Called only at request time, never during module import.
     """
-    from tools import _BUSINESS_TZ, _HOURS, _PRICING, _SLOT_MIN
+    from tools import _BUSINESS_DAYS, _BUSINESS_TZ, _HOURS, _PRICING, _SLOT_MIN
 
     return TenantConfig(
         tenant_id="default",
@@ -89,6 +93,7 @@ def _default_config() -> TenantConfig:
         sms_signature=_DEFAULT_SMS_SIGNATURE,
         voice_default_summary=_DEFAULT_VOICE_SUMMARY,
         pricing=list(_PRICING),
+        business_days=tuple(_BUSINESS_DAYS),
     )
 
 
@@ -117,6 +122,7 @@ def _config_from_file(tenant_id: str, data: dict) -> TenantConfig:
         vapi_assistant_ids=tuple(vapi.get("assistant_ids") or ()),
         vapi_phone_number_ids=tuple(vapi.get("phone_number_ids") or ()),
         calendar_id=data.get("calendar_id", "primary"),
+        business_days=tuple(int(d) for d in data.get("business_days") or base.business_days),
     )
 
 

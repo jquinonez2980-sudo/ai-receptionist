@@ -1,0 +1,73 @@
+{
+  "company_name": "Boca Family Dental",
+  "business_tz": "America/New_York",
+  "business_hours": [8, 17],
+  "business_days": [0, 1, 2, 3, 4, 5],
+  "slot_minutes": 60,
+  "emails": {
+    "from": "hello@bocafamilydental.com",
+    "booking_to": "frontdesk@bocafamilydental.com",
+    "escalation_to": "frontdesk@bocafamilydental.com"
+  },
+  "sms_signature": "Boca Family Dental",
+  "voice_default_summary": "Dental Appointment",
+  "pricing": [
+    {
+      "name": "New Patient Exam & X-Rays",
+      "popular": true,
+      "setup_from": 0,
+      "monthly_from": 150,
+      "best_for": "New patients establishing care with our office.",
+      "highlights": [
+        "Comprehensive exam with the dentist",
+        "Full set of X-rays included",
+        "Personalized treatment plan"
+      ]
+    },
+    {
+      "name": "Routine Cleaning",
+      "popular": false,
+      "setup_from": 0,
+      "monthly_from": 120,
+      "best_for": "Existing patients due for their regular cleaning.",
+      "highlights": [
+        "Professional cleaning and polish",
+        "Gum health check",
+        "About 45-60 minutes"
+      ]
+    },
+    {
+      "name": "Teeth Whitening",
+      "popular": false,
+      "setup_from": 0,
+      "monthly_from": 350,
+      "best_for": "Patients wanting a noticeably brighter smile.",
+      "highlights": [
+        "In-office professional whitening",
+        "Results visible after one visit"
+      ]
+    },
+    {
+      "name": "Crown",
+      "popular": false,
+      "setup_from": 0,
+      "monthly_from": 1200,
+      "best_for": "Restoring a damaged, cracked, or heavily decayed tooth.",
+      "highlights": [
+        "Custom-fitted permanent crown",
+        "Exact cost confirmed after the dentist reviews your case"
+      ]
+    },
+    {
+      "name": "Invisalign Consultation",
+      "popular": false,
+      "setup_from": 0,
+      "monthly_from": 0,
+      "best_for": "Anyone curious about Invisalign — no cost, no obligation.",
+      "highlights": [
+        "Free consultation",
+        "Personalized treatment estimate"
+      ]
+    }
+  ]
+}

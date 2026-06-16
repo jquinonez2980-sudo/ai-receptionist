@@ -2,6 +2,7 @@
   "company_name": "Acme Dental Care",
   "business_tz": "America/New_York",
   "business_hours": [8, 18],
+  "business_days": [0, 1, 2, 3, 4],
   "slot_minutes": 30,
   "emails": {
     "from": "hello@acmedental.example",

@@ -1,0 +1,72 @@
+{
+  "company_name": "Glow Medical Spa",
+  "business_tz": "America/New_York",
+  "business_hours": [10, 18],
+  "business_days": [1, 2, 3, 4, 5],
+  "slot_minutes": 60,
+  "emails": {
+    "from": "hello@glowmedspa.com",
+    "booking_to": "frontdesk@glowmedspa.com",
+    "escalation_to": "frontdesk@glowmedspa.com"
+  },
+  "sms_signature": "Glow Medical Spa",
+  "voice_default_summary": "Medical Spa Appointment",
+  "pricing": [
+    {
+      "name": "Botox",
+      "popular": true,
+      "setup_from": 0,
+      "monthly_from": 300,
+      "best_for": "Smoothing fine lines and wrinkles.",
+      "highlights": [
+        "Billed at $12 per unit",
+        "Average treatment runs $300-$600 depending on area treated",
+        "Requires a provider consultation before treatment"
+      ]
+    },
+    {
+      "name": "Filler",
+      "popular": false,
+      "setup_from": 0,
+      "monthly_from": 650,
+      "best_for": "Adding volume or smoothing deeper lines.",
+      "highlights": [
+        "$650 per syringe",
+        "Requires a provider consultation before treatment"
+      ]
+    },
+    {
+      "name": "HydraFacial",
+      "popular": false,
+      "setup_from": 0,
+      "monthly_from": 175,
+      "best_for": "A relaxing, non-invasive treatment for glowing skin.",
+      "highlights": [
+        "Cleanses, exfoliates, and hydrates",
+        "No downtime"
+      ]
+    },
+    {
+      "name": "Laser Hair Removal",
+      "popular": false,
+      "setup_from": 0,
+      "monthly_from": 99,
+      "best_for": "Long-term hair reduction on any treatment area.",
+      "highlights": [
+        "$99-$399 per session depending on treatment area",
+        "Series of sessions recommended for best results"
+      ]
+    },
+    {
+      "name": "Body Contouring Consultation",
+      "popular": false,
+      "setup_from": 0,
+      "monthly_from": 0,
+      "best_for": "Anyone exploring non-invasive body contouring options.",
+      "highlights": [
+        "Free consultation",
+        "No obligation"
+      ]
+    }
+  ]
+}

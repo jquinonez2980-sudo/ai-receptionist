@@ -1,0 +1,61 @@
+{
+  "company_name": "CoolBreeze HVAC",
+  "business_tz": "America/New_York",
+  "business_hours": [7, 19],
+  "business_days": [0, 1, 2, 3, 4, 5],
+  "slot_minutes": 90,
+  "emails": {
+    "from": "hello@coolbreezehvac.com",
+    "booking_to": "dispatch@coolbreezehvac.com",
+    "escalation_to": "dispatch@coolbreezehvac.com"
+  },
+  "sms_signature": "CoolBreeze HVAC",
+  "voice_default_summary": "HVAC Service Call",
+  "pricing": [
+    {
+      "name": "AC Tune-Up",
+      "popular": true,
+      "setup_from": 0,
+      "monthly_from": 89,
+      "best_for": "Annual maintenance to keep your system running efficiently.",
+      "highlights": [
+        "Full system inspection and cleaning",
+        "Catches small issues before they become big ones",
+        "Recommended once a year"
+      ]
+    },
+    {
+      "name": "Diagnostic Visit",
+      "popular": false,
+      "setup_from": 0,
+      "monthly_from": 99,
+      "best_for": "When your system isn't cooling right and you need to know why.",
+      "highlights": [
+        "Full diagnostic by a certified tech",
+        "Fee waived if you book the repair with us"
+      ]
+    },
+    {
+      "name": "Refrigerant Recharge",
+      "popular": false,
+      "setup_from": 0,
+      "monthly_from": 150,
+      "best_for": "Systems low on refrigerant and not cooling effectively.",
+      "highlights": [
+        "Typically $150-$300 depending on refrigerant type and amount needed",
+        "Exact cost confirmed on-site"
+      ]
+    },
+    {
+      "name": "Emergency Call",
+      "popular": false,
+      "setup_from": 0,
+      "monthly_from": 199,
+      "best_for": "No AC, no heat, or any urgent system failure.",
+      "highlights": [
+        "$199 service call plus parts",
+        "Available 24/7"
+      ]
+    }
+  ]
+}
