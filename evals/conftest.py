@@ -7,6 +7,7 @@ is ~1-2K tokens; 12 tests in ~80s can exhaust the cap at the tail.
 
 import os
 import time
+
 import pytest
 
 # Skip the delay in CI (GitHub Actions sets CI=true) — model-gated tests are

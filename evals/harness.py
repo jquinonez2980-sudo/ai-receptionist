@@ -9,12 +9,12 @@ Both use stub tools so no real Calendar / SendGrid / Twilio calls are made.
 
 import time
 
+from langchain.agents import create_agent
 from langchain_openai import ChatOpenAI
 from langgraph.checkpoint.memory import MemorySaver
-from langgraph.graph import StateGraph, END
-from langchain.agents import create_agent
+from langgraph.graph import END, StateGraph
 
-from agents import make_prompt_middleware, _make_middleware, _load_prompt
+from agents import _make_middleware, make_prompt_middleware
 from graph import _route
 from state import AgentState
 
@@ -79,7 +79,10 @@ def build_multi_agent_test_graph():
     and crucially `next` for booking stickiness), so harness and prod can't drift.
     """
     from graph import (
-        _compress_node, _make_informer_node, _make_booker_node, _make_closer_node,
+        _compress_node,
+        _make_booker_node,
+        _make_closer_node,
+        _make_informer_node,
     )
 
     llm = ChatOpenAI(model="gpt-4o", temperature=0)

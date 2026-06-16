@@ -1,8 +1,10 @@
 # state.py
 # This is the "memory" for our AI receptionist
 from typing import Annotated, TypedDict
-from langgraph.graph.message import add_messages
+
 from langchain_core.messages import BaseMessage
+from langgraph.graph.message import add_messages
+
 
 class AgentState(TypedDict):
     """Shared state that every agent can see and update"""

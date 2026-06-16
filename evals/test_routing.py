@@ -12,11 +12,11 @@ import os
 
 import pytest
 from dotenv import load_dotenv
-from langchain_core.messages import HumanMessage, AIMessage
+from langchain_core.messages import AIMessage, HumanMessage
 
 load_dotenv()  # for the model-gated tests below
 
-from graph import _route, _route_rules
+from graph import _route, _route_rules  # noqa: E402
 
 
 def _state(human_msg: str, appointment_details=None, messages_extra=None, next=None):

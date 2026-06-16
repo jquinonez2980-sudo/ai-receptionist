@@ -57,6 +57,7 @@ def _collect_multi_agent_stream(message: str, thread_id: str) -> str:
     """Stream through the REAL multi-agent graph, applying api.py's router-tag
     filter. Used to prove the router classifier's one-word answer never leaks."""
     from langgraph.checkpoint.memory import MemorySaver
+
     from graph import _build_multi_agent_graph
 
     async def go() -> str:

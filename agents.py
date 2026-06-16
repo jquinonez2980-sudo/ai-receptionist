@@ -9,10 +9,11 @@ from datetime import date
 from pathlib import Path
 
 from dotenv import load_dotenv
-from langchain_openai import ChatOpenAI
 from langchain.agents import create_agent
 from langchain.agents.middleware import dynamic_prompt
+from langchain_openai import ChatOpenAI
 
+from tenants import load_tenant
 from tools import (
     book_appointment,
     cancel_appointment,
@@ -23,7 +24,6 @@ from tools import (
     reschedule_appointment,
     search_knowledge_base,
 )
-from tenants import load_tenant
 
 load_dotenv()
 

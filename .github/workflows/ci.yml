@@ -48,6 +48,9 @@ jobs:
       - name: Install pytest
         run: pip install pytest
 
+      - name: Lint
+        run: pip install ruff && ruff check .
+
       - name: Run unit tests
         env:
           PYTHONUTF8: "1"
