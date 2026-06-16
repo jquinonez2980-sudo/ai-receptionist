@@ -16,19 +16,25 @@ import hmac
 import json
 import logging
 import os
-import re
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
 
 import graph as _graph_module
+from _text_utils import (
+    _clean_response,
+    _enhance_slots_for_voice,
+    _parse_time_slots,
+    _strip_slots_from_text,
+)
+from tenants import load_tenant, namespaced_thread, resolve_vapi_tenant, tenant_exists
 from tools import (
     book_appointment,
     cancel_appointment,
@@ -38,7 +44,6 @@ from tools import (
     reschedule_appointment,
     search_knowledge_base,
 )
-from tenants import tenant_exists, resolve_vapi_tenant, load_tenant, namespaced_thread
 
 log = logging.getLogger(__name__)
 
@@ -136,7 +141,7 @@ def _verify_chat_secret(request: Request) -> None:
 # ── Pydantic schema ───────────────────────────────────────────────────────────
 
 class ChatRequest(BaseModel):
-    message: str
+    message: str = Field(..., max_length=4000)
     thread_id: str
     tenant_id: str | None = None   # optional body fallback; X-Tenant-Id header preferred
 
@@ -162,50 +167,8 @@ class VapiToolRequest(BaseModel):
     message: dict = {}  # VAPI server message — format varies by API version
 
 
-# ── Text utilities (copied from streamlit_app.py to avoid Streamlit import) ──
-
-def _clean_response(text: str) -> str:
-    text = re.sub(r"#{1,6}\s+", "", text)
-    text = re.sub(r"\*\*(.+?)\*\*", r"\1", text)
-    text = re.sub(r"__(.+?)__", r"\1", text)
-    text = re.sub(r"\*(?!\s)(.+?)(?<!\s)\*", r"\1", text)
-    text = re.sub(r"_(?!\s)(.+?)(?<!\s)_", r"\1", text)
-    text = re.sub(r"`(.+?)`", r"\1", text)
-    text = re.sub(r"\n[-*_]{3,}\n", "\n", text)
-    text = re.sub(r"\n{3,}", "\n\n", text)
-    return text.strip()
-
-
-def _parse_time_slots(text: str) -> tuple[str | None, list[str]]:
-    slot_pattern = re.compile(
-        r"\b(\d{1,2}:\d{2}\s*(?:AM|PM)\s*[–\-]\s*\d{1,2}:\d{2}\s*(?:AM|PM))\b"
-    )
-    slots = slot_pattern.findall(text)
-    date_pattern = re.compile(
-        r"((?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday),?\s+"
-        r"(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|"
-        r"Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)"
-        r"\s+\d{1,2}(?:,?\s+\d{4})?)",
-        re.IGNORECASE,
-    )
-    date_match = date_pattern.search(text)
-    date_label = date_match.group(1) if date_match else None
-    return date_label, [s.strip() for s in slots]
-
-
-def _strip_slots_from_text(text: str) -> str:
-    text = re.sub(
-        r"\n\s*[-•]\s*\d{1,2}:\d{2}\s*(?:AM|PM)\s*[–\-]\s*\d{1,2}:\d{2}\s*(?:AM|PM)",
-        "",
-        text,
-    )
-    text = re.sub(
-        r"\n\s*\d{1,2}:\d{2}\s*(?:AM|PM)\s*[–\-]\s*\d{1,2}:\d{2}\s*(?:AM|PM)",
-        "",
-        text,
-    )
-    text = re.sub(r"Which of these works best for you\?\s*", "", text)
-    return text.strip()
+# _clean_response, _parse_time_slots, _strip_slots_from_text, _enhance_slots_for_voice
+# are imported from _text_utils above.
 
 
 # ── SSE generator ─────────────────────────────────────────────────────────────
@@ -301,7 +264,7 @@ async def _stream_chat(
 
         yield f"data: {json.dumps(done)}\n\n"
 
-    except Exception as exc:
+    except Exception:
         log.exception("Stream error for thread %s", thread_id)
         yield f"data: {json.dumps({'type': 'error', 'message': 'Something went wrong — please try again.'})}\n\n"
 
@@ -344,7 +307,7 @@ async def health_sendgrid(request: Request) -> dict:
         from sendgrid.helpers.mail import Mail
         message = Mail(
             from_email="info@orchelix.com",
-            to_emails="jquinonez2980@gmail.com",
+            to_emails=load_tenant("default").email_booking_to,
             subject="[Esmi Test] SendGrid diagnostic",
             html_content="<p>SendGrid diagnostic test from Esmi health endpoint.</p>",
         )
@@ -358,57 +321,11 @@ async def health_sendgrid(request: Request) -> dict:
 async def health_calendar(request: Request) -> dict:
     """Diagnostic: test Google Calendar auth step by step."""
     _verify_vapi_secret(request)
-    import json, tempfile, base64
-    steps = {}
+    from tools import resolve_google_credentials
+    steps: dict = {}
 
-    # Step 1: resolve token data from whichever env var is present (matches tools.py priority)
-    token_data = None
-    token_b64 = os.environ.get("GOOGLE_TOKEN_B64")
-    token_json_env = os.environ.get("GOOGLE_TOKEN_JSON")
-    refresh_token = os.environ.get("GOOGLE_REFRESH_TOKEN")
-
-    if token_b64:
-        steps["source"] = "GOOGLE_TOKEN_B64"
-        try:
-            token_data = json.loads(base64.b64decode(token_b64).decode("utf-8"))
-            steps["decode"] = "ok"
-        except Exception as e:
-            steps["decode"] = f"FAILED: {e}"
-            return {"status": "error", "steps": steps}
-    elif refresh_token and os.environ.get("GOOGLE_CLIENT_ID") and os.environ.get("GOOGLE_CLIENT_SECRET"):
-        steps["source"] = "individual env vars"
-        token_data = {
-            "refresh_token": refresh_token,
-            "client_id": os.environ["GOOGLE_CLIENT_ID"],
-            "client_secret": os.environ["GOOGLE_CLIENT_SECRET"],
-            "token_uri": os.environ.get("GOOGLE_TOKEN_URI", "https://oauth2.googleapis.com/token"),
-            "scopes": ["https://www.googleapis.com/auth/calendar"],
-        }
-    elif token_json_env:
-        steps["source"] = "GOOGLE_TOKEN_JSON"
-        try:
-            token_data = json.loads(token_json_env.strip().strip("'\""))
-            steps["decode"] = "ok"
-        except Exception as e:
-            steps["decode"] = f"FAILED: {e}"
-            return {"status": "error", "steps": steps}
-    else:
-        steps["source"] = "none"
-        return {"status": "error", "steps": steps, "detail": "No Google credential env vars found (checked GOOGLE_TOKEN_B64, GOOGLE_REFRESH_TOKEN, GOOGLE_TOKEN_JSON)"}
-
-    steps["has_refresh_token"] = bool(token_data.get("refresh_token"))
-    steps["has_client_id"] = bool(token_data.get("client_id"))
-    expiry = token_data.get("expiry")
-    steps["token_expiry"] = expiry
-
-    # Step 3: build credentials
     try:
-        from google.oauth2.credentials import Credentials
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
-            json.dump(token_data, f)
-            tmp_path = f.name
-        creds = Credentials.from_authorized_user_file(tmp_path)
-        os.unlink(tmp_path)
+        creds = resolve_google_credentials("default")
         steps["credentials_loaded"] = "ok"
         steps["creds_valid"] = creds.valid
         steps["creds_expired"] = creds.expired
@@ -417,20 +334,21 @@ async def health_calendar(request: Request) -> dict:
         steps["credentials_loaded"] = f"FAILED: {e}"
         return {"status": "error", "steps": steps}
 
-    # Step 4: call the API
     try:
+        from datetime import date as _date
+
         from googleapiclient.discovery import build
-        from datetime import date
+        cal_id = load_tenant("default").calendar_id
         service = build("calendar", "v3", credentials=creds, cache_discovery=False)
-        today = date.today().isoformat()
+        today = _date.today().isoformat()
         result = service.freebusy().query(body={
             "timeMin": f"{today}T00:00:00Z",
             "timeMax": f"{today}T23:59:59Z",
             "timeZone": "America/Toronto",
-            "items": [{"id": "primary"}],
+            "items": [{"id": cal_id}],
         }).execute()
         steps["api_call"] = "ok"
-        return {"status": "ok", "steps": steps, "busy_count": len(result["calendars"]["primary"]["busy"])}
+        return {"status": "ok", "steps": steps, "busy_count": len(result["calendars"][cal_id]["busy"])}
     except Exception as e:
         steps["api_call"] = f"FAILED: {e}"
         return {"status": "error", "steps": steps}
@@ -450,43 +368,6 @@ async def chat(request: Request, req: ChatRequest) -> StreamingResponse:
             "Connection": "keep-alive",
         },
     )
-
-
-def _enhance_slots_for_voice(slots_text: str, tenant_id: str = "default") -> str:
-    """Append ISO timestamps to each slot line so the voice agent can pass them to book_appointment.
-
-    Input line:  "Tuesday, May 27 10:00 AM – 10:30 AM"
-    Output line: "Tuesday, May 27 10:00 AM – 10:30 AM | start_iso=2026-05-27T10:00:00-04:00 end_iso=2026-05-27T10:30:00-04:00"
-    """
-    import pytz
-    from datetime import datetime, date as _date
-
-    tz = pytz.timezone(load_tenant(tenant_id).business_tz)
-    year = _date.today().year
-    slot_re = re.compile(
-        r"^(.+?,\s+\w+\s+\d+)\s+(\d{1,2}:\d{2}\s*(?:AM|PM))\s*[–\-]\s*(\d{1,2}:\d{2}\s*(?:AM|PM))$",
-        re.IGNORECASE,
-    )
-    lines = []
-    for line in slots_text.splitlines():
-        m = slot_re.match(line.strip())
-        if m:
-            date_part, start_str, end_str = m.group(1), m.group(2).strip(), m.group(3).strip()
-            try:
-                start_dt = datetime.strptime(f"{date_part} {start_str} {year}", "%A, %B %d %I:%M %p %Y")
-                start_dt = tz.localize(start_dt)
-                end_dt = start_dt.replace(
-                    hour=datetime.strptime(end_str, "%I:%M %p").hour,
-                    minute=datetime.strptime(end_str, "%I:%M %p").minute,
-                )
-                lines.append(
-                    f"{line.strip()} | start_iso={start_dt.isoformat()} end_iso={end_dt.isoformat()}"
-                )
-                continue
-            except Exception:
-                pass
-        lines.append(line)
-    return "\n".join(lines)
 
 
 def _run_voice_tool(name: str, params: dict, tenant_id: str = "default") -> str:
