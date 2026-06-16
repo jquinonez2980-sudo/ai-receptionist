@@ -1,64 +1,46 @@
-# Credential Rotation — REQUIRED
+# Credential Rotation — COMPLETE ✅
 
-> **Why:** `credentials.json`, `token.json`, and `.env` are present in the
-> working tree of the v0 repo. Treat them as compromised. Even if the repo
-> is private today, anyone with historical access (past collaborators, CI
-> systems, lost laptops, cached forks) has them. Rotate **now**, before any
-> Phase 1 change ships.
-
-> **⚠️ URGENT (added):** The `Dockerfile` previously baked **live** secrets into
-> the image as base64 `ENV` lines — `GOOGLE_TOKEN_B64` (OAuth refresh token +
-> client secret), `SENDGRID_API_KEY_B64`, and `VAPI_API_KEY_B64`. Base64 is
-> encoding, not encryption. These values are in git history and in every built
-> image layer. **All three must be rotated** (sections 2, 3, and the new
-> section 4b below), and the history must be scrubbed (section 5). The secrets
-> have been removed from the Dockerfile; they are now supplied as Railway
-> environment variables at runtime.
-
-This is a one-time operational task. Phase 1 code assumes it's done.
+> Rotation completed 2026-06-15. All keys below were revoked and replaced.
+> New secrets live in Railway environment variables only — not in any tracked file.
 
 ---
 
 ## 1. OpenAI
 
-- [ ] Sign in to https://platform.openai.com/api-keys
-- [ ] **Revoke** the key currently used by Esmi.
-- [ ] **Generate a new key**. Set a usage limit ($X/day) appropriate to the workload.
-- [ ] Add to:
-  - Streamlit Cloud → app → Settings → Secrets → `OPENAI_API_KEY`
+- [x] Sign in to https://platform.openai.com/api-keys
+- [x] **Revoke** the key currently used by Esmi.
+- [x] **Generate a new key**. Set a usage limit ($X/day) appropriate to the workload.
+- [x] Add to:
   - Local `.env` (gitignored)
 
 ## 2. Google Calendar (OAuth)
 
-- [ ] Sign in to https://console.cloud.google.com → APIs & Services → Credentials.
-- [ ] Find the OAuth client whose `client_secret` is in `credentials.json`.
-- [ ] **Delete that OAuth client** (or rotate the client secret).
-- [ ] Create a **new OAuth client** (Desktop or Web — same type as before).
-- [ ] Re-run the local OAuth flow to obtain a fresh `token.json`.
-- [ ] **Do NOT commit either file.** Verify `git status` shows them as ignored.
-- [ ] For Streamlit Cloud: paste the new `token.json` contents as a single-line JSON string into `GOOGLE_TOKEN_JSON`.
+- [x] Sign in to https://console.cloud.google.com → APIs & Services → Credentials.
+- [x] Find the OAuth client whose `client_secret` is in `credentials.json`.
+- [x] **Delete that OAuth client** (or rotate the client secret).
+- [x] Create a **new OAuth client** (Desktop or Web — same type as before).
+- [x] Re-run the local OAuth flow to obtain a fresh `token.json`.
+- [x] **Do NOT commit either file.** Verify `git status` shows them as ignored.
 
 ## 3. SendGrid
 
-- [ ] https://app.sendgrid.com → Settings → API Keys.
-- [ ] **Delete** the existing key used by Esmi.
-- [ ] **Create a new key** with the minimum scope needed (Mail Send only).
-- [ ] Add to Streamlit secrets and `.env` as `SENDGRID_API_KEY`.
+- [x] https://app.sendgrid.com → Settings → API Keys.
+- [x] **Delete** the existing key used by Esmi.
+- [x] **Create a new key** with the minimum scope needed (Mail Send only).
+- [x] Add to `.env` as `SENDGRID_API_KEY`.
 
 ## 4. Twilio
 
-- [ ] https://console.twilio.com → Account → API keys & tokens.
-- [ ] **Rotate the Auth Token** for the project.
-- [ ] If using API keys: delete the old key, generate a new one.
-- [ ] Update webhook hosting env: `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`.
+- [x] https://console.twilio.com → Account → API keys & tokens.
+- [x] **Rotate the Auth Token** for the project.
+- [x] Update Railway env: `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`.
 
 ## 4b. VAPI
 
-- [ ] https://dashboard.vapi.ai → Org settings → API Keys.
-- [ ] **Delete/regenerate** the private API key (the one previously baked into the Dockerfile).
-- [ ] Set the new value as a Railway env var `VAPI_API_KEY` (or `VAPI_API_KEY_B64`).
-- [ ] While here, set a **Server URL Secret** on the assistant and the matching
-      `VAPI_SERVER_SECRET` Railway var (gates `/voice/tools` and the `/health/*` diagnostics — see `api.py`).
+- [x] https://dashboard.vapi.ai → Org settings → API Keys.
+- [x] **Delete/regenerate** the private API key.
+- [x] Set the new value as a Railway env var `VAPI_API_KEY`.
+- [x] `VAPI_SERVER_SECRET` Railway var set (gates `/voice/tools`).
 
 ## 5. Scrub git history
 
