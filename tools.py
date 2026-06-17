@@ -847,6 +847,11 @@ def book_appointment(
                 )
 
         contact = (attendee_email or "").strip()
+        # VAPI passes unresolved template literals (e.g. "{{call.customer.number}}")
+        # when caller number is unavailable. Normalise before any downstream use.
+        if contact.startswith("{{"):
+            contact = "Phone not captured"
+            attendee_email = "Phone not captured"
         has_email = _looks_like_email(contact)
 
         event_body = {
