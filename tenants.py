@@ -52,6 +52,7 @@ class TenantConfig:
     sms_signature: str
     voice_default_summary: str
     pricing: list = field(default_factory=list)   # list[dict] (see tools._PRICING shape)
+    pricing_note: str = ""  # optional footer override for non-SaaS tenants (e.g. per-job pricing)
     vapi_assistant_ids: tuple[str, ...] = ()
     vapi_phone_number_ids: tuple[str, ...] = ()
     calendar_id: str = "primary"  # Google Calendar identifier
@@ -119,6 +120,7 @@ def _config_from_file(tenant_id: str, data: dict) -> TenantConfig:
         sms_signature=data.get("sms_signature", data.get("company_name", base.sms_signature)),
         voice_default_summary=data.get("voice_default_summary", base.voice_default_summary),
         pricing=data.get("pricing") or list(base.pricing),
+        pricing_note=data.get("pricing_note", ""),
         vapi_assistant_ids=tuple(vapi.get("assistant_ids") or ()),
         vapi_phone_number_ids=tuple(vapi.get("phone_number_ids") or ()),
         calendar_id=data.get("calendar_id", "primary"),

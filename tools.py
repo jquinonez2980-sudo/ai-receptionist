@@ -544,23 +544,30 @@ def get_pricing(config: RunnableConfig = None) -> str:
     numbers are authoritative and exact. Never quote prices from memory or KB
     search; always call this tool first.
     """
-    pricing = load_tenant(_tenant_from_config(config)).pricing
+    tenant = load_tenant(_tenant_from_config(config))
+    pricing = tenant.pricing
     lines: list[str] = []
     for p in pricing:
         title = p["name"] + ("  ★ Most Popular" if p["popular"] else "")
         lines.append(title)
-        lines.append(
-            f"Setup from ${p['setup_from']:,} · ${p['monthly_from']:,}/mo managed service"
-        )
+        # Use price_label override if provided, otherwise fall back to SaaS format
+        if p.get("price_label"):
+            lines.append(p["price_label"])
+        else:
+            lines.append(
+                f"Setup from ${p['setup_from']:,} · ${p['monthly_from']:,}/mo managed service"
+            )
         for h in p["highlights"]:
             lines.append(f"- {h}")
         lines.append(f"Ideal for: {p['best_for']}")
         lines.append("")
-    lines.append(
+    # Use tenant-level pricing note override if set, otherwise default SaaS footer
+    footer = tenant.pricing_note or (
         "Pricing model: a one-time setup fee plus a monthly managed service "
         "(monitoring, optimization, updates, support). No long-term contract "
         "on the monthly service."
     )
+    lines.append(footer)
     return "\n".join(lines)
 
 

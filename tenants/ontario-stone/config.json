@@ -11,41 +11,45 @@
   },
   "sms_signature": "Ontario Stone Works",
   "voice_default_summary": "Stone Works Consultation",
+  "pricing_note": "Pricing is per-job based on material, square footage, edge profile, and cutouts. All prices in Canadian dollars. We do not quote without an in-home measurement. Book a free measurement appointment and we'll provide an exact written quote within 24 hours.",
   "pricing": [
     {
       "name": "Kitchen Countertop Installation",
       "popular": true,
-      "setup_from": 0,
+      "price_label": "Starting from $3,200 CAD installed · exact quote after free in-home measurement",
+      "setup_from": 3200,
       "monthly_from": 0,
-      "best_for": "Full kitchen countertop fabrication and installation — granite, quartz, or marble.",
+      "best_for": "Full kitchen countertop fabrication and installation in granite, quartz, or marble.",
       "highlights": [
-        "Free in-home measurement and quote",
-        "Fabrication and installation included",
-        "Average turnaround: 7–10 business days"
+        "Range: $60–$150 CAD/sq ft installed depending on material",
+        "Includes templating, fabrication, and installation",
+        "Free in-home measurement — no obligation quote within 24 hours",
+        "Average turnaround: 7–10 business days from signed contract"
       ]
     },
     {
       "name": "Bathroom Vanity Top",
       "popular": false,
-      "setup_from": 0,
+      "price_label": "Starting from $1,000 CAD installed · exact quote after free in-home measurement",
+      "setup_from": 1000,
       "monthly_from": 0,
       "best_for": "Single or double vanity tops in granite, quartz, or marble.",
       "highlights": [
-        "Free measurement",
-        "Custom edge profiles available",
-        "Quick turnaround: 5–7 business days"
+        "Custom edge profiles and undermount sink cutouts available",
+        "Quick turnaround: 5–7 business days from signed contract"
       ]
     },
     {
       "name": "Outdoor Kitchen & BBQ Countertops",
       "popular": false,
-      "setup_from": 0,
+      "price_label": "Starting from $2,200 CAD installed · exact quote after free in-home measurement",
+      "setup_from": 2200,
       "monthly_from": 0,
-      "best_for": "Weather-resistant stone surfaces for outdoor kitchens and entertaining areas.",
+      "best_for": "Weather-resistant stone surfaces for outdoor kitchens, seasonal installation available.",
       "highlights": [
-        "Granite and quartzite recommended for outdoor use",
-        "Seasonal installation available",
-        "Free consultation"
+        "Granite and quartzite recommended for Ontario outdoor conditions",
+        "Freeze-thaw resistant options available",
+        "Seasonal installation: spring through fall"
       ]
     }
   ]
