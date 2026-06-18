@@ -370,6 +370,14 @@ async def chat(request: Request, req: ChatRequest) -> StreamingResponse:
     )
 
 
+def _unresolved(value: str | None) -> bool:
+    """True when value is absent, empty, a VAPI template literal, or the sentinel."""
+    if not value:
+        return True
+    v = value.strip()
+    return v.startswith("{{") or v == "Phone not captured"
+
+
 def _run_voice_tool(name: str, params: dict, tenant_id: str = "default") -> str:
     """Execute a named voice tool and return a plain-text result.
 
@@ -396,11 +404,16 @@ def _run_voice_tool(name: str, params: dict, tenant_id: str = "default") -> str:
         }, config=cfg))
         return _enhance_slots_for_voice(raw, tenant_id)
     if name == "book_appointment":
+        # Prefer the first non-unresolved contact; real phone injected upstream takes precedence.
+        contact = next(
+            (v for v in (params.get("attendee_email"), params.get("caller_phone")) if not _unresolved(v)),
+            None,
+        )
         return str(book_appointment.invoke({
             "summary": params.get("summary", load_tenant(tenant_id).voice_default_summary),
             "start_time": params["start_time"],
             "end_time": params["end_time"],
-            "attendee_email": params.get("attendee_email") or params.get("caller_phone"),
+            "attendee_email": contact,
         }, config=cfg))
     if name == "find_booking":
         return str(find_booking.invoke({
@@ -437,6 +450,9 @@ async def voice_tools(request: Request) -> dict:
     msg = body.get("message", body)  # some VAPI versions omit the outer wrapper
     msg_type = msg.get("type", "")
 
+    # Real caller number from VAPI payload — used to fill in missing/broken args.
+    caller_number = (msg.get("call", {}).get("customer", {}).get("number") or "").strip()
+
     # ── New format: tool-calls ────────────────────────────────────────────
     if msg_type == "tool-calls" or "toolCallList" in msg:
         results = []
@@ -446,6 +462,9 @@ async def voice_tools(request: Request) -> dict:
             name = fn.get("name", "")
             raw_args = fn.get("arguments", "{}")
             params = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
+            # Inject real caller number when the LLM's caller_phone arg is unresolved.
+            if name == "book_appointment" and caller_number and _unresolved(params.get("caller_phone")):
+                params["caller_phone"] = caller_number
             log.info("VAPI tool-calls: %s | params: %s", name, params)
             try:
                 result = await asyncio.to_thread(_run_voice_tool, name, params, tenant_id)
@@ -459,6 +478,8 @@ async def voice_tools(request: Request) -> dict:
     fn = msg.get("functionCall", {})
     name = fn.get("name", "")
     params = fn.get("parameters", {})
+    if name == "book_appointment" and caller_number and _unresolved(params.get("caller_phone")):
+        params["caller_phone"] = caller_number
     log.info("VAPI function-call: %s | params: %s", name, params)
     try:
         result = await asyncio.to_thread(_run_voice_tool, name, params, tenant_id)
