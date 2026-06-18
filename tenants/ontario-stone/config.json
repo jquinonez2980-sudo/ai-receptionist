@@ -1,0 +1,52 @@
+{
+  "company_name": "Ontario Stone Works",
+  "business_tz": "America/Toronto",
+  "business_hours": [7, 17],
+  "business_days": [0, 1, 2, 3, 4],
+  "slot_minutes": 60,
+  "emails": {
+    "from": "hello@orchelix.com",
+    "booking_to": "jquinonez2980@gmail.com",
+    "escalation_to": "jquinonez2980@gmail.com"
+  },
+  "sms_signature": "Ontario Stone Works",
+  "voice_default_summary": "Stone Works Consultation",
+  "pricing": [
+    {
+      "name": "Kitchen Countertop Installation",
+      "popular": true,
+      "setup_from": 0,
+      "monthly_from": 0,
+      "best_for": "Full kitchen countertop fabrication and installation — granite, quartz, or marble.",
+      "highlights": [
+        "Free in-home measurement and quote",
+        "Fabrication and installation included",
+        "Average turnaround: 7–10 business days"
+      ]
+    },
+    {
+      "name": "Bathroom Vanity Top",
+      "popular": false,
+      "setup_from": 0,
+      "monthly_from": 0,
+      "best_for": "Single or double vanity tops in granite, quartz, or marble.",
+      "highlights": [
+        "Free measurement",
+        "Custom edge profiles available",
+        "Quick turnaround: 5–7 business days"
+      ]
+    },
+    {
+      "name": "Outdoor Kitchen & BBQ Countertops",
+      "popular": false,
+      "setup_from": 0,
+      "monthly_from": 0,
+      "best_for": "Weather-resistant stone surfaces for outdoor kitchens and entertaining areas.",
+      "highlights": [
+        "Granite and quartzite recommended for outdoor use",
+        "Seasonal installation available",
+        "Free consultation"
+      ]
+    }
+  ]
+}
