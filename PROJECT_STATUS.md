@@ -245,7 +245,7 @@ Escalation emails go to `jquinonez2980@gmail.com`. Booking notifications go to `
 
 **Phone number:** 561-566-1066
 **Voice:** ElevenLabs Bella
-**Model:** GPT-4o (configured in VAPI dashboard)
+**Model:** GPT-4o Cluster (configured in VAPI dashboard)
 **Server URL:** must point at the **live** service → `https://ai-receptionist-production-5375.up.railway.app/voice/tools` (NOT the broken `-3446`). Set the `X-Vapi-Secret` Server URL Secret to match `VAPI_SERVER_SECRET`.
 
 ### Tools configured in VAPI dashboard
@@ -263,8 +263,8 @@ Escalation emails go to `jquinonez2980@gmail.com`. Booking notifications go to `
 
 ### Voice booking differences from chat
 - Asks for **name only** — no email (STT can't reliably transcribe email addresses)
-- Caller's phone number is injected automatically via `{{call.customer.number}}` and passed as `attendee_email`; the backend detects it's a phone (not an email), stores it in the event description, and texts an SMS confirmation
-- Today's date is injected into the prompt via the VAPI liquid variable `{{ "now" | date: "%A, %B %d, %Y", "America/Toronto" }}` — no `get_current_date` tool round-trip needed
+- Caller's phone number is injected automatically via `{{call.customer.number}}` and passed as `caller_phone`; the backend stores it in the event description and sends an SMS confirmation
+- Today's date is injected into the prompt via the VAPI liquid variable `{{ "now" | date: "%A, %B %d, %Y", "America/New_York" }}` — no tool call needed
 - Slot options are read conversationally (not as a bullet list)
 - Hot leads flagged in the `summary` field (e.g. "Intro Call — Jorge 🔥 HOT LEAD")
 
@@ -273,7 +273,7 @@ Escalation emails go to `jquinonez2980@gmail.com`. Booking notifications go to `
 ```
 You are Esmi, a warm and professional AI receptionist for Orchelix AI Consulting.
 
-Today's date is {{ "now" | date: "%A, %B %d, %Y", "America/Toronto" }}. Use it to resolve relative dates like "tomorrow" or "next Tuesday" into YYYY-MM-DD format.
+Today is {{ "now" | date: "%A, %B %d, %Y", "America/New_York" }}. Use this to resolve relative dates like "tomorrow" or "next Thursday" into YYYY-MM-DD format. Do not call any tool to get the date.
 
 YOUR PERSONALITY
 - Friendly, warm, and human — never robotic or overly formal.
@@ -281,8 +281,8 @@ YOUR PERSONALITY
 - Use the caller's name once you know it.
 - Never ask for personal information before it is needed.
 
-LANGUAGE
-Default to English. Switch to Spanish only if the caller speaks Spanish first.
+LANGUAGE — READ THIS CAREFULLY
+Default to English. Do NOT switch based on accent or voice detection. Switch to Spanish ONLY if caller's first words are in Spanish.
 When responding in Spanish, always use Latin American Spanish — not Castilian (Spain) Spanish.
 Use Latin American vocabulary: "agendar" (not "concertar"), "celular" (not "móvil"), "computadora" (not "ordenador").
 Address the caller as "usted" or "tú" per regional convention, never "vosotros".
@@ -292,6 +292,12 @@ VOICE FORMATTING RULES
 - When reading time slots, say them one at a time: "I have Thursday May 29th at 9 AM, 9:30, or 10 AM — which works?"
 - Keep responses short. This is a phone call.
 - Never say "If you need anything else feel free to ask".
+
+ESMI PRICING — IMPORTANT
+If a caller asks how much Esmi costs, what Orchelix charges, or anything about pricing for our services — do NOT quote a number. Instead say:
+"Our pricing depends on your business type and size. I can have Jorge reach out with the right fit for you — can I get your name and a good number to reach you?"
+Then capture their name and confirm the number they called from is correct. End the call warmly.
+This rule applies even if the caller is persistent. Never quote a dollar amount for Orchelix's services.
 
 BOOKING CONVERSATION FLOW — follow this exact order:
 
@@ -313,7 +319,7 @@ imperfect, so this step catches wrong days, times, or misheard names. If the cal
 corrects anything, update it and read it back again.
 
 STEP 5 — Book:
-Only after the caller confirms in Step 4, call book_appointment with: the confirmed slot's start_iso and end_iso values, the caller's name as the summary (e.g. "Intro Call — Jorge"), and {{call.customer.number}} as the attendee_email.
+Only after the caller confirms in Step 4, call book_appointment with: the confirmed slot's start_iso and end_iso values, the caller's name as the summary (e.g. "Intro Call — Jorge"), and the caller_phone parameter set to {{call.customer.number}}.
 Confirm warmly: "Done! I've got you down for [day] at [time]. We'll see you then."
 
 EXCEPTION: If the caller names a specific day in their first sentence, skip Step 1 and go straight to Step 2.
@@ -331,18 +337,18 @@ Parameters:
   - summary: "Intro Call — [caller name]"
   - start_time: the start_iso value shown next to the slot (e.g. 2026-05-29T10:00:00-04:00)
   - end_time: the end_iso value shown next to the slot
-  - attendee_email: {{call.customer.number}}
+  - caller_phone: {{call.customer.number}}
 
 find_booking / reschedule_appointment / cancel_appointment
 When a caller wants to move or cancel an existing appointment:
-1. The caller's number is {{call.customer.number}} — call find_booking with it as contact.
+1. The caller's phone number is: {{call.customer.number}} — call find_booking with it as contact.
 2. If more than one booking comes back, ask which one. Use the event id from find_booking.
 3. To reschedule: call list_available_slots, confirm the new time with the caller, then call reschedule_appointment with the event id and the new start_iso / end_iso.
 4. To cancel: read back which appointment, get a clear yes, then call cancel_appointment with the event id.
 Never cancel or reschedule without confirming the specific appointment first.
 
 get_pricing
-Call for ANY pricing question (cost, setup fee, monthly fee, "how much"). Returns exact, authoritative numbers. Always use this for prices — never search_knowledge_base, never memory.
+Call ONLY when the caller asks about the prices of the CLIENT BUSINESS's own services — for example, if you are deployed for a barbershop and someone asks "how much is a haircut." Do NOT call this for questions about what Orchelix or Esmi costs — handle those with the Esmi Pricing rule above.
 
 search_knowledge_base
 Call for questions about services, FAQs, packages, or company info (NOT prices).
@@ -354,7 +360,7 @@ Use this VAPI built-in tool when:
 - You cannot help after two attempts.
 Tell the caller: "Let me connect you with Jorge now." Then transfer.
 
-AFTER ANSWERING PRICING OR SERVICES
+AFTER ANSWERING SERVICES QUESTIONS
 Always follow up once with: "Would you like me to check when we have time for a quick intro call?"
 Make this offer only once per call.
 
@@ -436,19 +442,19 @@ updates, support). No long-term contract on the monthly service.
 - VAPI rate limits apply per account — monitor call volume on the VAPI dashboard
 - Voice bookings store phone number in the `attendee_email` field of Google Calendar (cosmetic only)
 - ElevenLabs Pronunciation Dictionary must be manually updated when new brand terms are added
-- **Duplicate Railway service `-3446` (`aware-nature`) is broken** — crash-loops on a stale Streamlit dashboard Start Command (`$PORT` unexpanded) and has an `OPEN_API_KEY` typo + missing VAPI/Twilio vars. The website uses `-5375` (`awake-nourishment`), so this is not customer-facing. Retire it or fix its Start Command + env if a second environment is actually needed.
-
 ## Security
 
-### Closed
-- **`VAPI_SERVER_SECRET` now set on Railway + enforced** (June 2026). `/voice/tools` and `/voice/debug` previously failed open — anyone who found the Railway URL could invoke `find_booking` (PII disclosure), `cancel_appointment`, or `book_appointment` without auth. Fixed: secret set on `awake-nourishment` / `ai-receptionist` / `production`; `api.py` now fail-closed (returns 503 when the var is absent, 401 on mismatch). Local dev bypass: `ALLOW_UNAUTHENTICATED_VOICE=1`.
-- **Secrets removed from Dockerfile** — previously baked in as base64 `ENV` lines; now Railway runtime env vars only. A PreToolUse hook (`.claude/hooks/secret-scan.py`) blocks re-introduction.
-- **`.claude/`** git-ignored (only `settings.local.json` now; `settings.json` + hooks are committed).
-
-### Action Required
-- **Rotate exposed credentials.** The old base64-baked secrets (Google OAuth token + client_secret, SendGrid, VAPI keys) **remain in git history and are compromised** — rotate all of them even though they're no longer in the Dockerfile.
-- **`orhelix-esmi.txt`** (repo root, git-ignored, NOT in git history) holds live plaintext keys (OpenAI `sk-proj-…`, Resend `re_…`, SendGrid `SG.…`). Rotate and delete once the keys live only in Railway env vars.
-- Base64 is encoding, not encryption — never treat a base64 blob as a safe place for a secret.
+### All Closed (June 2026)
+- **`VAPI_SERVER_SECRET` enforced** — `/voice/tools` fail-closed (503 unset, 401 mismatch). Local dev: `ALLOW_UNAUTHENTICATED_VOICE=1`.
+- **Secrets removed from Dockerfile** — now Railway runtime env vars only. `secret-scan` hook blocks re-introduction.
+- **All credentials rotated (June 2026)** — Google OAuth, SendGrid, VAPI, OpenAI, Twilio all rotated; new keys in Railway only.
+- **Git history scrubbed (June 2026)** — `git filter-repo` removed secret files and redacted base64 blobs across all commits. Force-pushed to GitHub.
+- **`orhelix-esmi.txt` and `.railway_tmp.env` deleted** from working tree.
+- **Railway service `-3446` (`aware-nature`) deleted** — was a broken empty duplicate.
+- **Per-tenant calendar isolation** — fail-closed for non-default tenants; never falls back to Orchelix's calendar.
+- **HTML escaping in emails** — `html.escape()` on all user/LLM content in SendGrid HTML bodies.
+- **`/chat` hardened** — `max_length=4000` on messages; `X-Chat-Secret` enforced; CORS locked to `ALLOWED_ORIGINS`.
+- **CI pipeline** — GitHub Actions runs smoke imports + unit tests + ruff on every push.
 
 ## Completed Improvements (May 2026)
 
