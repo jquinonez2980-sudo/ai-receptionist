@@ -301,11 +301,11 @@ def _compress_node(state: AgentState) -> dict:
     """Summarise old messages once the conversation exceeds _SUMMARIZE_AFTER_TURNS.
 
     Runs before routing on every turn — a no-op until the threshold is hit.
-    Removes messages older than the last 6 (3 full turns) and replaces them
-    with a single SystemMessage summary so the specialists always see compact
-    context without losing key lead/booking details.
+    Removes messages older than the last 6 (3 full turns) and folds them into
+    `conversation_summary` (a dedicated state field, NOT a message-list entry —
+    see finding 1.3 below) so the specialists always see compact context
+    without losing key lead/booking details.
     """
-    from langchain_core.messages import SystemMessage
     from langchain_openai import ChatOpenAI
     from langgraph.graph.message import RemoveMessage
 
@@ -319,35 +319,40 @@ def _compress_node(state: AgentState) -> dict:
     if not to_compress:
         return {}
 
-    # Skip messages that are already summary placeholders.
-    to_summarize = [m for m in to_compress if not (
-        isinstance(m, SystemMessage) and
-        str(getattr(m, "content", "")).startswith("[Earlier conversation]:")
-    )]
-    if not to_summarize:
-        return {}
-
     history = "\n".join(
         f"{getattr(m, 'type', 'msg')}: {(m.content or '')[:300]}"
-        for m in to_summarize
+        for m in to_compress
     )
-    llm = ChatOpenAI(model="gpt-4o", temperature=0)
-    resp = llm.invoke([{
-        "role": "user",
-        "content": (
-            "Summarise this AI receptionist conversation for handoff context. "
-            "Preserve: the user's name and email, any booked appointments "
-            "(date/time/event id), pricing discussed, budget/urgency signals, "
-            "open questions. Be concise.\n\n" + history
-        ),
-    }])
+    prompt = (
+        "Summarise this AI receptionist conversation for handoff context. "
+        "Preserve: the user's name and email, any booked appointments "
+        "(date/time/event id), pricing discussed, budget/urgency signals, "
+        "open questions. Be concise.\n\n"
+    )
+    prior_summary = state.get("conversation_summary")
+    if prior_summary:
+        # Compression can run more than once in a long conversation — fold the
+        # existing summary in rather than letting a second pass silently drop it.
+        prompt += f"Summary of even earlier turns (preserve this, don't drop it):\n{prior_summary}\n\n"
+    prompt += "New turns to summarise:\n" + history
 
-    removals = [RemoveMessage(id=m.id) for m in to_compress]
-    summary = SystemMessage(
-        content=f"[Earlier conversation]: {resp.content}"
-    )
+    # gpt-4o-mini is plenty for plain summarization — this isn't a task that
+    # needs the flagship model, unlike the specialist agents themselves (12.3).
+    llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
+    resp = llm.invoke([{"role": "user", "content": prompt}])
+
     log.info("Compressed %d messages into a summary.", len(to_compress))
-    return {"messages": removals + [summary]}
+
+    # Ordering fix (finding 1.3): the add_messages reducer always appends any
+    # brand-new message id to the END of the list — there's no way to make a
+    # freshly-added message land BEFORE the messages it summarizes, so storing
+    # the summary as a message meant the model saw [recent turns] -> [earlier
+    # summary], reverse chronological, with a trailing SystemMessage that could
+    # even read as an instruction override. Storing it in `conversation_summary`
+    # instead (injected into the system prompt by agents._make_middleware,
+    # which always precedes the message history) fixes the ordering outright.
+    removals = [RemoveMessage(id=m.id) for m in to_compress]
+    return {"messages": removals, "conversation_summary": resp.content}
 
 
 # ── State-writing specialist wrappers ─────────────────────────────────────────

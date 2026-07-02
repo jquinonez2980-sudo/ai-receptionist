@@ -66,7 +66,16 @@ def _make_middleware(prompt_name: str):
         ctx = getattr(getattr(request, "runtime", None), "context", None) or {}
         tenant_id = (ctx.get("tenant_id") if isinstance(ctx, dict) else "default") or "default"
         text = _load_tenant_prompt(prompt_name, tenant_id)
-        return text.replace("{today}", date.today().isoformat())
+        text = text.replace("{today}", date.today().isoformat())
+
+        # graph._compress_node stores older-turns context here (a state field,
+        # not a message) so it always precedes the live conversation in what
+        # the model sees — a message-list entry would land AFTER the messages
+        # it summarizes, since add_messages only ever appends (finding 1.3).
+        summary = (getattr(request, "state", None) or {}).get("conversation_summary")
+        if summary:
+            text += f"\n\n## EARLIER CONVERSATION SUMMARY\n{summary}"
+        return text
     return _prompt
 
 

@@ -13,3 +13,8 @@ class AgentState(TypedDict):
     qualified: bool | None          # True if the lead is ready to book
     appointment_details: dict | None  # stores date/time when we book
     next: str | None                # tells the supervisor which agent to call next
+    conversation_summary: str | None  # older-turns summary (see graph._compress_node);
+                                       # injected into the system prompt by agents._make_middleware,
+                                       # NOT the message list — add_messages always appends new
+                                       # messages after existing ones, so a summary living in
+                                       # `messages` would land after the live turns it summarizes.
