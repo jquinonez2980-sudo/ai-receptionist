@@ -98,15 +98,21 @@ def test_reschedule_flow_finds_then_reschedules():
             f"Please move it to {_future_weekday_phrase(5)}.",
             "10 am works for me.",
             "Yes, that's correct — please move it.",
+            "The code is 123456.",
         ],
         thread_id="eval-resched",
     )
     names = tool_names(calls)
     assert "find_booking" in names, f"should look up the booking first: {names}"
-    assert "reschedule_appointment" in names, f"should reschedule after confirmation: {names}"
-    assert names.index("find_booking") < names.index("reschedule_appointment"), (
-        f"must find the booking before rescheduling it: {names}"
+    assert "request_cancellation_code" in names, (
+        f"must send a confirmation code before rescheduling (finding 10.1): {names}"
     )
+    assert "reschedule_appointment" in names, f"should reschedule after confirmation: {names}"
+    assert (
+        names.index("find_booking")
+        < names.index("request_cancellation_code")
+        < names.index("reschedule_appointment")
+    ), f"must find the booking, send a code, then reschedule, in that order: {names}"
 
 
 def test_cancel_flow_confirms_before_cancelling():
@@ -115,15 +121,21 @@ def test_cancel_flow_confirms_before_cancelling():
             "I want to cancel my appointment.",
             "It's under john@example.com.",
             "Yes, cancel it.",
+            "The code is 123456.",
         ],
         thread_id="eval-cancel",
     )
     names = tool_names(calls)
     assert "find_booking" in names, f"should look up the booking first: {names}"
-    assert "cancel_appointment" in names, f"should cancel after confirmation: {names}"
-    assert names.index("find_booking") < names.index("cancel_appointment"), (
-        f"must find the booking before cancelling it: {names}"
+    assert "request_cancellation_code" in names, (
+        f"must send a confirmation code before cancelling (finding 10.1): {names}"
     )
+    assert "cancel_appointment" in names, f"should cancel after confirmation: {names}"
+    assert (
+        names.index("find_booking")
+        < names.index("request_cancellation_code")
+        < names.index("cancel_appointment")
+    ), f"must find the booking, send a code, then cancel, in that order: {names}"
 
 
 def test_kb_failure_escalates_not_fabricates():

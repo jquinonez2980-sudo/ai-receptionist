@@ -12,7 +12,7 @@ Key facts (see CLAUDE.md hard rule #3):
 - `/health/calendar`, `/health/env`, `/health/sendgrid` are **gated** — they require `X-Vapi-Secret: $VAPI_SERVER_SECRET` and return 401 if unauthenticated. Use the `$VAPI_SERVER_SECRET` Railway env var to hit them; never hard-code it here.
 
 Steps:
-1. **Liveness:** `curl -s https://ai-receptionist-production-5375.up.railway.app/health` — expect `{"status":"ok","agent":"esmi"}`. This endpoint is public and unauth.
+1. **Liveness:** `curl -s https://ai-receptionist-production-5375.up.railway.app/health` — expect `{"status":"ok","agent":"esmi","checkpointer":"AsyncPostgresSaver"}`. This endpoint is public and unauth. If `checkpointer` is `"InMemorySaver"` (or `"MemorySaver"`) instead, `DATABASE_URL` isn't wired up on Railway and every conversation is losing its history on each restart — flag this loudly, it's not a minor issue.
 
 2. **Pricing + streaming** (the real smoke test — no auth needed, hits `/chat`):
    POST a pricing question to `/chat` and assert the six canonical amounts appear in the reply via `token` events. Use `/verify-pricing` for this.

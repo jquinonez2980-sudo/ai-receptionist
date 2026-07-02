@@ -44,16 +44,46 @@ from tenants import (
 from tools import (
     book_appointment,
     cancel_appointment,
+    escalate_to_human,
     find_booking,
     get_pricing,
     list_available_slots,
+    request_cancellation_code,
     reschedule_appointment,
     search_knowledge_base,
 )
 
 log = logging.getLogger(__name__)
 
-limiter = Limiter(key_func=get_remote_address)
+# Shared secret the Next.js proxy sends on every /chat request. Defined here
+# (rather than down with the other auth helpers) because _rate_limit_key needs
+# it. Fail-open when unset (logs a warning) so the endpoint stays usable before
+# the secret is wired up in Railway + Vercel. Once set, missing/wrong header → 401.
+CHAT_PROXY_SECRET = os.environ.get("CHAT_PROXY_SECRET")
+
+
+def _rate_limit_key(request: Request) -> str:
+    """Key the /chat rate limiter on the real visitor, not the Next.js proxy.
+
+    All /chat traffic arrives via the orhelix-website proxy's server-to-server
+    fetch(), so request.client.host is the proxy's own egress IP for every
+    visitor — keying on it either throttles all visitors as one shared bucket
+    or (depending on proxy hosting) doesn't rate-limit anything meaningfully.
+    The proxy forwards the real visitor IP in X-Client-IP; only trust it when
+    the request also carries the correct X-Chat-Secret, so an unauthenticated
+    caller can't spoof the header to manipulate someone else's bucket (they'll
+    be 401'd by _verify_chat_secret regardless, but the rate-limit check runs
+    before that, per slowapi's decorator ordering).
+    """
+    provided_secret = request.headers.get("X-Chat-Secret", "")
+    if CHAT_PROXY_SECRET and hmac.compare_digest(provided_secret, CHAT_PROXY_SECRET):
+        forwarded = request.headers.get("X-Client-IP", "").strip()
+        if forwarded:
+            return forwarded
+    return get_remote_address(request)
+
+
+limiter = Limiter(key_func=_rate_limit_key)
 
 
 @asynccontextmanager
@@ -86,10 +116,7 @@ app.add_middleware(
 
 VAPI_SERVER_SECRET = os.environ.get("VAPI_SERVER_SECRET")
 
-# Shared secret the Next.js proxy sends on every /chat request.
-# Fail-open when unset (logs a warning) so the endpoint stays usable before
-# the secret is wired up in Railway + Vercel. Once set, missing/wrong header → 401.
-CHAT_PROXY_SECRET = os.environ.get("CHAT_PROXY_SECRET")
+# CHAT_PROXY_SECRET is defined earlier (near the limiter), which needs it too.
 
 # Set ALLOW_UNAUTHENTICATED_VOICE=1 only in local dev when you don't want to
 # configure the full VAPI secret. Never set this on Railway/production.
@@ -305,7 +332,9 @@ async def _stream_chat(
 
 @app.get("/health")
 async def health() -> dict:
-    return {"status": "ok", "agent": "esmi"}
+    g = _graph_module.graph
+    checkpointer_type = type(g.checkpointer).__name__ if g is not None else "none"
+    return {"status": "ok", "agent": "esmi", "checkpointer": checkpointer_type}
 
 
 @app.get("/health/env")
@@ -451,14 +480,25 @@ def _run_voice_tool(name: str, params: dict, tenant_id: str = "default") -> str:
         return str(find_booking.invoke({
             "contact": params.get("contact") or params.get("attendee_email") or params.get("caller_phone"),
         }, config=cfg))
+    if name == "request_cancellation_code":
+        return str(request_cancellation_code.invoke({"event_id": params["event_id"]}, config=cfg))
     if name == "reschedule_appointment":
         return str(reschedule_appointment.invoke({
             "event_id": params["event_id"],
             "new_start_time": params["new_start_time"],
             "new_end_time": params["new_end_time"],
+            "confirmation_code": params.get("confirmation_code", ""),
         }, config=cfg))
     if name == "cancel_appointment":
-        return str(cancel_appointment.invoke({"event_id": params["event_id"]}, config=cfg))
+        return str(cancel_appointment.invoke({
+            "event_id": params["event_id"],
+            "confirmation_code": params.get("confirmation_code", ""),
+        }, config=cfg))
+    if name == "escalate_to_human":
+        return str(escalate_to_human.invoke({
+            "reason": params.get("reason", "Voice escalation"),
+            "user_summary": params.get("user_summary", ""),
+        }, config=cfg))
     log.warning("VAPI sent unknown tool: %s", name)
     return "Unknown tool."
 

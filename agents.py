@@ -21,6 +21,7 @@ from tools import (
     find_booking,
     get_pricing,
     list_available_slots,
+    request_cancellation_code,
     reschedule_appointment,
     search_knowledge_base,
 )
@@ -88,6 +89,7 @@ ESMI_TOOLS = [
     list_available_slots,
     book_appointment,
     find_booking,
+    request_cancellation_code,
     reschedule_appointment,
     cancel_appointment,
     escalate_to_human,
@@ -125,7 +127,7 @@ def make_informer(model=None):
 def make_booker(model=None):
     """Manages all calendar operations — book, find, reschedule, cancel.
     Tools: list_available_slots, book_appointment, find_booking,
-           reschedule_appointment, cancel_appointment.
+           request_cancellation_code, reschedule_appointment, cancel_appointment.
     """
     return create_agent(
         model or llm,
@@ -133,6 +135,7 @@ def make_booker(model=None):
             list_available_slots,
             book_appointment,
             find_booking,
+            request_cancellation_code,
             reschedule_appointment,
             cancel_appointment,
         ],

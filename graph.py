@@ -65,11 +65,18 @@ async def _build_async_checkpointer() -> BaseCheckpointSaver:
         log.info("Checkpointer: AsyncPostgresSaver (connected).")
         return saver
     except Exception as e:
+        # DATABASE_URL being SET but unreachable is a config/outage error, not the
+        # "no database configured" case above — silently falling back to MemorySaver
+        # here would keep the service serving requests while quietly losing every
+        # conversation on the next restart, with only a log line to notice by.
+        # Fail hard instead so a broken DB is visible immediately (deploy fails),
+        # not discovered later as "why did all our threads lose their history".
         log.error(
-            "Failed to initialize AsyncPostgresSaver (%s). Falling back to MemorySaver.",
+            "DATABASE_URL is set but AsyncPostgresSaver init failed (%s). "
+            "Refusing to silently fall back to MemorySaver.",
             e,
         )
-        return MemorySaver()
+        raise
 
 
 def get_checkpointer() -> BaseCheckpointSaver:
@@ -273,6 +280,16 @@ def _compress_node(state: AgentState) -> dict:
 
 # ── State-writing specialist wrappers ─────────────────────────────────────────
 
+def _with_lead_score(config: RunnableConfig, lead_score: int) -> dict:
+    """Merge the running lead_score into configurable so escalate_to_human
+    (tools.py) can read it via its `config` param and include it in the
+    escalation email — lead_score lives in AgentState, not the original
+    request config, so it has to be threaded through explicitly like this."""
+    base = dict(config or {})
+    base["configurable"] = {**(base.get("configurable") or {}), "lead_score": lead_score}
+    return base
+
+
 def _make_informer_node(informer):
     """Wrap the informer agent to also update lead_score.
 
@@ -280,20 +297,25 @@ def _make_informer_node(informer):
     safe default, so follow-up questions naturally fall back here.
     """
     def node(state: AgentState, config: RunnableConfig) -> dict:
-        # Forward config so the sub-agent's tools (RunnableConfig injection) and
-        # prompt (runtime.context) both see the per-request tenant_id.
-        result = informer.invoke(state, config=config)
+        # Forward config (with the running lead_score merged in, so escalate_to_human
+        # can put it in the email — see _with_lead_score) so the sub-agent's tools
+        # (RunnableConfig injection) and prompt (runtime.context) both see the
+        # per-request tenant_id.
+        lead_score_in = state.get("lead_score") or 0
+        result = informer.invoke(state, config=_with_lead_score(config, lead_score_in))
         msgs = result.get("messages", [])
         last = msgs[-1].content if msgs else ""
         # Pricing discussed = warmer lead (20 pts); any informer reply = mild intent (5 pts).
-        from tenants import load_tenant
-        tenant_id = ((config or {}).get("configurable") or {}).get("tenant_id") or "default"
+        # get_pricing formats amounts with thousands separators (e.g. "$8,500"), so the
+        # signal strings must match that format or this bump can never fire.
+        from tenants import load_tenant, normalize_tenant_id
+        tenant_id = normalize_tenant_id(((config or {}).get("configurable") or {}).get("tenant_id"))
         _tenant_cfg = load_tenant(tenant_id)
-        pricing_signals = [str(v) for p in _tenant_cfg.pricing for v in (p.get("setup_from"), p.get("monthly_from")) if v]
+        pricing_signals = [f"{v:,}" for p in _tenant_cfg.pricing for v in (p.get("setup_from"), p.get("monthly_from")) if v]
         bump = 20 if any(p in last for p in pricing_signals) else 5
         return {
             "messages": msgs,
-            "lead_score": min(100, (state.get("lead_score") or 0) + bump),
+            "lead_score": min(100, lead_score_in + bump),
             "next": None,
         }
     return node
@@ -375,11 +397,10 @@ def _make_closer_node(closer):
     Clears `next` — after a hand-off, follow-ups fall back to the informer.
     """
     def node(state: AgentState, config: RunnableConfig) -> dict:
-        result = closer.invoke(state, config=config)
-        msgs = result.get("messages", [])
-
         score = state.get("lead_score") or 0
         qualified = state.get("qualified") or False
+        result = closer.invoke(state, config=_with_lead_score(config, score))
+        msgs = result.get("messages", [])
 
         for m in msgs:
             tool_calls = getattr(m, "tool_calls", None) or []

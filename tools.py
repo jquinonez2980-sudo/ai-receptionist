@@ -27,11 +27,13 @@
 from __future__ import annotations
 
 import hashlib
+import hmac
 import html
 import json
 import logging
 import os
 import re
+import secrets
 import tempfile
 import threading
 import time
@@ -278,6 +280,156 @@ def _send_sms_confirmation(to_number: str, when: str, tenant_id: str = "default"
         log.info("Booking confirmation SMS sent to %s", to_number)
     except Exception as e:
         log.warning(f"Booking confirmation SMS failed: {e}")
+
+
+# ════════════════════════════════════════════════════════════════════════
+#  CANCEL/RESCHEDULE CONFIRMATION CODE  (finding 10.1: anyone who knows a
+#  contact's email/phone could cancel their booking with no verification)
+# ════════════════════════════════════════════════════════════════════════
+#
+# Unlike the booking-notification helpers above (best-effort, never block the
+# flow on failure), these MUST signal failure to the caller — if we can't
+# deliver a code, cancel_appointment/reschedule_appointment must refuse to
+# proceed rather than silently falling back to the old no-verification behavior.
+
+
+def _extract_contact(event: dict) -> tuple[Optional[str], bool]:
+    """Return (contact, is_email) for a booking's attendee email (chat) or
+    phone stored in the description (voice), or (None, False) if neither."""
+    attendees = event.get("attendees") or []
+    if attendees:
+        email = attendees[0].get("email")
+        if email:
+            return email, True
+    desc = event.get("description", "")
+    if "Caller contact:" in desc:
+        phone = desc.split("Caller contact:", 1)[1].strip()
+        if phone and any(c.isdigit() for c in phone):
+            return phone, False
+    return None, False
+
+
+def _mask_contact(contact: str, is_email: bool) -> str:
+    """Partially obscure a contact for the caller-facing confirmation message."""
+    if is_email:
+        local, _, domain = contact.partition("@")
+        masked_local = (local[:2] if len(local) > 2 else local[:1]) + "***"
+        return f"{masked_local}@{domain}" if domain else f"{masked_local}"
+    digits = _digits(contact)
+    return f"***-{digits[-4:]}" if len(digits) >= 4 else "***"
+
+
+def _send_confirmation_code_sms(to_number: str, code: str, tenant_id: str = "default") -> bool:
+    """Text a cancel/reschedule confirmation code. Returns True only if actually sent."""
+    try:
+        sid = tenant_secret(tenant_id, "TWILIO_ACCOUNT_SID")
+        token = tenant_secret(tenant_id, "TWILIO_AUTH_TOKEN")
+        from_number = tenant_secret(tenant_id, "TWILIO_SMS_FROM")
+        if not (sid and token and from_number):
+            log.warning("Twilio SMS not configured — cannot send confirmation code.")
+            return False
+        from twilio.rest import Client
+
+        cfg = load_tenant(tenant_id)
+        body = f"Your {cfg.sms_signature} confirmation code is {code}. It expires in 10 minutes."
+        Client(sid, token).messages.create(body=body, from_=from_number, to=to_number)
+        log.info("Confirmation code SMS sent to %s", to_number)
+        return True
+    except Exception as e:
+        log.warning(f"Confirmation code SMS failed: {e}")
+        return False
+
+
+def _send_confirmation_code_email(to_email: str, code: str, tenant_id: str = "default") -> bool:
+    """Email a cancel/reschedule confirmation code. Returns True only if actually sent."""
+    try:
+        api_key = _get_sendgrid_key(tenant_id)
+        if not api_key:
+            log.warning("SendGrid key not found — cannot send confirmation code.")
+            return False
+        from sendgrid import SendGridAPIClient
+        from sendgrid.helpers.mail import Mail
+
+        cfg = load_tenant(tenant_id)
+        message = Mail(
+            from_email=cfg.email_from,
+            to_emails=to_email,
+            subject=f"Your {cfg.company_name} confirmation code",
+            html_content=(
+                f"<p>Your confirmation code is <b>{html.escape(code)}</b>. "
+                "It expires in 10 minutes.</p>"
+            ),
+        )
+        SendGridAPIClient(api_key).send(message)
+        log.info("Confirmation code email sent to %s", to_email)
+        return True
+    except Exception as e:
+        log.warning(f"Confirmation code email failed: {e}")
+        return False
+
+
+def _verify_and_consume_code(service, cal_id: str, event: dict, code: str) -> tuple[bool, str]:
+    """Check a caller-supplied code against the one request_cancellation_code
+    stored on the event's extendedProperties.private. Increments a persisted
+    attempt counter on mismatch (capped) so guessing is bounded; clears the
+    code on success so it can't be replayed for a second action.
+
+    Mutates `event["extendedProperties"]` in place (in addition to patching the
+    server) so a caller that later does a full event .update() — reschedule_appointment
+    does, cancel_appointment doesn't since it deletes the event — submits the
+    already-consistent state instead of silently reverting it to the pre-patch copy.
+
+    Returns (ok, message-to-return-to-the-caller-if-not-ok).
+    """
+    props = dict(event.get("extendedProperties") or {})
+    private = dict(props.get("private") or {})
+    stored_code = private.get("cancel_code")
+    expires = private.get("cancel_code_expires")
+    attempts = int(private.get("cancel_attempts", "0") or "0")
+
+    if not stored_code:
+        return False, (
+            "I need to send a confirmation code first — call request_cancellation_code, "
+            "then ask the caller to read it back before trying again."
+        )
+    if attempts >= 5:
+        return False, "Too many incorrect codes for this booking — I can send a fresh one if you'd like."
+    try:
+        expired = datetime.fromisoformat(expires) < datetime.now(timezone.utc)
+    except Exception:
+        expired = True
+    if expired:
+        return False, "That code has expired — I can send a new one."
+
+    if not hmac.compare_digest(str(code).strip(), str(stored_code)):
+        private["cancel_attempts"] = str(attempts + 1)
+        props["private"] = private
+        event["extendedProperties"] = props
+        remaining = max(0, 5 - (attempts + 1))
+        try:
+            _retry_calendar(
+                lambda: service.events()
+                .patch(calendarId=cal_id, eventId=event["id"], body={"extendedProperties": props})
+                .execute()
+            )
+        except Exception:
+            log.warning("Failed to persist incremented cancel_attempts for %s", event.get("id"))
+        return False, f"That code doesn't match — {remaining} attempt(s) left. Could you double-check it?"
+
+    # Success — clear the code so it can't be reused for a later cancel/reschedule.
+    for k in ("cancel_code", "cancel_code_expires", "cancel_attempts"):
+        private.pop(k, None)
+    props["private"] = private
+    event["extendedProperties"] = props
+    try:
+        _retry_calendar(
+            lambda: service.events()
+            .patch(calendarId=cal_id, eventId=event["id"], body={"extendedProperties": props})
+            .execute()
+        )
+    except Exception:
+        log.warning("Failed to clear confirmation code for %s after use", event.get("id"))
+    return True, ""
 
 
 # ════════════════════════════════════════════════════════════════════════
@@ -1029,10 +1181,84 @@ def find_booking(contact: str, config: RunnableConfig = None) -> str:
 
 
 @tool
-def cancel_appointment(event_id: str, config: RunnableConfig = None) -> str:
+def request_cancellation_code(event_id: str, config: RunnableConfig = None) -> str:
+    """Send a confirmation code before canceling or rescheduling a booking.
+
+    Call this FIRST — after find_booking, before cancel_appointment or
+    reschedule_appointment. Sends a 6-digit code to the contact on file (email
+    or phone, whichever the booking has) and expires in 10 minutes. This stops
+    anyone who merely knows a contact's email/phone from canceling or moving
+    their booking — only someone with access to that contact's inbox/phone can
+    read the code back.
+
+    Tell the caller a code was sent (to the masked contact in the result) and
+    ask them to read it back, then pass it as confirmation_code to
+    cancel_appointment / reschedule_appointment. If this returns a message
+    starting with "CONFIRMATION_CODE_FAILED", do NOT cancel or reschedule
+    without it — offer to connect the caller with a human instead.
+    """
+    try:
+        tenant_id = _tenant_from_config(config)
+        cfg = load_tenant(tenant_id)
+        service = _get_calendar_service(tenant_id)
+        cal_id = cfg.calendar_id
+        try:
+            event = service.events().get(calendarId=cal_id, eventId=event_id).execute()
+        except Exception:
+            return "I couldn't find that booking — it may have already been canceled."
+
+        contact, is_email = _extract_contact(event)
+        if not contact:
+            return (
+                "CONFIRMATION_CODE_FAILED: no contact on file for this booking — "
+                "cannot verify identity. Offer to connect the caller with a human."
+            )
+
+        code = f"{secrets.randbelow(900000) + 100000}"
+        expires = (datetime.now(timezone.utc) + timedelta(minutes=10)).isoformat()
+        props = dict(event.get("extendedProperties") or {})
+        private = dict(props.get("private") or {})
+        private.update({"cancel_code": code, "cancel_code_expires": expires, "cancel_attempts": "0"})
+        props["private"] = private
+        _retry_calendar(
+            lambda: service.events()
+            .patch(calendarId=cal_id, eventId=event_id, body={"extendedProperties": props})
+            .execute()
+        )
+
+        sent = (
+            _send_confirmation_code_email(contact, code, tenant_id)
+            if is_email
+            else _send_confirmation_code_sms(contact, code, tenant_id)
+        )
+        if not sent:
+            return (
+                "CONFIRMATION_CODE_FAILED: couldn't deliver a code to the contact on "
+                "file. Do not cancel or reschedule without one — offer to connect the "
+                "caller with a human instead."
+            )
+
+        channel = "email" if is_email else "phone number"
+        return (
+            f"I've sent a confirmation code to the {channel} on file "
+            f"({_mask_contact(contact, is_email)}). Ask them to read it back before "
+            "you cancel or reschedule."
+        )
+    except RuntimeError as e:
+        log.error("request_cancellation_code: calendar not configured: %s", e)
+        return _CALENDAR_FALLBACK
+    except Exception:
+        log.exception("request_cancellation_code failed")
+        return _CALENDAR_FALLBACK
+
+
+@tool
+def cancel_appointment(event_id: str, confirmation_code: str, config: RunnableConfig = None) -> str:
     """Cancel an existing appointment by its event id (from find_booking).
 
-    Always confirm with the caller before calling this — cancellation is final.
+    Requires confirmation_code from request_cancellation_code, read back by the
+    caller — call request_cancellation_code first and never skip straight to
+    canceling on a contact's say-so alone.
     """
     try:
         tenant_id = _tenant_from_config(config)
@@ -1045,6 +1271,11 @@ def cancel_appointment(event_id: str, config: RunnableConfig = None) -> str:
             )
         except Exception:
             return "I couldn't find that booking — it may have already been canceled."
+
+        ok, msg = _verify_and_consume_code(service, cal_id, event, confirmation_code)
+        if not ok:
+            return msg
+
         when = _friendly_when(event.get("start", {}).get("dateTime", ""))
         send_updates = "all" if event.get("attendees") else "none"
         _retry_calendar(
@@ -1063,7 +1294,11 @@ def cancel_appointment(event_id: str, config: RunnableConfig = None) -> str:
 
 @tool
 def reschedule_appointment(
-    event_id: str, new_start_time: str, new_end_time: str, config: RunnableConfig = None
+    event_id: str,
+    new_start_time: str,
+    new_end_time: str,
+    confirmation_code: str,
+    config: RunnableConfig = None,
 ) -> str:
     """Move an existing appointment to a new time.
 
@@ -1071,8 +1306,11 @@ def reschedule_appointment(
         event_id: The booking's event id (from find_booking).
         new_start_time: ISO 8601 start with timezone, e.g. '2026-05-29T10:00:00-04:00'.
         new_end_time:   ISO 8601 end with timezone.
+        confirmation_code: From request_cancellation_code, read back by the caller.
 
-    Always confirm the new time with the caller before calling this.
+    Always confirm the new time with the caller before calling this. Call
+    request_cancellation_code first — never skip straight to rescheduling on a
+    contact's say-so alone.
     """
     try:
         tenant_id = _tenant_from_config(config)
@@ -1096,6 +1334,11 @@ def reschedule_appointment(
                 "I couldn't find that booking — it may have been canceled. "
                 "Want me to book a new time?"
             )
+
+        ok, msg = _verify_and_consume_code(service, cal_id, event, confirmation_code)
+        if not ok:
+            return msg
+
         if not _slot_still_free(service, new_start_time, new_end_time, cfg.business_tz, cal_id):
             return "That new time isn't available — could you pick another slot?"
 
@@ -1169,6 +1412,28 @@ def escalate_to_human(reason: str, user_summary: str, config: RunnableConfig = N
             subject = html.escape(reason)
         else:
             subject = f"[Esmi Escalation] {html.escape(reason)}"
+
+        # thread_id/tenant_id let a human look the conversation up (checkpointer
+        # table or Railway logs); lead_score is only present in multi-agent mode
+        # (injected via graph._with_lead_score) — single-agent mode doesn't track
+        # it, so the row is omitted rather than showing a misleading 0.
+        configurable = (config or {}).get("configurable") or {}
+        thread_id = configurable.get("thread_id")
+        lead_score = configurable.get("lead_score")
+        extra_rows = ""
+        if lead_score is not None:
+            extra_rows += (
+                '<tr><td style="color:#94a3b8;text-transform:uppercase;font-size:12px;'
+                'padding:10px 0;">Lead Score</td>'
+                f'<td style="color:#0A2540;">{html.escape(str(lead_score))}/100</td></tr>'
+            )
+        if thread_id:
+            extra_rows += (
+                '<tr><td style="color:#94a3b8;text-transform:uppercase;font-size:12px;'
+                'padding:10px 0;">Conversation</td>'
+                f'<td style="color:#0A2540;">{html.escape(tenant_id)} / {html.escape(str(thread_id))}</td></tr>'
+            )
+
         html_content = f"""
         <div style="font-family: Inter, Arial, sans-serif; max-width: 600px; margin: 0 auto;">
             <div style="background: linear-gradient(135deg, #0A2540, #0e3460);
@@ -1188,6 +1453,7 @@ def escalate_to_human(reason: str, user_summary: str, config: RunnableConfig = N
                         <td style="color:#0A2540;">{ts}</td></tr>
                     <tr><td style="color:#94a3b8;text-transform:uppercase;font-size:12px;padding:10px 0;vertical-align:top;">Summary</td>
                         <td style="color:#0A2540;">{html.escape(user_summary)}</td></tr>
+                    {extra_rows}
                 </table>
             </div>
         </div>

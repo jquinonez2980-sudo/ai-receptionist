@@ -111,21 +111,39 @@ def find_booking(contact: str) -> str:
 
 
 @tool
-def reschedule_appointment(event_id: str, new_start_time: str, new_end_time: str) -> str:
-    """Move an existing booking (event id from find_booking) to a new confirmed time."""
+def request_cancellation_code(event_id: str) -> str:
+    """Send a confirmation code to the contact on file before canceling or
+    rescheduling a booking. Call this after find_booking and before
+    cancel_appointment or reschedule_appointment."""
+    CALLS.append(("request_cancellation_code", {"event_id": event_id}))
+    return "I've sent a confirmation code to the contact on file. (test code: 123456)"
+
+
+@tool
+def reschedule_appointment(
+    event_id: str, new_start_time: str, new_end_time: str, confirmation_code: str
+) -> str:
+    """Move an existing booking (event id from find_booking) to a new confirmed
+    time. Requires confirmation_code from request_cancellation_code."""
     CALLS.append(
         (
             "reschedule_appointment",
-            {"event_id": event_id, "new_start_time": new_start_time, "new_end_time": new_end_time},
+            {
+                "event_id": event_id,
+                "new_start_time": new_start_time,
+                "new_end_time": new_end_time,
+                "confirmation_code": confirmation_code,
+            },
         )
     )
     return "Rescheduled."
 
 
 @tool
-def cancel_appointment(event_id: str) -> str:
-    """Cancel an existing booking (event id from find_booking) after confirming which one."""
-    CALLS.append(("cancel_appointment", {"event_id": event_id}))
+def cancel_appointment(event_id: str, confirmation_code: str) -> str:
+    """Cancel an existing booking (event id from find_booking) after confirming
+    which one. Requires confirmation_code from request_cancellation_code."""
+    CALLS.append(("cancel_appointment", {"event_id": event_id, "confirmation_code": confirmation_code}))
     return "Cancelled."
 
 
@@ -143,6 +161,7 @@ ALL_STUBS = [
     list_available_slots,
     book_appointment,
     find_booking,
+    request_cancellation_code,
     reschedule_appointment,
     cancel_appointment,
     escalate_to_human,
@@ -151,5 +170,5 @@ ALL_STUBS = [
 # Per-specialist subsets — mirrors the tool lists in agents.make_*().
 INFORMER_STUBS = [search_knowledge_base, get_pricing, escalate_to_human]
 BOOKER_STUBS   = [list_available_slots, book_appointment, find_booking,
-                  reschedule_appointment, cancel_appointment]
+                  request_cancellation_code, reschedule_appointment, cancel_appointment]
 CLOSER_STUBS   = [escalate_to_human]
