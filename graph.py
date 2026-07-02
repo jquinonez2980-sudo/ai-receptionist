@@ -103,19 +103,35 @@ def _build_single_agent_graph(checkpointer):
 # ── Phase 4: three-specialist graph ──────────────────────────────────────────
 
 # Keywords that indicate the user wants to book / manage an appointment.
+# Deliberately excludes ambiguous phrases that collide with non-booking intent:
+# "when are you" (catches "when are you open?" — an hours/FAQ question), "next
+# week"/weekday names (catches "I'm away next week, tell me about your
+# services"), and bare "cancel" (catches "how do I cancel the monthly
+# service?" — a pricing/terms question). The LLM router (below) handles those
+# correctly; only unambiguous booking verbs/phrases belong in this fast tier.
 _BOOKING_KW = frozenset({
     "book", "schedule", "appointment", "slot", "availability",
-    "reschedule", "cancel", "move my", "change my", "find my booking",
-    "intro call", "demo call", "when are you", "next week", "next monday",
-    "next tuesday", "next wednesday", "next thursday", "next friday",
+    "reschedule", "cancel my appointment", "cancel my booking",
+    "move my", "change my", "find my booking",
+    "intro call", "demo call",
 })
 
 # Keywords that indicate urgency / hot-lead / human escalation needed.
+# Includes Spanish equivalents (finding 7.2) — the product explicitly sells
+# LATAM-Spanish bilingual support, so a Spanish-speaking hot lead needs the
+# same zero-latency rule-routing an English one gets, not a bet entirely on
+# the LLM router.
 _URGENCY_KW = frozenset({
     "asap", "urgent", "this quarter", "q3", "q4", "budget approved",
     "budget is approved", "ready to start", "need this now", "immediately",
     "speak with", "talk to a person", "talk to someone", "frustrated",
     "a human",
+    # Spanish
+    "urgente", "lo antes posible", "cuanto antes", "este trimestre",
+    "presupuesto aprobado", "listos para empezar", "listo para empezar",
+    "necesito esto ahora", "lo necesito ahora", "inmediatamente",
+    "hablar con una persona", "hablar con alguien", "frustrado", "frustrada",
+    "un humano", "una persona real",
 })
 
 
@@ -146,7 +162,11 @@ def _get_router_llm():
     global _router_llm
     if _router_llm is None:
         from langchain_openai import ChatOpenAI
-        _router_llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
+        # timeout/max_retries: a hung or slow classifier call would otherwise add
+        # unbounded latency to every keyword-miss turn before any user-visible
+        # token streams. Fail fast and fall back (both _llm_route and
+        # _llm_route_sticky catch the resulting exception).
+        _router_llm = ChatOpenAI(model="gpt-4o-mini", temperature=0, timeout=3, max_retries=0)
     return _router_llm
 
 
@@ -172,6 +192,51 @@ def _llm_route(human_text: str) -> str:
     return "informer"
 
 
+# Sticky-booker router: used only while state["next"] == "booker" (mid-booking
+# flow). Unlike _ROUTER_SYSTEM, this is deliberately BIASED toward "booker" —
+# the sticky mechanism exists because keyword-free mid-flow replies like "10am"
+# or "june 11 at 10am" (see test_mid_booking_replies_stick_to_booker — "the
+# message that broke booking in prod") have no context clues on their own, and
+# a generic classifier could easily misread them as unrelated. Only a message
+# that's CLEARLY unrelated to the in-progress booking should escape.
+_STICKY_ROUTER_SYSTEM = (
+    "You are the router for an AI receptionist. The user is CURRENTLY in the middle "
+    "of booking, rescheduling, or canceling an appointment. Classify their latest "
+    "message into exactly one of:\n"
+    "- booker: continues the booking flow in any way — a date, time, name, email, "
+    "confirmation ('yes'/'that works'), or anything that could plausibly be part of "
+    "scheduling. Default to this whenever there's any doubt.\n"
+    "- informer: a CLEARLY unrelated question — about services, pricing, the "
+    "company, or general conversation — that has nothing to do with the booking "
+    "in progress.\n"
+    "- closer: a hot lead signal — budget, timeline, urgency, frustration, or "
+    "asking to speak with a human.\n"
+    "Reply with ONLY one word: booker, informer, or closer."
+)
+
+
+def _llm_route_sticky(human_text: str) -> str:
+    """Classify a message while the sticky booker flow is active. Fail-safe:
+    returns 'booker' (not 'informer') on any error or empty input, preserving
+    today's sticky behavior whenever the classifier can't be trusted."""
+    text = (human_text or "").strip()
+    if not text:
+        return "booker"
+    try:
+        resp = _get_router_llm().invoke(
+            [("system", _STICKY_ROUTER_SYSTEM), ("user", text)],
+            config={"tags": [_ROUTER_STREAM_TAG]},
+        )
+        ans = (resp.content or "").strip().lower()
+        for node in ("closer", "informer", "booker"):
+            if node in ans:
+                log.info("Sticky-booker LLM router classified %r → %s", text[:60], node)
+                return node
+    except Exception:
+        log.warning("Sticky-booker LLM router failed; defaulting to booker.", exc_info=True)
+    return "booker"
+
+
 def _last_human_text(state: AgentState) -> str:
     for m in reversed(state.get("messages") or []):
         if getattr(m, "type", None) == "human":
@@ -186,35 +251,42 @@ def _route_rules(state: AgentState) -> str | None:
 
     Priority:
       1. urgency signals → closer (always, even mid-booking)
-      2. sticky: state["next"] == "booker" → booker (keyword-free mid-flow replies)
-      3. explicit booking keyword → booker
-      4. no match → None
+      2. explicit booking keyword → booker
+      3. no match → None
 
     NOTE: there is deliberately no "appointment_details is set → booker" rule.
     appointment_details is never cleared once a booking succeeds (see
     _make_booker_node), so that rule used to permanently hijack every later
     message in the thread to the booker, even "what services do you offer?"
-    turns after the booking was done. The sticky `next` mechanism already
-    covers legitimate mid-booking continuation; a completed booking should
-    fall through to the LLM router like any other message.
+    turns after the booking was done. A completed booking should fall through
+    to the LLM router like any other message.
+
+    Sticky mid-booking continuation (state["next"] == "booker") is deliberately
+    NOT handled here — see _route, which runs the LLM-classified _llm_route_sticky
+    for that case instead of forcing "booker" unconditionally (finding 5.2: a
+    stale "how much does the intro call cost?" used to stay trapped in the
+    booker, which has no pricing tool).
     """
     human_text = _last_human_text(state)
 
     if any(kw in human_text for kw in _URGENCY_KW):
         return "closer"
-    if state.get("next") == "booker":
-        return "booker"
     if any(kw in human_text for kw in _BOOKING_KW):
         return "booker"
     return None
 
 
 def _route(state: AgentState) -> str:
-    """Conditional-edge router. Deterministic rules first; on no match, the LLM
+    """Conditional-edge router. Deterministic rules first; then sticky
+    continuation (LLM-classified, biased toward booker); then the general LLM
     classifier (if enabled) instead of a blind informer default."""
     decided = _route_rules(state)
     if decided is not None:
         return decided
+    if state.get("next") == "booker":
+        if _LLM_ROUTER_ENABLED:
+            return _llm_route_sticky(_last_human_text(state))
+        return "booker"  # no classifier available — preserve the old sticky behavior
     if _LLM_ROUTER_ENABLED:
         return _llm_route(_last_human_text(state))
     return "informer"
