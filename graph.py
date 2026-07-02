@@ -12,6 +12,7 @@ import logging
 import os
 from typing import Optional
 
+from langchain_core.messages import ToolMessage
 from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.checkpoint.memory import MemorySaver
@@ -178,17 +179,22 @@ def _route_rules(state: AgentState) -> str | None:
 
     Priority:
       1. urgency signals → closer (always, even mid-booking)
-      2. booking completed (appointment_details set) → booker
-      3. sticky: state["next"] == "booker" → booker (keyword-free mid-flow replies)
-      4. explicit booking keyword → booker
-      5. no match → None
+      2. sticky: state["next"] == "booker" → booker (keyword-free mid-flow replies)
+      3. explicit booking keyword → booker
+      4. no match → None
+
+    NOTE: there is deliberately no "appointment_details is set → booker" rule.
+    appointment_details is never cleared once a booking succeeds (see
+    _make_booker_node), so that rule used to permanently hijack every later
+    message in the thread to the booker, even "what services do you offer?"
+    turns after the booking was done. The sticky `next` mechanism already
+    covers legitimate mid-booking continuation; a completed booking should
+    fall through to the LLM router like any other message.
     """
     human_text = _last_human_text(state)
 
     if any(kw in human_text for kw in _URGENCY_KW):
         return "closer"
-    if state.get("appointment_details"):
-        return "booker"
     if state.get("next") == "booker":
         return "booker"
     if any(kw in human_text for kw in _BOOKING_KW):
@@ -293,6 +299,19 @@ def _make_informer_node(informer):
     return node
 
 
+def _booking_call_succeeded(content) -> bool:
+    """True only for book_appointment's actual success strings.
+
+    book_appointment (tools.py) returns "Booked — confirmed for ..." on a fresh
+    insert, or "That's already booked — you're confirmed for ..." on an
+    idempotent re-attempt. Every failure path (closed day, outside business
+    hours, slot taken, calendar unreachable) returns a different, non-matching
+    string, so this never mis-classifies a rejection as a success.
+    """
+    text = content if isinstance(content, str) else str(content)
+    return text.startswith("Booked") or "you're confirmed" in text
+
+
 def _make_booker_node(booker):
     """Wrap the booker agent: populate appointment_details on success AND keep
     the conversation sticky while a booking is mid-flow.
@@ -316,11 +335,23 @@ def _make_booker_node(booker):
         # avoid re-firing booked=True on tool calls from earlier turns.
         prior_count = len(state.get("messages") or [])
         new_msgs = msgs[prior_count:] if len(msgs) > prior_count else msgs
+
+        # Map tool_call_id -> args from this turn's AIMessage tool calls, so a
+        # successful ToolMessage result can be traced back to what was booked.
+        call_args_by_id: dict[str, dict] = {}
         for m in new_msgs:
-            tool_calls = getattr(m, "tool_calls", None) or []
-            for tc in tool_calls:
+            for tc in (getattr(m, "tool_calls", None) or []):
                 if tc.get("name") == "book_appointment":
-                    appt = tc.get("args", {})
+                    call_args_by_id[tc.get("id")] = tc.get("args", {})
+
+        # Booking "success" is judged from the ToolMessage RESULT, not the fact
+        # that book_appointment was called — a rejected/failed booking (slot
+        # taken, outside hours, calendar down) must not mark the lead qualified
+        # or hijack routing to the booker.
+        for m in new_msgs:
+            if isinstance(m, ToolMessage) and getattr(m, "name", None) == "book_appointment":
+                if _booking_call_succeeded(m.content):
+                    appt = call_args_by_id.get(getattr(m, "tool_call_id", None), appt)
                     score = 90
                     qualified = True
                     booked = True

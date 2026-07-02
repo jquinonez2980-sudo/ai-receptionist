@@ -68,9 +68,14 @@ def test_booking_intent_matches_booker_rule(msg):
     )
 
 
-def test_appointment_in_progress_stays_in_booker():
-    state = _state("9am works for me.", appointment_details={"summary": "Intro Call"})
-    assert _route_rules(state) == "booker"
+def test_completed_booking_does_not_permanently_hijack_routing():
+    """Regression test for the permanent-hijack bug: appointment_details is
+    never cleared once a booking succeeds, so a stale "appointment_details is
+    set" rule used to force every later message (even unrelated questions) to
+    the booker forever. Mid-booking continuation is the sticky `next` field's
+    job (see test_mid_booking_replies_stick_to_booker), not appointment_details."""
+    state = _state("What services do you offer?", appointment_details={"summary": "Intro Call"}, next=None)
+    assert _route_rules(state) is None
 
 
 @pytest.mark.parametrize("msg", [

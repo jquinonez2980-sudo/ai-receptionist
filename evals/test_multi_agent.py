@@ -35,19 +35,23 @@ pytestmark = pytest.mark.skipif(
 )
 
 
-def test_ma_pricing_routes_to_informer_and_calls_get_pricing():
-    """Through the full graph: pricing question → informer → get_pricing.
-
-    The informer node has no booking tools — structural proof it can't book.
+def test_ma_esmi_pricing_never_quoted_by_informer():
+    """Regression test for the informer.md pricing-rule violation (fixed):
+    asking what Esmi itself costs must route to informer but get the canned
+    deflection — never a number from get_pricing or memory. This is the
+    multi-agent equivalent of the CLAUDE.md hard rule that Esmi must never
+    quote its own price.
     """
     calls, text = run_multi_agent_conversation(
         ["How much does Esmi cost?"],
-        thread_id="eval-ma-pricing",
+        thread_id="eval-ma-esmi-pricing",
     )
     names = tool_names(calls)
-    assert "get_pricing" in names, f"pricing must call get_pricing: {names}"
-    assert "$8,500" in text or "8,500" in text, (
-        f"canonical Esmi price must appear in reply: {text[:300]!r}"
+    assert "get_pricing" not in names, (
+        f"asking what Esmi itself costs must never call get_pricing: {names}"
+    )
+    assert "8,500" not in text and "8500" not in text, (
+        f"Esmi's own price must never be quoted: {text[:300]!r}"
     )
 
 
