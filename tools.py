@@ -47,7 +47,7 @@ from langchain_core.tools import tool
 from langchain_openai import OpenAIEmbeddings
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
-from tenants import load_tenant, tenant_secret
+from tenants import load_tenant, normalize_tenant_id, tenant_secret
 
 load_dotenv()
 log = logging.getLogger(__name__)
@@ -61,7 +61,8 @@ def _tenant_from_config(config: RunnableConfig | None) -> str:
     astream_events config through every subgraph + the ToolNode. The voice path
     passes config explicitly on `.invoke(..., config={"configurable":{...}})`.
     """
-    return ((config or {}).get("configurable") or {}).get("tenant_id") or "default"
+    raw = ((config or {}).get("configurable") or {}).get("tenant_id") or "default"
+    return normalize_tenant_id(raw)
 
 
 # ════════════════════════════════════════════════════════════════════════
@@ -369,7 +370,12 @@ def _kb_dir(tenant_id: str = "default") -> Path:
 
     default → the legacy KB_SOURCE_DIR (orchelix_knowledge_base/).
     other   → tenants/<id>/kb/  (co-located with the tenant's config.json).
+
+    tenant_id is re-validated here (not just at the API boundary) since this
+    path feeds directly into filesystem reads/writes — defense in depth against
+    a traversal id reaching this function via any other code path.
     """
+    tenant_id = normalize_tenant_id(tenant_id)
     if tenant_id == "default":
         return Path(os.getenv("KB_SOURCE_DIR", "orchelix_knowledge_base"))
     return Path(__file__).parent / "tenants" / tenant_id / "kb"
@@ -378,7 +384,7 @@ def _kb_dir(tenant_id: str = "default") -> Path:
 def _kb_index_dir(tenant_id: str = "default") -> Path:
     """Persistence dir for the FAISS index + content hash."""
     base = Path(os.getenv("KB_INDEX_DIR", ".kb_index"))
-    return base / tenant_id
+    return base / normalize_tenant_id(tenant_id)
 
 
 def _kb_content_hash(src_dir: Path) -> str:
@@ -659,6 +665,40 @@ def _closed_day_message(start_iso: str, business_days: tuple[int, ...]) -> Optio
     )
 
 
+def _fmt_hour(hour: int) -> str:
+    """24h int → spoken-friendly 12h label, e.g. 9 -> '9 AM', 17 -> '5 PM'."""
+    return datetime(2000, 1, 1, hour % 24).strftime("%I %p").lstrip("0")
+
+
+def _closed_hours_message(
+    start_iso: str, end_iso: str, business_hours: tuple[int, int], business_tz: str
+) -> Optional[str]:
+    """Return a caller-facing message if start_iso/end_iso fall outside the
+    tenant's business hours, else None. Same defense-in-depth rationale as
+    _closed_day_message: book_appointment/reschedule_appointment can be called
+    directly (voice path, a mis-resolved 'tomorrow at 8' → 8pm, retries)
+    without ever going through list_available_slots, so the hours window must
+    be enforced here too."""
+    try:
+        import pytz
+
+        tz = pytz.timezone(business_tz)
+        start_dt = datetime.fromisoformat(start_iso).astimezone(tz)
+        end_dt = datetime.fromisoformat(end_iso).astimezone(tz)
+    except Exception:
+        return None  # unparseable — let existing calendar-side validation handle it
+
+    open_hour, close_hour = business_hours
+    start_h = start_dt.hour + start_dt.minute / 60
+    end_h = end_dt.hour + end_dt.minute / 60
+    if start_h < open_hour or end_h > close_hour:
+        return (
+            f"That's outside our business hours ({_fmt_hour(open_hour)}–"
+            f"{_fmt_hour(close_hour)}) — could you pick a time in that window?"
+        )
+    return None
+
+
 @tool
 def list_available_slots(start_date: str, end_date: str, config: RunnableConfig = None) -> str:
     """List bookable slots between start_date and end_date (inclusive), on the
@@ -704,6 +744,10 @@ def list_available_slots(start_date: str, end_date: str, config: RunnableConfig 
             b_end = datetime.fromisoformat(period["end"]).astimezone(tz)
             busy_ranges.append((b_start, b_end))
 
+        # Floor: never offer a slot that has already started (plus a short lead
+        # time), so "anything today?" at 3pm doesn't surface a 9am slot.
+        earliest = datetime.now(tz) + timedelta(minutes=15)
+
         available: list[str] = []
         current = start_dt
         while current <= end_dt:
@@ -715,6 +759,8 @@ def list_available_slots(start_date: str, end_date: str, config: RunnableConfig 
                                 hour=hour, minute=minute, second=0, microsecond=0
                             )
                         )
+                        if slot_start < earliest:
+                            continue
                         slot_end = slot_start + timedelta(minutes=cfg.slot_minutes)
 
                         is_busy = any(
@@ -830,6 +876,9 @@ def book_appointment(
         closed_msg = _closed_day_message(start_time, cfg.business_days)
         if closed_msg:
             return closed_msg
+        hours_msg = _closed_hours_message(start_time, end_time, cfg.business_hours, cfg.business_tz)
+        if hours_msg:
+            return hours_msg
 
         service = _get_calendar_service(tenant_id)
         event_id = _idem_event_id(idempotency_key)
@@ -1032,6 +1081,9 @@ def reschedule_appointment(
         closed_msg = _closed_day_message(new_start_time, cfg.business_days)
         if closed_msg:
             return closed_msg
+        hours_msg = _closed_hours_message(new_start_time, new_end_time, cfg.business_hours, cfg.business_tz)
+        if hours_msg:
+            return hours_msg
 
         service = _get_calendar_service(tenant_id)
         cal_id = cfg.calendar_id
@@ -1088,14 +1140,23 @@ def escalate_to_human(reason: str, user_summary: str, config: RunnableConfig = N
             "New Esmi Lead: [name] — [business type]" (omit "— [business type]" if
             unknown) — this exact format becomes the email subject verbatim.
         user_summary: 2-3 sentences summarising what the user needs.
+
+    Returns a normal confirmation string on success. On failure the result starts
+    with "ESCALATION_FAILED:" — if you see that prefix, the team was NOT notified:
+    apologize, do not tell the user someone will follow up, and offer a direct
+    contact instead.
     """
     try:
         tenant_id = _tenant_from_config(config)
         cfg = load_tenant(tenant_id)
         api_key = _get_sendgrid_key(tenant_id)
         if not api_key:
-            log.warning("SendGrid key not found — escalation email skipped.")
-            return "I've flagged this for our team and someone will follow up with you shortly."
+            log.error("Escalation email NOT sent — no SendGrid key configured for tenant '%s'.", tenant_id)
+            return (
+                "ESCALATION_FAILED: the team was NOT notified (no email configured). "
+                "Apologize to the user, do not promise a follow-up, and offer a direct "
+                "contact (phone/email) instead."
+            )
 
         from sendgrid import SendGridAPIClient
         from sendgrid.helpers.mail import Mail
@@ -1141,7 +1202,12 @@ def escalate_to_human(reason: str, user_summary: str, config: RunnableConfig = N
         SendGridAPIClient(api_key).send(message)
         log.info(f"Escalation email sent: {reason}")
     except Exception as e:
-        log.warning(f"Escalation email failed: {e}")
+        log.error(f"Escalation email FAILED to send: {e}")
+        return (
+            "ESCALATION_FAILED: the team was NOT notified (send error). "
+            "Apologize to the user, do not promise a follow-up, and offer a direct "
+            "contact (phone/email) instead."
+        )
 
     return "I've flagged this for our team and someone will follow up with you shortly."
 

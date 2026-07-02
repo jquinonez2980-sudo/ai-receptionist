@@ -18,6 +18,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import threading
 import warnings
 from dataclasses import dataclass, field
@@ -27,6 +28,7 @@ from typing import Optional
 log = logging.getLogger(__name__)
 
 _REGISTRY_DIR = Path(__file__).parent / "tenants"
+_TENANT_ID_RE = re.compile(r"^[a-z0-9-]{1,64}$")
 
 # ── Default-tenant (Orchelix) non-secret constants that are NOT already in
 #    tools.py. Pricing / tz / hours / slot come from tools.py at load time.
@@ -71,7 +73,18 @@ _lock = threading.Lock()
 
 
 def _norm(tenant_id: Optional[str]) -> str:
-    return (tenant_id or "default").strip().lower() or "default"
+    """Normalize + validate a client-supplied tenant id.
+
+    Only [a-z0-9-]{1,64} is accepted (also rejects '.', '/', ':' — path
+    traversal and thread-namespace collision vectors). Anything else silently
+    falls back to 'default' rather than erroring, matching the existing
+    unknown-tenant behavior.
+    """
+    tid = (tenant_id or "default").strip().lower() or "default"
+    if not _TENANT_ID_RE.fullmatch(tid):
+        log.warning("Rejected invalid tenant_id %r — falling back to default.", tenant_id)
+        return "default"
+    return tid
 
 
 def _default_config() -> TenantConfig:
@@ -166,6 +179,14 @@ def load_tenant(tenant_id: str = "default") -> TenantConfig:
                 )
         _cache[tid] = cfg
         return cfg
+
+
+def normalize_tenant_id(tenant_id: Optional[str]) -> str:
+    """Public wrapper for the tenant_id validator — any code that takes a
+    tenant_id from an external source (HTTP header/body, LangGraph config,
+    prompt-loader context) must pass it through this before using it in a
+    filesystem path or secret-env lookup."""
+    return _norm(tenant_id)
 
 
 def tenant_exists(tenant_id: str) -> bool:

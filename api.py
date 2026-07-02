@@ -22,7 +22,7 @@ from typing import AsyncGenerator
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
@@ -34,7 +34,13 @@ from _text_utils import (
     _parse_time_slots,
     _strip_slots_from_text,
 )
-from tenants import load_tenant, namespaced_thread, resolve_vapi_tenant, tenant_exists
+from tenants import (
+    load_tenant,
+    namespaced_thread,
+    normalize_tenant_id,
+    resolve_vapi_tenant,
+    tenant_exists,
+)
 from tools import (
     book_appointment,
     cancel_appointment,
@@ -89,6 +95,22 @@ CHAT_PROXY_SECRET = os.environ.get("CHAT_PROXY_SECRET")
 # configure the full VAPI secret. Never set this on Railway/production.
 _VOICE_UNAUTH_DEV = os.environ.get("ALLOW_UNAUTHENTICATED_VOICE") == "1"
 
+# Raw VAPI payloads contain the caller's phone number and full transcript
+# fragments — only log them at info level when explicitly debugging. Routine
+# per-call tool logs still run, but with PII fields masked (see _redact_for_log).
+_VOICE_DEBUG = os.environ.get("VOICE_DEBUG") == "1"
+
+
+def _redact_for_log(params: dict) -> dict:
+    """Mask PII-bearing fields before writing tool-call params to routine logs."""
+    redacted = dict(params)
+    for key in ("caller_phone", "attendee_email", "contact"):
+        v = redacted.get(key)
+        if v:
+            s = str(v)
+            redacted[key] = f"{s[:3]}***{s[-2:]}" if len(s) > 6 else "***"
+    return redacted
+
 
 def _verify_vapi_secret(request: Request) -> None:
     """Reject VAPI webhook calls that don't carry the shared server secret.
@@ -142,8 +164,18 @@ def _verify_chat_secret(request: Request) -> None:
 
 class ChatRequest(BaseModel):
     message: str = Field(..., max_length=4000)
-    thread_id: str
+    thread_id: str = Field(..., min_length=1, max_length=128)
     tenant_id: str | None = None   # optional body fallback; X-Tenant-Id header preferred
+
+    @field_validator("thread_id")
+    @classmethod
+    def _reject_namespace_separator(cls, v: str) -> str:
+        # ':' is reserved by namespaced_thread() to prefix tenant-scoped thread
+        # ids; allowing a client to supply it would let a default-tenant caller
+        # collide with (and read/write) another tenant's checkpoint thread.
+        if ":" in v:
+            raise ValueError("thread_id must not contain ':'")
+        return v
 
 
 def _resolve_tenant(request: Request, req: "ChatRequest | None" = None) -> str:
@@ -156,7 +188,7 @@ def _resolve_tenant(request: Request, req: "ChatRequest | None" = None) -> str:
     raw = request.headers.get("X-Tenant-Id")
     if not raw and req is not None:
         raw = req.tenant_id
-    tid = (raw or "default").strip().lower() or "default"
+    tid = normalize_tenant_id(raw)
     if not tenant_exists(tid):
         log.warning("Unknown tenant_id '%s' — falling back to default.", tid)
         return "default"
@@ -441,7 +473,8 @@ async def voice_tools(request: Request) -> dict:
     """
     _verify_vapi_secret(request)
     body = await request.json()
-    log.info("VAPI raw payload: %s", json.dumps(body))
+    if _VOICE_DEBUG:
+        log.info("VAPI raw payload: %s", json.dumps(body))
 
     # Each tenant has its own VAPI assistant / phone number; map it to a tenant.
     tenant_id = resolve_vapi_tenant(body)
@@ -465,7 +498,7 @@ async def voice_tools(request: Request) -> dict:
             # Inject real caller number when the LLM's caller_phone arg is unresolved.
             if name == "book_appointment" and caller_number and _unresolved(params.get("caller_phone")):
                 params["caller_phone"] = caller_number
-            log.info("VAPI tool-calls: %s | params: %s", name, params)
+            log.info("VAPI tool-calls: %s | params: %s", name, _redact_for_log(params))
             try:
                 result = await asyncio.to_thread(_run_voice_tool, name, params, tenant_id)
             except Exception:
@@ -480,7 +513,7 @@ async def voice_tools(request: Request) -> dict:
     params = fn.get("parameters", {})
     if name == "book_appointment" and caller_number and _unresolved(params.get("caller_phone")):
         params["caller_phone"] = caller_number
-    log.info("VAPI function-call: %s | params: %s", name, params)
+    log.info("VAPI function-call: %s | params: %s", name, _redact_for_log(params))
     try:
         result = await asyncio.to_thread(_run_voice_tool, name, params, tenant_id)
     except Exception:
@@ -494,5 +527,6 @@ async def voice_debug(request: Request) -> dict:
     """Diagnostic: echo the raw VAPI payload so we can inspect the format."""
     _verify_vapi_secret(request)
     body = await request.json()
-    log.info("VAPI debug payload: %s", json.dumps(body))
+    if _VOICE_DEBUG:
+        log.info("VAPI debug payload: %s", json.dumps(body))
     return {"received": body}

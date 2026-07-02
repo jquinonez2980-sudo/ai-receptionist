@@ -13,7 +13,7 @@ from langchain.agents import create_agent
 from langchain.agents.middleware import dynamic_prompt
 from langchain_openai import ChatOpenAI
 
-from tenants import load_tenant
+from tenants import load_tenant, normalize_tenant_id
 from tools import (
     book_appointment,
     cancel_appointment,
@@ -44,6 +44,7 @@ def _load_tenant_prompt(prompt_name: str, tenant_id: str) -> str:
     config. The default tenant fills {company} → "Orchelix AI Consulting", so
     its prompts are byte-identical to before.
     """
+    tenant_id = normalize_tenant_id(tenant_id)
     override = _TENANTS_DIR / tenant_id / "prompts" / prompt_name
     if tenant_id != "default" and override.exists():
         text = override.read_text(encoding="utf-8")
