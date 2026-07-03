@@ -9,7 +9,7 @@ Key facts (see CLAUDE.md hard rule #3):
 - LIVE service = `ai-receptionist-production-5375` (Railway project `awake-nourishment`). This is what the website and VAPI use.
 - `ai-receptionist-production-3446` (`aware-nature`) is a KNOWN-BROKEN stale duplicate. Never treat it as live, never try to "fix" it here.
 - A push to `main` redeploys BOTH services — only `-5375` matters.
-- `/health/calendar`, `/health/env`, `/health/sendgrid` are **gated** — they require `X-Vapi-Secret: $VAPI_SERVER_SECRET` and return 401 if unauthenticated. Use the `$VAPI_SERVER_SECRET` Railway env var to hit them; never hard-code it here.
+- `/health/calendar`, `/health/env`, `/health/sendgrid`, `/leads` are **gated** — they require `X-Vapi-Secret: $VAPI_SERVER_SECRET` and return 401 if unauthenticated. Use the `$VAPI_SERVER_SECRET` Railway env var to hit them; never hard-code it here. `/leads` lists qualified leads (booked/escalated) from the `leads` table — operator tooling, not part of the routine health check, but useful to know it exists.
 
 Steps:
 1. **Liveness:** `curl -s https://ai-receptionist-production-5375.up.railway.app/health` — expect `{"status":"ok","agent":"esmi","checkpointer":"AsyncPostgresSaver"}`. This endpoint is public and unauth. If `checkpointer` is `"InMemorySaver"` (or `"MemorySaver"`) instead, `DATABASE_URL` isn't wired up on Railway and every conversation is losing its history on each restart — flag this loudly, it's not a minor issue.
