@@ -1134,13 +1134,60 @@ def _event_matches_contact(event: dict, contact: str) -> bool:
     return bool(cd) and cd in _digits(event.get("description", ""))
 
 
+# Short-id prefix length exposed to the model/caller instead of the full
+# 64-char hex event id (finding 4.4). SHA256 hex has ~4 billion possible
+# 8-char prefixes — collision risk within one small business's calendar is
+# negligible, and _resolve_event_id below treats an ambiguous/no match the
+# same as a not-found booking rather than guessing.
+_SHORT_ID_LEN = 8
+
+
+def _resolve_event_id(service, cal_id: str, given_id: str) -> Optional[str]:
+    """Resolve a short id (what find_booking now exposes) back to the full
+    Google Calendar event id. A value already long enough to plausibly be a
+    full id is returned as-is — only short values trigger the lookup, so this
+    is a no-op for any caller still passing a full id.
+
+    Looks across a wide window (-7 days to +90 days) since a caller might be
+    canceling/rescheduling something just booked or well in the future.
+    Returns None (not the input) when nothing or more than one event matches
+    the prefix — the caller falls through to the normal "couldn't find that
+    booking" message rather than acting on an ambiguous match.
+    """
+    given_id = (given_id or "").strip()
+    if len(given_id) > _SHORT_ID_LEN:
+        return given_id
+    if not given_id:
+        return None
+    try:
+        now = datetime.now(timezone.utc)
+        events = (
+            service.events()
+            .list(
+                calendarId=cal_id,
+                timeMin=(now - timedelta(days=7)).isoformat(),
+                timeMax=(now + timedelta(days=90)).isoformat(),
+                singleEvents=True,
+                maxResults=250,
+            )
+            .execute()
+            .get("items", [])
+        )
+        matches = [e["id"] for e in events if e.get("id", "").startswith(given_id)]
+        return matches[0] if len(matches) == 1 else None
+    except Exception:
+        log.warning("_resolve_event_id lookup failed for %r", given_id, exc_info=True)
+        return None
+
+
 @tool
 def find_booking(contact: str, config: RunnableConfig = None) -> str:
     """Find a caller's upcoming appointment(s) by email or phone number.
 
     Call this before rescheduling or canceling. `contact` is the caller's email
-    (chat) or phone number (voice). Returns each match with an event id that
-    cancel_appointment and reschedule_appointment require.
+    (chat) or phone number (voice). Returns each match with a short id that
+    request_cancellation_code, cancel_appointment, and reschedule_appointment
+    accept in place of the full booking id.
     """
     try:
         import pytz
@@ -1170,7 +1217,8 @@ def find_booking(contact: str, config: RunnableConfig = None) -> str:
         lines = ["Found these upcoming bookings:"]
         for e in matches:
             when = _friendly_when(e.get("start", {}).get("dateTime", ""))
-            lines.append(f"- {e.get('summary', '(no title)')} on {when} (id: {e['id']})")
+            short_id = e.get("id", "")[:_SHORT_ID_LEN]
+            lines.append(f"- {e.get('summary', '(no title)')} on {when} (id: {short_id})")
         return "\n".join(lines)
     except RuntimeError as e:
         log.error("find_booking: calendar not configured: %s", e)
@@ -1202,6 +1250,7 @@ def request_cancellation_code(event_id: str, config: RunnableConfig = None) -> s
         cfg = load_tenant(tenant_id)
         service = _get_calendar_service(tenant_id)
         cal_id = cfg.calendar_id
+        event_id = _resolve_event_id(service, cal_id, event_id) or event_id
         try:
             event = service.events().get(calendarId=cal_id, eventId=event_id).execute()
         except Exception:
@@ -1265,6 +1314,7 @@ def cancel_appointment(event_id: str, confirmation_code: str, config: RunnableCo
         cfg = load_tenant(tenant_id)
         service = _get_calendar_service(tenant_id)
         cal_id = cfg.calendar_id
+        event_id = _resolve_event_id(service, cal_id, event_id) or event_id
         try:
             event = (
                 service.events().get(calendarId=cal_id, eventId=event_id).execute()
@@ -1325,6 +1375,7 @@ def reschedule_appointment(
 
         service = _get_calendar_service(tenant_id)
         cal_id = cfg.calendar_id
+        event_id = _resolve_event_id(service, cal_id, event_id) or event_id
         try:
             event = (
                 service.events().get(calendarId=cal_id, eventId=event_id).execute()

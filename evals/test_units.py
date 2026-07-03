@@ -81,6 +81,66 @@ def test_idem_event_id_different_email_different_key():
     assert _idem_event_id(key_a) != _idem_event_id(key_b)
 
 
+# ── _resolve_event_id — short ids (finding 4.4) ───────────────────────────────
+
+def test_resolve_event_id_passes_through_full_id_without_lookup():
+    """A full (or long enough) id is returned as-is -- no calendar API call."""
+    from tools import _resolve_event_id
+    full_id = "0d0cc7672878c17d543dfd8f799eb54a349105323e44f59a0541802b3e4b1cc9"
+    service = MagicMock()
+    assert _resolve_event_id(service, "primary", full_id) == full_id
+    service.events.assert_not_called()
+
+
+def test_resolve_event_id_resolves_short_prefix_to_full_id():
+    from tools import _resolve_event_id
+    full_id = "0d0cc7672878c17d543dfd8f799eb54a349105323e44f59a0541802b3e4b1cc9"
+    other_id = "ffffffff2878c17d543dfd8f799eb54a349105323e44f59a0541802b3e4b1cc9"
+    service = MagicMock()
+    service.events.return_value.list.return_value.execute.return_value = {
+        "items": [{"id": full_id}, {"id": other_id}]
+    }
+    assert _resolve_event_id(service, "primary", full_id[:8]) == full_id
+
+
+def test_resolve_event_id_returns_none_for_no_match():
+    from tools import _resolve_event_id
+    service = MagicMock()
+    service.events.return_value.list.return_value.execute.return_value = {"items": []}
+    assert _resolve_event_id(service, "primary", "deadbeef") is None
+
+
+def test_resolve_event_id_returns_none_for_empty_input():
+    from tools import _resolve_event_id
+    service = MagicMock()
+    assert _resolve_event_id(service, "primary", "") is None
+    assert _resolve_event_id(service, "primary", None) is None
+
+
+def test_find_booking_exposes_short_id_not_full_hex():
+    """Regression test for finding 4.4: a caller (especially over voice)
+    shouldn't have to transcribe a 64-char hex id."""
+    from tools import find_booking, _idem_event_id
+
+    full_id = _idem_event_id("Intro Call|2026-07-14T10:00:00-04:00|2026-07-14T10:30:00-04:00|jane@x.com")
+    event = {
+        "id": full_id,
+        "start": {"dateTime": "2026-07-14T10:00:00-04:00"},
+        "summary": "Intro Call",
+        "attendees": [{"email": "jane@x.com"}],
+    }
+    service = MagicMock()
+    service.events.return_value.list.return_value.execute.return_value = {"items": [event]}
+
+    with patch("tools._get_calendar_service", return_value=service), \
+         patch("tools.load_tenant") as mock_load_tenant:
+        mock_load_tenant.return_value = MagicMock(calendar_id="primary", business_tz="America/New_York")
+        result = find_booking.invoke({"contact": "jane@x.com"})
+
+    assert full_id not in result, "find_booking must not expose the full 64-char event id"
+    assert full_id[:8] in result
+
+
 # ── _parse_time_slots / _clean_response / _strip_slots_from_text ─────────────
 
 _SAMPLE_RESPONSE = (
