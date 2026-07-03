@@ -367,6 +367,33 @@ def _with_lead_score(config: RunnableConfig, lead_score: int) -> dict:
     return base
 
 
+def _maybe_record_lead(config: RunnableConfig, result: dict, summary: Optional[str] = None) -> None:
+    """Finding 7.1: lead_score/qualified were computed but never went anywhere.
+    Best-effort snapshot into the `leads` table (leads.py) once a thread
+    becomes a qualified lead (booked, or escalated) — a no-op otherwise, and
+    silently swallows any DB failure (leads.record_lead never raises), since
+    this must never break the actual conversation.
+    """
+    if not result.get("qualified"):
+        return
+    from tenants import normalize_tenant_id
+
+    from leads import record_lead
+
+    configurable = (config or {}).get("configurable") or {}
+    thread_id = str(configurable.get("thread_id") or "unknown")
+    tenant_id = normalize_tenant_id(configurable.get("tenant_id"))
+    appt = result.get("appointment_details") or {}
+    record_lead(
+        thread_id=thread_id,
+        tenant_id=tenant_id,
+        lead_score=result.get("lead_score"),
+        qualified=True,
+        contact=appt.get("attendee_email"),
+        summary=summary,
+    )
+
+
 def _make_informer_node(informer):
     """Wrap the informer agent to also update lead_score.
 
@@ -458,13 +485,15 @@ def _make_booker_node(booker):
         # Booking done → release stickiness. Still mid-flow → stay in booker.
         next_node = None if booked else "booker"
 
-        return {
+        result = {
             "messages": msgs,
             "appointment_details": appt,
             "lead_score": min(100, score),
             "qualified": qualified,
             "next": next_node,
         }
+        _maybe_record_lead(config, result, summary=appt.get("summary") if appt else None)
+        return result
     return node
 
 
@@ -476,22 +505,26 @@ def _make_closer_node(closer):
     def node(state: AgentState, config: RunnableConfig) -> dict:
         score = state.get("lead_score") or 0
         qualified = state.get("qualified") or False
-        result = closer.invoke(state, config=_with_lead_score(config, score))
-        msgs = result.get("messages", [])
+        agent_result = closer.invoke(state, config=_with_lead_score(config, score))
+        msgs = agent_result.get("messages", [])
 
+        summary_text = None
         for m in msgs:
             tool_calls = getattr(m, "tool_calls", None) or []
             for tc in tool_calls:
                 if tc.get("name") == "escalate_to_human":
                     score = max(score, 80)
                     qualified = True
+                    summary_text = tc.get("args", {}).get("user_summary") or summary_text
 
-        return {
+        result = {
             "messages": msgs,
             "lead_score": min(100, score),
             "qualified": qualified,
             "next": None,
         }
+        _maybe_record_lead(config, result, summary=summary_text)
+        return result
     return node
 
 

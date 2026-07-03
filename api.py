@@ -415,6 +415,18 @@ async def health_calendar(request: Request) -> dict:
         return {"status": "error", "steps": steps}
 
 
+@app.get("/leads")
+async def leads(request: Request, limit: int = 50) -> dict:
+    """Finding 7.1: lead_score/qualified now have a real sink instead of being
+    computed and discarded. Lists qualified leads (booked or escalated),
+    most-qualified/most-recent first. Gated like the other /health/* diagnostics
+    — this is operator tooling, not a public endpoint.
+    """
+    _verify_vapi_secret(request)
+    from leads import list_leads
+    return {"leads": await list_leads(limit=min(max(limit, 1), 200))}
+
+
 @app.post("/chat")
 @limiter.limit("10/minute")
 async def chat(request: Request, req: ChatRequest) -> StreamingResponse:
