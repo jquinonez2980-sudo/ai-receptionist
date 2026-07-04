@@ -8,7 +8,7 @@ so nothing books a real appointment, sends an email, or hits Google Calendar.
 
 | Test | Invariant |
 |---|---|
-| `test_pricing_uses_get_pricing_not_kb` | Pricing answered via `get_pricing`, never the KB; canonical number appears |
+| `test_esmi_own_pricing_is_never_quoted` | "How much does Esmi cost?" is deflected (name/contact capture) — never a number, never `get_pricing` |
 | `test_no_booking_before_confirmation` | No `book_appointment` before the Step-4 read-back confirmation |
 | `test_booking_after_explicit_confirmation` | `book_appointment` IS called once the user confirms |
 | `test_escalation_on_budget_and_urgency` | `escalate_to_human` fires on budget/timeline/urgency |

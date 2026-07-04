@@ -1,7 +1,10 @@
 """Behavioral evals for the Esmi system prompt.
 
 These assert the customer-facing invariants that matter most:
-  1. Pricing answered via get_pricing, never the KB.
+  1. What Esmi ITSELF costs is never quoted (deflect + capture contact info) —
+     a client tenant's OWN service prices are answered via get_pricing, never
+     the KB (see agents/tools if you're extending this to a client tenant;
+     the harness doesn't currently support selecting a non-default tenant).
   2. No booking before the Step-4 read-back confirmation.
   3. Booking DOES happen once the user confirms.
   4. Escalation fires on budget/timeline/urgency signals.
@@ -33,12 +36,26 @@ pytestmark = pytest.mark.skipif(
 )
 
 
-def test_pricing_uses_get_pricing_not_kb():
+def test_esmi_own_pricing_is_never_quoted():
+    """Regression test for stale test debt: this test used to assert the
+    OPPOSITE of esmi_system.md's own rule (added in 88143a5, "fix pricing
+    response") -- that "How much does Esmi cost?" should quote $8,500 via
+    get_pricing. The prompt's PRICING — ESMI ITSELF vs. A CLIENT'S OWN PRICES
+    section explicitly forbids this: that question is a sales lead (deflect +
+    capture name/contact), never a canned number. get_pricing is for a CLIENT
+    tenant's own service prices, not what Esmi itself costs."""
     calls, text = run_conversation(["How much does Esmi cost?"], thread_id="eval-pricing")
     names = tool_names(calls)
-    assert "get_pricing" in names, f"expected get_pricing, got {names}"
-    assert "search_knowledge_base" not in names, "pricing must not come from the KB"
-    assert "8,500" in text or "8500" in text, f"canonical Esmi price missing from reply: {text!r}"
+    assert "get_pricing" not in names, (
+        f"asking what Esmi itself costs must never call get_pricing: {names}"
+    )
+    assert "8,500" not in text and "8500" not in text, (
+        f"Esmi's own canonical price must never be quoted: {text!r}"
+    )
+    low = text.lower()
+    assert "depends on your business" in low or "contact you" in low, (
+        f"expected the canned deflection + contact capture, got: {text!r}"
+    )
 
 
 def test_no_booking_before_confirmation():
@@ -158,7 +175,10 @@ def test_kb_failure_escalates_not_fabricates():
 # remain the regression net once the supervisor + specialists are introduced.
 
 def test_pricing_intent_stays_in_informer_domain():
-    """A pricing question must call get_pricing and never trigger booking tools.
+    """A question about what ESMI ITSELF costs must never trigger booking
+    tools (or get_pricing, or escalate_to_human before contact info is even
+    given — see test_esmi_own_pricing_is_never_quoted) — it stays a plain
+    conversational deflection within the informer's domain.
 
     Invariant maps to: Supervisor → Informer (not Booker or Closer).
     """
@@ -167,10 +187,11 @@ def test_pricing_intent_stays_in_informer_domain():
         thread_id="eval-route-info",
     )
     names = tool_names(calls)
-    assert "get_pricing" in names, f"pricing question must call get_pricing: {names}"
-    for booking_tool in ("book_appointment", "list_available_slots", "find_booking"):
-        assert booking_tool not in names, (
-            f"pricing question must not trigger {booking_tool}: {names}"
+    for tool_name in ("get_pricing", "book_appointment", "list_available_slots",
+                      "find_booking", "escalate_to_human"):
+        assert tool_name not in names, (
+            f"a first-turn 'what does Esmi cost' question must not trigger {tool_name} "
+            f"(no contact info has been given yet): {names}"
         )
 
 
@@ -200,9 +221,15 @@ def test_booking_intent_calls_calendar_not_escalation():
     )
 
 
-def test_lead_capture_offers_intro_call_after_pricing():
-    _, text = run_conversation(["What does Esmi cost?"], thread_id="eval-leadcap")
+def test_lead_capture_offers_intro_call_after_services_question():
+    """The LEAD CAPTURE rule ("after answering any question about pricing,
+    services, or how {company} works, offer a quick intro call") applies to
+    general services questions. It does NOT apply to "what does Esmi cost" —
+    that question gets its own distinct hot-lead-capture CTA ("can I get your
+    name and contact info") instead, per the PRICING — ESMI ITSELF rule, so
+    this test uses a plain services question to avoid conflating the two."""
+    _, text = run_conversation(["What services does Orchelix offer?"], thread_id="eval-leadcap")
     low = text.lower()
     assert any(w in low for w in ["intro call", "book", "calendar", "schedule", "quick call"]), (
-        f"pricing answer should offer to book an intro call: {text!r}"
+        f"a services answer should offer to book an intro call: {text!r}"
     )
