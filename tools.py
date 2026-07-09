@@ -931,11 +931,22 @@ def compute_available_slots(
 
     cfg = load_tenant(tenant_id)
     loc, svc, duration_min = _resolve_booking_context(cfg, location, service)
-    cal_service = _get_calendar_service(tenant_id)
     tz = pytz.timezone(cfg.business_tz)
 
     start_dt = datetime.strptime(start_date, "%Y-%m-%d")
     end_dt = datetime.strptime(end_date, "%Y-%m-%d")
+
+    booking_days = loc.effective_booking_days
+    # Closed / walk-in-only ranges have no bookable slots by definition, so
+    # answer without a calendar roundtrip — this must also work for tenants
+    # whose Google credentials aren't provisioned yet.
+    if not any(
+        (start_dt + timedelta(days=i)).weekday() in booking_days
+        for i in range((end_dt - start_dt).days + 1)
+    ):
+        return []
+
+    cal_service = _get_calendar_service(tenant_id)
 
     window_start = tz.localize(start_dt.replace(hour=0, minute=0, second=0))
     window_end = tz.localize(end_dt.replace(hour=23, minute=59, second=59))
@@ -962,7 +973,6 @@ def compute_available_slots(
         busy_ranges.append((b_start, b_end))
 
     earliest = datetime.now(tz) + timedelta(minutes=15)
-    booking_days = loc.effective_booking_days
 
     available: list[dict] = []
     current = start_dt

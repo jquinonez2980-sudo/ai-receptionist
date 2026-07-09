@@ -696,6 +696,16 @@ async def bookings_availability(
     except ValueError:
         raise HTTPException(status_code=400, detail="date must be YYYY-MM-DD")
 
+    # Strict service check, mirroring POST /bookings: the conversational paths
+    # tolerate free-text services, but the website sends known ids only.
+    cfg = load_tenant(tenant_id)
+    if cfg.services and cfg.resolve_service(service) is None:
+        known = ", ".join(sorted(cfg.services.keys()))
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown service '{service}'. Choose one of: {known}.",
+        )
+
     try:
         slots = await asyncio.to_thread(
             compute_available_slots,
@@ -719,7 +729,6 @@ async def bookings_availability(
         raise HTTPException(status_code=500, detail="Failed to load availability")
 
     # Walk-in-only day signal (e.g. Saturday for Otro Nivel)
-    cfg = load_tenant(tenant_id)
     walk_in_only = False
     try:
         from datetime import date as _date
