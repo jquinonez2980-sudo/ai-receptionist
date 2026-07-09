@@ -97,6 +97,37 @@ def test_vapi_unknown_falls_back_to_default():
     assert resolve_vapi_tenant({}) == "default"
 
 
+# ── Multi-location tenant (Otro Nivel) ───────────────────────────────────────
+
+def test_otro_nivel_is_multi_location():
+    from tenants import clear_tenant_cache
+
+    clear_tenant_cache("otro-nivel")
+    o = load_tenant("otro-nivel")
+    assert o.company_name == "Otro Nivel Barbershop"
+    assert o.is_multi_location
+    assert set(o.locations.keys()) == {"weston", "keele"}
+    weston = o.resolve_location("weston")
+    # Python weekday: Mon=0 … Sun=6. Saturday (5) open but not bookable.
+    assert 5 in weston.business_days
+    assert 5 not in weston.effective_booking_days
+    assert weston.hours_for_day(0) == (10, 19)  # Monday
+    assert weston.hours_for_day(6) == (10, 17)  # Sunday
+    fade = o.resolve_service("fade")
+    assert fade is not None
+    assert fade.duration_min == 45
+    assert fade.price_for("weston") == "$50"
+    assert fade.price_for("keele") == "$35–$40"
+
+
+def test_single_location_tenants_still_synthesize_default():
+    f = load_tenant("fresh-cuts")
+    assert not f.is_multi_location
+    loc = f.default_location()
+    assert loc.calendar_id == f.calendar_id or loc.calendar_id == "primary"
+    assert loc.effective_booking_days == f.business_days
+
+
 # ── Prompt resolution (no model) ─────────────────────────────────────────────
 
 def test_prompt_company_substitution():

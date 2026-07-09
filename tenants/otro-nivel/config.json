@@ -1,0 +1,150 @@
+{
+  "company_name": "Otro Nivel Barbershop",
+  "business_tz": "America/Toronto",
+  "business_hours": [10, 21],
+  "business_days": [0, 1, 2, 3, 4, 5, 6],
+  "slot_minutes": 45,
+  "emails": {
+    "from": "info@otronivelbarbershop.com",
+    "booking_to": "dawnatemporal1111@gmail.com",
+    "escalation_to": "dawnatemporal1111@gmail.com"
+  },
+  "sms_signature": "Otro Nivel Barbershop",
+  "voice_default_summary": "Haircut Appointment",
+  "transfer_phone": "647-569-1194",
+  "sms_templates": {
+    "confirmation_en": "Hi {name}! Your appointment at Otro Nivel Barbershop ({location}) is confirmed for {when}. Free parking available. Questions? Call (647) 340-7187. See you soon! ✂️",
+    "confirmation_es": "¡Hola {name}! Tu cita en Otro Nivel Barbershop ({location}) está confirmada para {when}. Hay estacionamiento gratis. ¿Preguntas? Llama al (647) 340-7187. ¡Nos vemos! ✂️"
+  },
+  "locations": {
+    "weston": {
+      "name": "Weston",
+      "address": "2851 Weston Road, Toronto, ON M9M 2S1",
+      "calendar_id": "primary",
+      "phone": "(647) 340-7187",
+      "business_hours": [10, 20],
+      "business_days": [0, 1, 2, 3, 4, 5, 6],
+      "booking_days": [0, 1, 2, 3, 4, 6],
+      "day_hours": {
+        "0": [10, 19],
+        "1": [10, 20],
+        "2": [10, 20],
+        "3": [10, 20],
+        "4": [10, 20],
+        "5": [10, 20],
+        "6": [10, 17]
+      }
+    },
+    "keele": {
+      "name": "Keele",
+      "address": "2266 Keele Street, North York, ON M6M 3Y9",
+      "calendar_id": "primary",
+      "phone": "(647) 340-7187",
+      "business_hours": [10, 21],
+      "business_days": [0, 1, 2, 3, 4, 5, 6],
+      "booking_days": [0, 1, 2, 3, 4, 6],
+      "day_hours": {
+        "0": [10, 19],
+        "1": [10, 21],
+        "2": [10, 21],
+        "3": [10, 21],
+        "4": [10, 21],
+        "5": [10, 21],
+        "6": [10, 19]
+      }
+    }
+  },
+  "services": {
+    "regular-haircut": {
+      "name": "Regular Haircut",
+      "duration_min": 45,
+      "price": "$40",
+      "price_by_location": {
+        "weston": "$40",
+        "keele": "$35"
+      }
+    },
+    "fade": {
+      "name": "Fade",
+      "duration_min": 45,
+      "price": "$50",
+      "price_by_location": {
+        "weston": "$50",
+        "keele": "$35–$40"
+      }
+    },
+    "fade-beard": {
+      "name": "Fade + Beard",
+      "duration_min": 60,
+      "price": "$60",
+      "price_by_location": {
+        "weston": "$60"
+      }
+    },
+    "beard-trim": {
+      "name": "Beard Trim",
+      "duration_min": 30,
+      "price": "$20",
+      "price_by_location": {
+        "weston": "$20",
+        "keele": "$20"
+      }
+    },
+    "vip-package": {
+      "name": "VIP Package",
+      "duration_min": 75,
+      "price": "$70",
+      "price_by_location": {
+        "weston": "$70"
+      }
+    },
+    "kids-haircut": {
+      "name": "Children's Haircut",
+      "duration_min": 45,
+      "price": "$30–$35",
+      "price_by_location": {
+        "weston": "$30–$35",
+        "keele": "$30"
+      }
+    }
+  },
+  "pricing": [
+    {
+      "name": "Fade (Weston)",
+      "popular": true,
+      "setup_from": 0,
+      "monthly_from": 50,
+      "best_for": "Signature fade at Weston Road — 45 min.",
+      "highlights": ["Skin, taper, or drop fade", "45 minutes", "Weston $50 / Keele $35–$40"]
+    },
+    {
+      "name": "VIP Package (Weston)",
+      "popular": true,
+      "setup_from": 0,
+      "monthly_from": 70,
+      "best_for": "Full premium treatment — haircut, beard, finish. Weston exclusive.",
+      "highlights": ["1 hr 15 min", "Weston only", "$70"]
+    },
+    {
+      "name": "Regular Haircut",
+      "popular": false,
+      "setup_from": 0,
+      "monthly_from": 35,
+      "best_for": "Classic cut at either location.",
+      "highlights": ["Weston $40 / Keele $35", "45 minutes"]
+    },
+    {
+      "name": "Beard Trim",
+      "popular": false,
+      "setup_from": 0,
+      "monthly_from": 20,
+      "best_for": "Shaped and lined beard — both shops.",
+      "highlights": ["$20 both locations", "25–30 min"]
+    }
+  ],
+  "pricing_note": "Prices may vary slightly at the barber's discretion. Unlisted services — ask in shop.",
+  "vapi": {
+    "assistant_ids": ["otro-nivel-vapi-placeholder"],
+    "phone_number_ids": ["otro-nivel-phone-placeholder"]
+  }
+}

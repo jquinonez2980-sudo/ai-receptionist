@@ -43,7 +43,9 @@ from tenants import (
 )
 from tools import (
     book_appointment,
+    book_appointment_core,
     cancel_appointment,
+    compute_available_slots,
     escalate_to_human,
     find_booking,
     get_pricing,
@@ -60,6 +62,9 @@ log = logging.getLogger(__name__)
 # it. Fail-open when unset (logs a warning) so the endpoint stays usable before
 # the secret is wired up in Railway + Vercel. Once set, missing/wrong header → 401.
 CHAT_PROXY_SECRET = os.environ.get("CHAT_PROXY_SECRET")
+# Shared secret for website → Railway booking REST (X-Booking-Secret header).
+# Fail-open when unset (local dev); once set, missing/wrong header → 401.
+BOOKING_API_SECRET = os.environ.get("BOOKING_API_SECRET")
 
 
 def _rate_limit_key(request: Request) -> str:
@@ -108,7 +113,13 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=_ALLOWED_ORIGINS,
     allow_methods=["GET", "POST", "OPTIONS"],
-    allow_headers=["Content-Type", "X-Chat-Secret"],
+    allow_headers=[
+        "Content-Type",
+        "X-Chat-Secret",
+        "X-Booking-Secret",
+        "X-Tenant-Id",
+        "Idempotency-Key",
+    ],
 )
 
 
@@ -187,6 +198,23 @@ def _verify_chat_secret(request: Request) -> None:
         raise HTTPException(status_code=401, detail="Unauthorized")
 
 
+def _verify_booking_secret(request: Request) -> None:
+    """Reject /bookings/* requests missing the shared booking API secret.
+
+    Fail-open when BOOKING_API_SECRET is unset (local dev). Once set, requires
+    X-Booking-Secret header match.
+    """
+    if not BOOKING_API_SECRET:
+        log.warning(
+            "BOOKING_API_SECRET not set — /bookings is open to direct access. "
+            "Set BOOKING_API_SECRET in Railway and ESMI_BOOKING_SECRET in Vercel."
+        )
+        return
+    provided = request.headers.get("X-Booking-Secret", "")
+    if not hmac.compare_digest(provided, BOOKING_API_SECRET):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+
 # ── Pydantic schema ───────────────────────────────────────────────────────────
 
 class ChatRequest(BaseModel):
@@ -222,8 +250,48 @@ def _resolve_tenant(request: Request, req: "ChatRequest | None" = None) -> str:
     return tid
 
 
+def _resolve_tenant_strict(request: Request) -> str:
+    """Tenant from X-Tenant-Id only; 400 if missing/unknown (booking API)."""
+    raw = request.headers.get("X-Tenant-Id")
+    if not raw or not str(raw).strip():
+        raise HTTPException(status_code=400, detail="X-Tenant-Id header is required")
+    tid = normalize_tenant_id(raw)
+    if not tenant_exists(tid):
+        raise HTTPException(status_code=404, detail=f"Unknown tenant '{tid}'")
+    return tid
+
+
 class VapiToolRequest(BaseModel):
     message: dict = {}  # VAPI server message — format varies by API version
+
+
+class BookingCreateRequest(BaseModel):
+    location: str = Field(..., min_length=1, max_length=64)
+    service: str = Field(..., min_length=1, max_length=64)
+    start_time: str = Field(..., min_length=10, max_length=64)
+    name: str = Field(..., min_length=1, max_length=120)
+    phone: str = Field(..., min_length=7, max_length=32)
+    email: str | None = Field(default=None, max_length=254)
+    lang: str = Field(default="en", max_length=8)
+    idempotency_key: str | None = Field(default=None, max_length=128)
+    # Honeypot — bots fill this; humans leave empty. Never shown in UI.
+    website: str | None = Field(default=None, max_length=200)
+
+    @field_validator("phone")
+    @classmethod
+    def _phone_has_digits(cls, v: str) -> str:
+        digits = "".join(c for c in v if c.isdigit())
+        if len(digits) < 7:
+            raise ValueError("phone must contain at least 7 digits")
+        return v.strip()
+
+    @field_validator("name")
+    @classmethod
+    def _name_strip(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError("name is required")
+        return v
 
 
 # _clean_response, _parse_time_slots, _strip_slots_from_text, _enhance_slots_for_voice
@@ -474,6 +542,8 @@ def _run_voice_tool(name: str, params: dict, tenant_id: str = "default") -> str:
         raw = str(list_available_slots.invoke({
             "start_date": params["start_date"],
             "end_date": params["end_date"],
+            "location": params.get("location"),
+            "service": params.get("service"),
         }, config=cfg))
         return _enhance_slots_for_voice(raw, tenant_id)
     if name == "book_appointment":
@@ -487,10 +557,14 @@ def _run_voice_tool(name: str, params: dict, tenant_id: str = "default") -> str:
             "start_time": params["start_time"],
             "end_time": params["end_time"],
             "attendee_email": contact,
+            "location": params.get("location"),
+            "service": params.get("service"),
+            "idempotency_key": params.get("idempotency_key"),
         }, config=cfg))
     if name == "find_booking":
         return str(find_booking.invoke({
             "contact": params.get("contact") or params.get("attendee_email") or params.get("caller_phone"),
+            "location": params.get("location"),
         }, config=cfg))
     if name == "request_cancellation_code":
         return str(request_cancellation_code.invoke({"event_id": params["event_id"]}, config=cfg))
@@ -500,6 +574,7 @@ def _run_voice_tool(name: str, params: dict, tenant_id: str = "default") -> str:
             "new_start_time": params["new_start_time"],
             "new_end_time": params["new_end_time"],
             "confirmation_code": params.get("confirmation_code", ""),
+            "location": params.get("location"),
         }, config=cfg))
     if name == "cancel_appointment":
         return str(cancel_appointment.invoke({
@@ -582,3 +657,232 @@ async def voice_debug(request: Request) -> dict:
     if _VOICE_DEBUG:
         log.info("VAPI debug payload: %s", json.dumps(body))
     return {"received": body}
+
+
+# ── Booking REST API (website wizard) ─────────────────────────────────────────
+# Thin JSON endpoints over the same calendar tools as voice/chat so web + phone
+# share one availability source (no double-booking). Auth: X-Booking-Secret +
+# X-Tenant-Id. Rate-limited via slowapi.
+
+
+@app.get("/bookings/availability")
+@limiter.limit("30/minute")
+async def bookings_availability(
+    request: Request,
+    location: str,
+    service: str,
+    date: str,
+) -> dict:
+    """List available slots for one location + service on a given date.
+
+    Query params:
+      location — location id (e.g. weston, keele)
+      service  — service id (e.g. fade, vip-package)
+      date     — YYYY-MM-DD
+    """
+    _verify_booking_secret(request)
+    tenant_id = _resolve_tenant_strict(request)
+
+    if not location or not service or not date:
+        raise HTTPException(
+            status_code=400,
+            detail="location, service, and date are required",
+        )
+    # Basic date format check
+    try:
+        from datetime import date as _date
+
+        _date.fromisoformat(date)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="date must be YYYY-MM-DD")
+
+    try:
+        slots = await asyncio.to_thread(
+            compute_available_slots,
+            tenant_id,
+            date,
+            date,
+            location=location,
+            service=service,
+            max_slots=48,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except RuntimeError as e:
+        log.error("bookings/availability calendar error: %s", e)
+        raise HTTPException(
+            status_code=503,
+            detail="Calendar not configured for this tenant",
+        )
+    except Exception:
+        log.exception("bookings/availability failed")
+        raise HTTPException(status_code=500, detail="Failed to load availability")
+
+    # Walk-in-only day signal (e.g. Saturday for Otro Nivel)
+    cfg = load_tenant(tenant_id)
+    walk_in_only = False
+    try:
+        from datetime import date as _date
+
+        loc = cfg.resolve_location(location)
+        weekday = _date.fromisoformat(date).weekday()
+        walk_in_only = (
+            weekday in loc.business_days
+            and weekday not in loc.effective_booking_days
+        )
+    except Exception:
+        pass
+
+    return {
+        "date": date,
+        "location": location,
+        "service": service,
+        "walk_in_only": walk_in_only,
+        "slots": [
+            {
+                "start": s["start"],
+                "end": s["end"],
+                "slot_id": s["slot_id"],
+                "label": s["label"],
+                "duration_min": s["duration_min"],
+            }
+            for s in slots
+        ],
+    }
+
+
+@app.post("/bookings")
+@limiter.limit("10/minute")
+async def create_booking(request: Request, body: BookingCreateRequest) -> dict:
+    """Create a booking (same underlying logic as voice book_appointment).
+
+    Headers:
+      X-Tenant-Id, X-Booking-Secret
+      Idempotency-Key (optional; also accepted in body.idempotency_key)
+    """
+    _verify_booking_secret(request)
+    tenant_id = _resolve_tenant_strict(request)
+
+    # Honeypot — silently accept but don't book
+    if body.website:
+        log.warning("Booking honeypot tripped for tenant %s", tenant_id)
+        return {
+            "ok": True,
+            "message": "Booked — confirmation text on its way.",
+            "honeypot": True,
+        }
+
+    idem = (
+        request.headers.get("Idempotency-Key")
+        or body.idempotency_key
+        or None
+    )
+
+    cfg = load_tenant(tenant_id)
+    try:
+        loc = cfg.resolve_location(body.location)
+        svc = cfg.resolve_service(body.service)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    if not svc:
+        raise HTTPException(status_code=400, detail=f"Unknown service '{body.service}'")
+
+    # Compute end from service duration
+    try:
+        import pytz
+        from datetime import datetime as _dt
+        from datetime import timedelta as _td
+
+        tz = pytz.timezone(cfg.business_tz)
+        start_dt = _dt.fromisoformat(body.start_time)
+        if start_dt.tzinfo is None:
+            start_dt = tz.localize(start_dt)
+        end_time = (start_dt + _td(minutes=svc.duration_min)).isoformat()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid start_time (use ISO 8601)")
+
+    summary = f"{svc.name} — {body.name}"
+
+    try:
+        result = await asyncio.to_thread(
+            book_appointment_core,
+            tenant_id=tenant_id,
+            summary=summary,
+            start_time=body.start_time,
+            end_time=end_time,
+            attendee_email=body.phone,  # SMS path; email optional below
+            idempotency_key=idem,
+            location=body.location,
+            service=body.service,
+            customer_name=body.name,
+            lang=body.lang or "en",
+            source="web",
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except RuntimeError as e:
+        log.error("bookings create calendar error: %s", e)
+        raise HTTPException(
+            status_code=503,
+            detail="Calendar not configured for this tenant",
+        )
+    except Exception:
+        log.exception("bookings create failed")
+        raise HTTPException(status_code=500, detail="Failed to create booking")
+
+    if not result.get("ok"):
+        status = 409 if result.get("conflict") else 400
+        raise HTTPException(status_code=status, detail=result.get("message", "Booking failed"))
+
+    # Optional: add email as attendee note is already in notification path via phone.
+    # If client supplied email and we only stored phone, ops email still has the name.
+
+    return {
+        "ok": True,
+        "message": result["message"],
+        "already_existed": result.get("already_existed", False),
+        "event_id": result.get("event_id"),
+        "when": result.get("when"),
+        "start": result.get("start"),
+        "end": result.get("end"),
+        "location_id": result.get("location_id") or loc.id,
+        "location_name": result.get("location_name") or loc.name,
+        "location_address": loc.address,
+        "service_id": result.get("service_id") or svc.id,
+        "service_name": result.get("service_name") or svc.name,
+    }
+
+
+@app.get("/bookings/lookup")
+@limiter.limit("20/minute")
+async def bookings_lookup(request: Request, contact: str) -> dict:
+    """Phase-2 helper: find upcoming bookings by phone/email (for cancel UI)."""
+    _verify_booking_secret(request)
+    tenant_id = _resolve_tenant_strict(request)
+    if not contact or len(contact.strip()) < 5:
+        raise HTTPException(status_code=400, detail="contact is required")
+    try:
+        from tools import _find_events_for_contact
+
+        matches = await asyncio.to_thread(
+            _find_events_for_contact, tenant_id, contact.strip()
+        )
+    except RuntimeError:
+        raise HTTPException(status_code=503, detail="Calendar not configured")
+    except Exception:
+        log.exception("bookings/lookup failed")
+        raise HTTPException(status_code=500, detail="Lookup failed")
+
+    items = []
+    for cal_id, e in matches:
+        items.append(
+            {
+                "id": e.get("id", "")[:8],
+                "summary": e.get("summary"),
+                "start": e.get("start", {}).get("dateTime"),
+                "end": e.get("end", {}).get("dateTime"),
+                "location": e.get("location"),
+                "calendar_id": cal_id,
+            }
+        )
+    return {"contact": contact, "bookings": items}

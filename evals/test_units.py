@@ -134,7 +134,13 @@ def test_find_booking_exposes_short_id_not_full_hex():
 
     with patch("tools._get_calendar_service", return_value=service), \
          patch("tools.load_tenant") as mock_load_tenant:
-        mock_load_tenant.return_value = MagicMock(calendar_id="primary", business_tz="America/New_York")
+        # Minimal tenant stand-in: single calendar, no multi-location map.
+        tenant = MagicMock()
+        tenant.calendar_id = "primary"
+        tenant.business_tz = "America/New_York"
+        tenant.locations = {}
+        tenant.all_calendar_ids.return_value = [("default", "primary")]
+        mock_load_tenant.return_value = tenant
         result = find_booking.invoke({"contact": "jane@x.com"})
 
     assert full_id not in result, "find_booking must not expose the full 64-char event id"

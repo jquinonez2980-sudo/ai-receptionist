@@ -49,7 +49,14 @@ from langchain_core.tools import tool
 from langchain_openai import OpenAIEmbeddings
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
-from tenants import load_tenant, normalize_tenant_id, tenant_secret
+from tenants import (
+    LocationConfig,
+    ServiceConfig,
+    TenantConfig,
+    load_tenant,
+    normalize_tenant_id,
+    tenant_secret,
+)
 
 load_dotenv()
 log = logging.getLogger(__name__)
@@ -253,13 +260,25 @@ def _get_sendgrid_key(tenant_id: str = "default") -> str | None:
 # ════════════════════════════════════════════════════════════════════════
 
 
-def _send_sms_confirmation(to_number: str, when: str, tenant_id: str = "default") -> None:
-    """Text a booking confirmation to a voice caller. Best-effort — never raises.
+def _send_sms_confirmation(
+    to_number: str,
+    when: str,
+    tenant_id: str = "default",
+    *,
+    location_name: str = "",
+    service_name: str = "",
+    customer_name: str = "",
+    lang: str = "en",
+) -> None:
+    """Text a booking confirmation to a voice/web caller. Best-effort — never raises.
 
     Voice callers leave the call with no email invite (we only have their phone),
     so this closes the loop. Requires TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, and
     TWILIO_SMS_FROM (an SMS-capable Twilio number in E.164), resolved per-tenant.
     If any is missing the send is skipped with a warning.
+
+    Optional tenant sms_templates keys: confirmation_en / confirmation_es with
+    placeholders {name} {when} {location} {service} {signature}.
     """
     try:
         sid = tenant_secret(tenant_id, "TWILIO_ACCOUNT_SID")
@@ -272,10 +291,22 @@ def _send_sms_confirmation(to_number: str, when: str, tenant_id: str = "default"
         from twilio.rest import Client
 
         cfg = load_tenant(tenant_id)
-        body = (
-            f"You're confirmed for {when} with {cfg.sms_signature}. "
-            "Reply to this message if anything changes. — Esmi"
-        )
+        lang_key = "confirmation_es" if (lang or "en").lower().startswith("es") else "confirmation_en"
+        template = (cfg.sms_templates or {}).get(lang_key) or (cfg.sms_templates or {}).get("confirmation")
+        if template:
+            body = template.format(
+                name=customer_name or "there",
+                when=when,
+                location=location_name or cfg.company_name,
+                service=service_name or "appointment",
+                signature=cfg.sms_signature,
+            )
+        else:
+            loc_bit = f" at {location_name}" if location_name else ""
+            body = (
+                f"You're confirmed for {when}{loc_bit} with {cfg.sms_signature}. "
+                "Reply to this message if anything changes. — Esmi"
+            )
         Client(sid, token).messages.create(body=body, from_=from_number, to=to_number)
         log.info("Booking confirmation SMS sent to %s", to_number)
     except Exception as e:
@@ -800,21 +831,52 @@ def _slot_id(start_iso: str) -> str:
     return hashlib.sha1(start_iso.encode()).hexdigest()[:16]
 
 
-def _closed_day_message(start_iso: str, business_days: tuple[int, ...]) -> Optional[str]:
+def _closed_day_message(
+    start_iso: str,
+    business_days: tuple[int, ...],
+    *,
+    booking_only: bool = False,
+) -> Optional[str]:
     """Return a caller-facing message if start_iso falls on a day the tenant is
-    closed, else None. Defense in depth: book_appointment and
-    reschedule_appointment can be called directly (voice path, retries) without
-    ever going through list_available_slots, so the day-of-week filter must be
-    enforced here too, not just at the listing step."""
+    closed (or not bookable when booking_only=True), else None.
+
+    Defense in depth: book_appointment and reschedule_appointment can be called
+    directly (voice path, retries) without ever going through
+    list_available_slots, so the day-of-week filter must be enforced here too,
+    not just at the listing step.
+
+    booking_only=True uses appointment-accepting days (excludes walk-in-only
+    Saturdays for tenants like Otro Nivel) and softens the message accordingly.
+    """
     try:
         dt = datetime.fromisoformat(start_iso)
     except Exception:
         return None  # unparseable — let the existing calendar-side validation handle it
     if dt.weekday() in business_days:
         return None
-    return (
-        f"We're closed on {dt.strftime('%A')}s — could you pick a different day?"
-    )
+    day = dt.strftime("%A")
+    if booking_only:
+        return (
+            f"We don't take appointments on {day}s — walk-ins only that day. "
+            "Could you pick a different day?"
+        )
+    return f"We're closed on {day}s — could you pick a different day?"
+
+
+def _resolve_booking_context(
+    cfg: TenantConfig,
+    location: Optional[str] = None,
+    service: Optional[str] = None,
+) -> tuple[LocationConfig, Optional[ServiceConfig], int]:
+    """Resolve location + service → (location, service|None, duration_min).
+
+    Raises ValueError with a caller-facing message when location is required
+    but missing/unknown.
+    """
+    loc = cfg.resolve_location(location)
+    svc = cfg.resolve_service(service)
+    duration = svc.duration_min if svc else cfg.slot_minutes
+    return loc, svc, duration
 
 
 def _fmt_hour(hour: int) -> str:
@@ -851,98 +913,146 @@ def _closed_hours_message(
     return None
 
 
+def compute_available_slots(
+    tenant_id: str,
+    start_date: str,
+    end_date: str,
+    *,
+    location: Optional[str] = None,
+    service: Optional[str] = None,
+    max_slots: int = 48,
+) -> list[dict]:
+    """Return structured free slots for a tenant/location/service.
+
+    Each item: {start, end, slot_id, label, location_id, duration_min}.
+    Raises ValueError for bad location; RuntimeError if calendar unconfigured.
+    """
+    import pytz
+
+    cfg = load_tenant(tenant_id)
+    loc, svc, duration_min = _resolve_booking_context(cfg, location, service)
+    cal_service = _get_calendar_service(tenant_id)
+    tz = pytz.timezone(cfg.business_tz)
+
+    start_dt = datetime.strptime(start_date, "%Y-%m-%d")
+    end_dt = datetime.strptime(end_date, "%Y-%m-%d")
+
+    window_start = tz.localize(start_dt.replace(hour=0, minute=0, second=0))
+    window_end = tz.localize(end_dt.replace(hour=23, minute=59, second=59))
+
+    cal_id = loc.calendar_id
+    result = (
+        cal_service.freebusy()
+        .query(
+            body={
+                "timeMin": window_start.isoformat(),
+                "timeMax": window_end.isoformat(),
+                "timeZone": cfg.business_tz,
+                "items": [{"id": cal_id}],
+            }
+        )
+        .execute()
+    )
+    busy_periods = result["calendars"][cal_id]["busy"]
+
+    busy_ranges = []
+    for period in busy_periods:
+        b_start = datetime.fromisoformat(period["start"]).astimezone(tz)
+        b_end = datetime.fromisoformat(period["end"]).astimezone(tz)
+        busy_ranges.append((b_start, b_end))
+
+    earliest = datetime.now(tz) + timedelta(minutes=15)
+    booking_days = loc.effective_booking_days
+
+    available: list[dict] = []
+    current = start_dt
+    while current <= end_dt:
+        weekday = current.weekday()
+        if weekday in booking_days:
+            open_h, close_h = loc.hours_for_day(weekday)
+            # Slot starts every 30 min; appointment must finish by close.
+            for hour in range(open_h, close_h):
+                for minute in (0, 30):
+                    slot_start = tz.localize(
+                        current.replace(hour=hour, minute=minute, second=0, microsecond=0)
+                    )
+                    slot_end = slot_start + timedelta(minutes=duration_min)
+                    end_decimal = (
+                        slot_end.hour
+                        + slot_end.minute / 60
+                        + slot_end.second / 3600
+                    )
+                    if end_decimal > close_h + 1e-9:
+                        continue
+                    if slot_start < earliest:
+                        continue
+                    is_busy = any(
+                        bs < slot_end and be > slot_start for bs, be in busy_ranges
+                    )
+                    if not is_busy:
+                        iso = slot_start.isoformat()
+                        available.append(
+                            {
+                                "start": iso,
+                                "end": slot_end.isoformat(),
+                                "slot_id": _slot_id(iso),
+                                "label": (
+                                    f"{current.strftime('%A, %B %d')} "
+                                    f"{slot_start.strftime('%I:%M %p').lstrip('0')} – "
+                                    f"{slot_end.strftime('%I:%M %p').lstrip('0')}"
+                                ),
+                                "location_id": loc.id,
+                                "duration_min": duration_min,
+                                "service_id": svc.id if svc else None,
+                            }
+                        )
+                        if len(available) >= max_slots:
+                            return available
+        current += timedelta(days=1)
+
+    return available
+
+
 @tool
-def list_available_slots(start_date: str, end_date: str, config: RunnableConfig = None) -> str:
-    """List bookable slots between start_date and end_date (inclusive), on the
-    tenant's configured business days, during business hours in the business
-    timezone. One freebusy call covers the whole range.
+def list_available_slots(
+    start_date: str,
+    end_date: str,
+    location: Optional[str] = None,
+    service: Optional[str] = None,
+    config: RunnableConfig = None,
+) -> str:
+    """List bookable appointment slots between start_date and end_date (inclusive).
+
+    For multi-location tenants, pass `location` (e.g. 'weston' or 'keele').
+    Pass `service` when available so slot length matches the service duration.
+    Uses booking_days (appointment days) — walk-in-only days return no slots.
 
     Args:
         start_date: ISO date 'YYYY-MM-DD'
         end_date:   ISO date 'YYYY-MM-DD'
+        location:   Location id or name when the tenant has multiple shops
+        service:    Service id or name (controls duration)
     """
     try:
-        import pytz
-
         tenant_id = _tenant_from_config(config)
-        cfg = load_tenant(tenant_id)
-        service = _get_calendar_service(tenant_id)
-        tz = pytz.timezone(cfg.business_tz)
-
-        start_dt = datetime.strptime(start_date, "%Y-%m-%d")
-        end_dt = datetime.strptime(end_date, "%Y-%m-%d")
-
-        window_start = tz.localize(start_dt.replace(hour=0, minute=0, second=0))
-        window_end = tz.localize(end_dt.replace(hour=23, minute=59, second=59))
-
-        cal_id = cfg.calendar_id
-        result = (
-            service.freebusy()
-            .query(
-                body={
-                    "timeMin": window_start.isoformat(),
-                    "timeMax": window_end.isoformat(),
-                    "timeZone": cfg.business_tz,
-                    "items": [{"id": cal_id}],
-                }
-            )
-            .execute()
+        slots = compute_available_slots(
+            tenant_id,
+            start_date,
+            end_date,
+            location=location,
+            service=service,
+            max_slots=12,
         )
-        busy_periods = result["calendars"][cal_id]["busy"]
-
-        busy_ranges = []
-        for period in busy_periods:
-            b_start = datetime.fromisoformat(period["start"]).astimezone(tz)
-            b_end = datetime.fromisoformat(period["end"]).astimezone(tz)
-            busy_ranges.append((b_start, b_end))
-
-        # Floor: never offer a slot that has already started (plus a short lead
-        # time), so "anything today?" at 3pm doesn't surface a 9am slot.
-        earliest = datetime.now(tz) + timedelta(minutes=15)
-
-        available: list[str] = []
-        current = start_dt
-        while current <= end_dt:
-            if current.weekday() in cfg.business_days:  # tenant's configured days
-                for hour in cfg.hours_range:
-                    for minute in (0, 30):
-                        slot_start = tz.localize(
-                            current.replace(
-                                hour=hour, minute=minute, second=0, microsecond=0
-                            )
-                        )
-                        if slot_start < earliest:
-                            continue
-                        slot_end = slot_start + timedelta(minutes=cfg.slot_minutes)
-
-                        is_busy = any(
-                            bs < slot_end and be > slot_start
-                            for bs, be in busy_ranges
-                        )
-                        if not is_busy:
-                            # Phase 1 keeps the assistant-readable text format;
-                            # slot_id is logged so Phase 2 UI can adopt it.
-                            iso = slot_start.isoformat()
-                            log.debug(
-                                "slot %s id=%s",
-                                slot_start.strftime("%Y-%m-%d %H:%M"),
-                                _slot_id(iso),
-                            )
-                            available.append(
-                                f"{current.strftime('%A, %B %d')} "
-                                f"{slot_start.strftime('%I:%M %p')} – "
-                                f"{slot_end.strftime('%I:%M %p')}"
-                            )
-            current += timedelta(days=1)
-
-        if not available:
+        if not slots:
             return (
                 f"No available slots between {start_date} and {end_date}. "
-                "The calendar appears fully booked for this period."
+                "The calendar appears fully booked for this period, or that day "
+                "is walk-in only / closed for appointments."
             )
+        return "Available slots:\n" + "\n".join(s["label"] for s in slots)
 
-        return "Available slots:\n" + "\n".join(available[:12])
-
+    except ValueError as e:
+        return str(e)
     except RuntimeError as e:
         log.error("list_available_slots: calendar not configured: %s", e)
         return _CALENDAR_FALLBACK
@@ -990,6 +1100,229 @@ def _slot_still_free(
 
 
 # ── Tool: book_appointment ───────────────────────────────────────────────
+def book_appointment_core(
+    tenant_id: str,
+    summary: str,
+    start_time: str,
+    end_time: str,
+    attendee_email: Optional[str] = None,
+    idempotency_key: Optional[str] = None,
+    *,
+    location: Optional[str] = None,
+    service: Optional[str] = None,
+    customer_name: str = "",
+    lang: str = "en",
+    source: str = "voice",
+) -> dict:
+    """Programmatic booking used by the @tool wrapper and REST API.
+
+    Returns a dict:
+      ok: bool
+      message: str  (caller-facing)
+      event_id: str | None
+      already_existed: bool  (idempotent re-hit)
+      location_id / location_name / start / end
+    Raises ValueError for bad location; RuntimeError if calendar unconfigured.
+    """
+    if not idempotency_key:
+        idempotency_key = "|".join(
+            [
+                summary or "",
+                start_time,
+                end_time,
+                (attendee_email or "").lower(),
+                (location or "").lower(),
+                (service or "").lower(),
+            ]
+        )
+
+    cfg = load_tenant(tenant_id)
+    loc, svc, duration_min = _resolve_booking_context(cfg, location, service)
+
+    # If end_time missing/wrong, recompute from service duration.
+    if not end_time:
+        try:
+            import pytz
+
+            tz = pytz.timezone(cfg.business_tz)
+            start_dt = datetime.fromisoformat(start_time)
+            if start_dt.tzinfo is None:
+                start_dt = tz.localize(start_dt)
+            end_time = (start_dt + timedelta(minutes=duration_min)).isoformat()
+        except Exception:
+            pass
+
+    booking_days = loc.effective_booking_days
+    closed_msg = _closed_day_message(start_time, booking_days, booking_only=True)
+    if closed_msg:
+        return {
+            "ok": False,
+            "message": closed_msg,
+            "event_id": None,
+            "already_existed": False,
+            "conflict": False,
+        }
+
+    # Day-specific hours
+    try:
+        day_dt = datetime.fromisoformat(start_time)
+        day_hours = loc.hours_for_day(day_dt.weekday())
+    except Exception:
+        day_hours = loc.business_hours
+    hours_msg = _closed_hours_message(start_time, end_time, day_hours, cfg.business_tz)
+    if hours_msg:
+        return {
+            "ok": False,
+            "message": hours_msg,
+            "event_id": None,
+            "already_existed": False,
+            "conflict": False,
+        }
+
+    cal_service = _get_calendar_service(tenant_id)
+    event_id = _idem_event_id(idempotency_key)
+    cal_id = loc.calendar_id
+
+    if not _slot_still_free(cal_service, start_time, end_time, cfg.business_tz, cal_id):
+        try:
+            existing = (
+                cal_service.events()
+                .get(calendarId=cal_id, eventId=event_id)
+                .execute()
+            )
+            when = _friendly_when(existing["start"].get("dateTime", start_time))
+            return {
+                "ok": True,
+                "message": f"That's already booked — you're confirmed for {when}.",
+                "event_id": event_id,
+                "already_existed": True,
+                "conflict": False,
+                "location_id": loc.id,
+                "location_name": loc.name,
+                "start": start_time,
+                "end": end_time,
+            }
+        except Exception:
+            return {
+                "ok": False,
+                "message": (
+                    "⚠️ That time is no longer available — someone else just "
+                    "booked it. Could you pick another slot?"
+                ),
+                "event_id": None,
+                "already_existed": False,
+                "conflict": True,
+            }
+
+    contact = (attendee_email or "").strip()
+    if contact.startswith("{{"):
+        contact = "Phone not captured"
+        attendee_email = "Phone not captured"
+    has_email = _looks_like_email(contact)
+
+    # Build summary with service if not already rich
+    event_summary = summary
+    if svc and svc.name and svc.name.lower() not in (summary or "").lower():
+        event_summary = f"{svc.name} — {customer_name or summary}".strip(" —")
+    elif customer_name and customer_name not in (summary or ""):
+        event_summary = f"{summary} — {customer_name}" if summary else customer_name
+
+    desc_parts = []
+    if source:
+        desc_parts.append(f"Source: {source}")
+    if svc:
+        desc_parts.append(f"Service: {svc.name}")
+    if customer_name:
+        desc_parts.append(f"Name: {customer_name}")
+    if contact and not has_email:
+        desc_parts.append(f"Caller contact: {contact}")
+
+    event_body: dict = {
+        "id": event_id,
+        "summary": event_summary or cfg.voice_default_summary,
+        "start": {"dateTime": start_time, "timeZone": cfg.business_tz},
+        "end": {"dateTime": end_time, "timeZone": cfg.business_tz},
+        "extendedProperties": {
+            "private": {
+                "tenant_id": tenant_id,
+                "location_id": loc.id,
+                "service_id": svc.id if svc else "",
+                "source": source,
+            }
+        },
+    }
+    if loc.address:
+        event_body["location"] = loc.address
+    elif loc.name:
+        event_body["location"] = loc.name
+    if has_email:
+        event_body["attendees"] = [{"email": contact}]
+    if desc_parts:
+        event_body["description"] = "\n".join(desc_parts)
+
+    send_updates = "all" if has_email else "none"
+    already_existed = False
+
+    def _insert():
+        return (
+            cal_service.events()
+            .insert(calendarId=cal_id, body=event_body, sendUpdates=send_updates)
+            .execute()
+        )
+
+    try:
+        _retry_calendar(_insert)
+    except Exception as e:
+        status = getattr(getattr(e, "resp", None), "status", None)
+        if status == 409:
+            cal_service.events().get(calendarId=cal_id, eventId=event_id).execute()
+            log.info("book_appointment: idempotent hit (%s…)", event_id[:8])
+            already_existed = True
+        else:
+            raise
+
+    _send_booking_notification(
+        summary=event_summary or summary,
+        start_time=start_time,
+        end_time=end_time,
+        attendee_email=attendee_email if has_email else (customer_name or contact),
+        tenant_id=tenant_id,
+    )
+
+    # SMS for phone bookings (voice + web with phone as contact).
+    if contact and any(c.isdigit() for c in contact) and not has_email:
+        _send_sms_confirmation(
+            contact,
+            _friendly_when(start_time),
+            tenant_id,
+            location_name=loc.name,
+            service_name=svc.name if svc else "",
+            customer_name=customer_name,
+            lang=lang,
+        )
+
+    when = _friendly_when(start_time)
+    msg = (
+        f"That's already booked — you're confirmed for {when}."
+        if already_existed
+        else f"Booked — confirmed for {when}."
+    )
+    return {
+        "ok": True,
+        "message": msg,
+        "event_id": event_id,
+        "already_existed": already_existed,
+        "conflict": False,
+        "location_id": loc.id,
+        "location_name": loc.name,
+        "start": start_time,
+        "end": end_time,
+        "when": when,
+        "service_id": svc.id if svc else None,
+        "service_name": svc.name if svc else None,
+    }
+
+
 @tool
 def book_appointment(
     summary: str,
@@ -997,6 +1330,8 @@ def book_appointment(
     end_time: str,
     attendee_email: Optional[str] = None,
     idempotency_key: Optional[str] = None,
+    location: Optional[str] = None,
+    service: Optional[str] = None,
     config: RunnableConfig = None,
 ) -> str:
     """Book a confirmed appointment in Google Calendar (idempotent).
@@ -1010,106 +1345,29 @@ def book_appointment(
             the caller's phone number here instead — that is recorded in the
             event description, never as an attendee (Google rejects non-emails).
         idempotency_key: Optional. If omitted, derived from the deterministic
-            (summary,start,end,email) tuple — so the SAME logical booking
-            attempted twice yields ONE event.
+            (summary,start,end,email,location,service) tuple — so the SAME
+            logical booking attempted twice yields ONE event.
+        location: Location id/name when the tenant has multiple shops.
+        service:  Service id/name (sets duration and event title context).
 
     Returns: human-readable confirmation string.
     """
     try:
-        # Derive a stable idem key if the caller didn't provide one.
-        if not idempotency_key:
-            idempotency_key = "|".join(
-                [summary or "", start_time, end_time, (attendee_email or "").lower()]
-            )
-
         tenant_id = _tenant_from_config(config)
-        cfg = load_tenant(tenant_id)
-
-        closed_msg = _closed_day_message(start_time, cfg.business_days)
-        if closed_msg:
-            return closed_msg
-        hours_msg = _closed_hours_message(start_time, end_time, cfg.business_hours, cfg.business_tz)
-        if hours_msg:
-            return hours_msg
-
-        service = _get_calendar_service(tenant_id)
-        event_id = _idem_event_id(idempotency_key)
-
-        cal_id = cfg.calendar_id
-        # Pre-flight race check (best-effort; insert is the source of truth).
-        if not _slot_still_free(service, start_time, end_time, cfg.business_tz, cal_id):
-            # The slot is busy — check whether the conflict IS our own event
-            # (idempotent re-attempt), in which case we just return success.
-            try:
-                existing = (
-                    service.events()
-                    .get(calendarId=cal_id, eventId=event_id)
-                    .execute()
-                )
-                when = _friendly_when(existing["start"].get("dateTime", start_time))
-                return f"That's already booked — you're confirmed for {when}."
-            except Exception:
-                return (
-                    "⚠️ That time is no longer available — someone else just "
-                    "booked it. Could you pick another slot?"
-                )
-
-        contact = (attendee_email or "").strip()
-        # VAPI passes unresolved template literals (e.g. "{{call.customer.number}}")
-        # when caller number is unavailable. Normalise before any downstream use.
-        if contact.startswith("{{"):
-            contact = "Phone not captured"
-            attendee_email = "Phone not captured"
-        has_email = _looks_like_email(contact)
-
-        event_body = {
-            "id": event_id,
-            "summary": summary,
-            "start": {"dateTime": start_time, "timeZone": cfg.business_tz},
-            "end": {"dateTime": end_time, "timeZone": cfg.business_tz},
-        }
-        if has_email:
-            event_body["attendees"] = [{"email": contact}]
-        elif contact:
-            # Voice path: contact is a phone number, not an email. Record it in
-            # the description so it never reaches the (validated) attendees field.
-            event_body["description"] = f"Booked by phone. Caller contact: {contact}"
-
-        # Only ask Google to email invites when there is a real attendee.
-        send_updates = "all" if has_email else "none"
-
-        def _insert():
-            return (
-                service.events()
-                .insert(calendarId=cal_id, body=event_body, sendUpdates=send_updates)
-                .execute()
-            )
-
-        try:
-            _retry_calendar(_insert)
-        except Exception as e:
-            # Google raises HttpError with resp.status==409 on duplicate id.
-            status = getattr(getattr(e, "resp", None), "status", None)
-            if status == 409:
-                service.events().get(calendarId=cal_id, eventId=event_id).execute()
-                log.info(f"book_appointment: idempotent hit ({event_id[:8]}…)")
-            else:
-                raise
-
-        _send_booking_notification(
+        result = book_appointment_core(
+            tenant_id=tenant_id,
             summary=summary,
             start_time=start_time,
             end_time=end_time,
             attendee_email=attendee_email,
-            tenant_id=tenant_id,
+            idempotency_key=idempotency_key,
+            location=location,
+            service=service,
+            source="voice",
         )
-
-        # Voice bookings (phone contact, no email invite) get a confirmation text.
-        if contact and not has_email and any(c.isdigit() for c in contact):
-            _send_sms_confirmation(contact, _friendly_when(start_time), tenant_id)
-
-        return f"Booked — confirmed for {_friendly_when(start_time)}."
-
+        return result["message"]
+    except ValueError as e:
+        return str(e)
     except RuntimeError as e:
         log.error("book_appointment: calendar not configured: %s", e)
         return _CALENDAR_FALLBACK
@@ -1180,28 +1438,44 @@ def _resolve_event_id(service, cal_id: str, given_id: str) -> Optional[str]:
         return None
 
 
-@tool
-def find_booking(contact: str, config: RunnableConfig = None) -> str:
-    """Find a caller's upcoming appointment(s) by email or phone number.
-
-    Call this before rescheduling or canceling. `contact` is the caller's email
-    (chat) or phone number (voice). Returns each match with a short id that
-    request_cancellation_code, cancel_appointment, and reschedule_appointment
-    accept in place of the full booking id.
-    """
+def _tenant_calendar_ids(cfg: TenantConfig, location: Optional[str] = None) -> list[str]:
+    """Calendar ids for a tenant, optionally narrowed to one location."""
+    if location:
+        return [cfg.resolve_location(location).calendar_id]
     try:
-        import pytz
+        calendars = [cid for _, cid in cfg.all_calendar_ids()]
+    except Exception:
+        calendars = [getattr(cfg, "calendar_id", None) or "primary"]
+    if not calendars:
+        calendars = [getattr(cfg, "calendar_id", None) or "primary"]
+    # de-dupe while preserving order
+    seen: set[str] = set()
+    return [c for c in calendars if c and not (c in seen or seen.add(c))]
 
-        tenant_id = _tenant_from_config(config)
-        cfg = load_tenant(tenant_id)
-        service = _get_calendar_service(tenant_id)
-        tz = pytz.timezone(cfg.business_tz)
-        now = datetime.now(tz)
-        future = now + timedelta(days=60)
+
+def _find_events_for_contact(
+    tenant_id: str,
+    contact: str,
+    *,
+    location: Optional[str] = None,
+) -> list[tuple[str, dict]]:
+    """Return [(calendar_id, event), ...] matching contact across location calendars."""
+    import pytz
+
+    cfg = load_tenant(tenant_id)
+    cal_service = _get_calendar_service(tenant_id)
+    tz = pytz.timezone(cfg.business_tz)
+    now = datetime.now(tz)
+    future = now + timedelta(days=60)
+
+    calendars = _tenant_calendar_ids(cfg, location)
+
+    matches: list[tuple[str, dict]] = []
+    for cal_id in calendars:
         events = (
-            service.events()
+            cal_service.events()
             .list(
-                calendarId=cfg.calendar_id,
+                calendarId=cal_id,
                 timeMin=now.isoformat(),
                 timeMax=future.isoformat(),
                 singleEvents=True,
@@ -1211,15 +1485,101 @@ def find_booking(contact: str, config: RunnableConfig = None) -> str:
             .execute()
             .get("items", [])
         )
-        matches = [e for e in events if _event_matches_contact(e, contact)]
+        for e in events:
+            if _event_matches_contact(e, contact):
+                matches.append((cal_id, e))
+    return matches
+
+
+def _resolve_event_across_calendars(
+    tenant_id: str, given_id: str
+) -> tuple[Optional[str], Optional[str], Optional[dict]]:
+    """Resolve short/full event id across all tenant calendars.
+
+    Returns (calendar_id, full_event_id, event) or (None, None, None).
+    """
+    cfg = load_tenant(tenant_id)
+    cal_service = _get_calendar_service(tenant_id)
+    given_id = (given_id or "").strip()
+    if not given_id:
+        return None, None, None
+
+    calendars = _tenant_calendar_ids(cfg)
+
+    # Full id: try get on each calendar
+    if len(given_id) > _SHORT_ID_LEN:
+        for cal_id in calendars:
+            try:
+                event = cal_service.events().get(calendarId=cal_id, eventId=given_id).execute()
+                return cal_id, given_id, event
+            except Exception:
+                continue
+        return None, None, None
+
+    # Short prefix: scan windows
+    import pytz
+
+    tz = pytz.timezone(cfg.business_tz)
+    now = datetime.now(tz)
+    found: list[tuple[str, str, dict]] = []
+    for cal_id in calendars:
+        try:
+            events = (
+                cal_service.events()
+                .list(
+                    calendarId=cal_id,
+                    timeMin=(now - timedelta(days=7)).isoformat(),
+                    timeMax=(now + timedelta(days=90)).isoformat(),
+                    singleEvents=True,
+                    maxResults=250,
+                )
+                .execute()
+                .get("items", [])
+            )
+            for e in events:
+                eid = e.get("id", "")
+                if eid.startswith(given_id):
+                    found.append((cal_id, eid, e))
+        except Exception:
+            log.warning("_resolve_event_across_calendars list failed for %s", cal_id, exc_info=True)
+    if len(found) == 1:
+        return found[0]
+    return None, None, None
+
+
+@tool
+def find_booking(
+    contact: str,
+    location: Optional[str] = None,
+    config: RunnableConfig = None,
+) -> str:
+    """Find a caller's upcoming appointment(s) by email or phone number.
+
+    Call this before rescheduling or canceling. `contact` is the caller's email
+    (chat) or phone number (voice). Returns each match with a short id that
+    request_cancellation_code, cancel_appointment, and reschedule_appointment
+    accept in place of the full booking id.
+
+    For multi-location tenants, pass `location` to narrow the search; otherwise
+    all location calendars are scanned.
+    """
+    try:
+        tenant_id = _tenant_from_config(config)
+        matches = _find_events_for_contact(tenant_id, contact, location=location)
         if not matches:
             return "I don't see any upcoming bookings under that contact."
         lines = ["Found these upcoming bookings:"]
-        for e in matches:
+        for _cal_id, e in matches:
             when = _friendly_when(e.get("start", {}).get("dateTime", ""))
             short_id = e.get("id", "")[:_SHORT_ID_LEN]
-            lines.append(f"- {e.get('summary', '(no title)')} on {when} (id: {short_id})")
+            loc_label = (e.get("location") or "").split(",")[0]
+            loc_bit = f" @ {loc_label}" if loc_label else ""
+            lines.append(
+                f"- {e.get('summary', '(no title)')} on {when}{loc_bit} (id: {short_id})"
+            )
         return "\n".join(lines)
+    except ValueError as e:
+        return str(e)
     except RuntimeError as e:
         log.error("find_booking: calendar not configured: %s", e)
         return _CALENDAR_FALLBACK
@@ -1247,13 +1607,9 @@ def request_cancellation_code(event_id: str, config: RunnableConfig = None) -> s
     """
     try:
         tenant_id = _tenant_from_config(config)
-        cfg = load_tenant(tenant_id)
         service = _get_calendar_service(tenant_id)
-        cal_id = cfg.calendar_id
-        event_id = _resolve_event_id(service, cal_id, event_id) or event_id
-        try:
-            event = service.events().get(calendarId=cal_id, eventId=event_id).execute()
-        except Exception:
+        cal_id, event_id, event = _resolve_event_across_calendars(tenant_id, event_id)
+        if not event or not cal_id or not event_id:
             return "I couldn't find that booking — it may have already been canceled."
 
         contact, is_email = _extract_contact(event)
@@ -1311,15 +1667,9 @@ def cancel_appointment(event_id: str, confirmation_code: str, config: RunnableCo
     """
     try:
         tenant_id = _tenant_from_config(config)
-        cfg = load_tenant(tenant_id)
         service = _get_calendar_service(tenant_id)
-        cal_id = cfg.calendar_id
-        event_id = _resolve_event_id(service, cal_id, event_id) or event_id
-        try:
-            event = (
-                service.events().get(calendarId=cal_id, eventId=event_id).execute()
-            )
-        except Exception:
+        cal_id, event_id, event = _resolve_event_across_calendars(tenant_id, event_id)
+        if not event or not cal_id or not event_id:
             return "I couldn't find that booking — it may have already been canceled."
 
         ok, msg = _verify_and_consume_code(service, cal_id, event, confirmation_code)
@@ -1348,6 +1698,7 @@ def reschedule_appointment(
     new_start_time: str,
     new_end_time: str,
     confirmation_code: str,
+    location: Optional[str] = None,
     config: RunnableConfig = None,
 ) -> str:
     """Move an existing appointment to a new time.
@@ -1357,6 +1708,7 @@ def reschedule_appointment(
         new_start_time: ISO 8601 start with timezone, e.g. '2026-05-29T10:00:00-04:00'.
         new_end_time:   ISO 8601 end with timezone.
         confirmation_code: From request_cancellation_code, read back by the caller.
+        location: Optional location hint for multi-location tenants (hours/days).
 
     Always confirm the new time with the caller before calling this. Call
     request_cancellation_code first — never skip straight to rescheduling on a
@@ -1366,25 +1718,50 @@ def reschedule_appointment(
         tenant_id = _tenant_from_config(config)
         cfg = load_tenant(tenant_id)
 
-        closed_msg = _closed_day_message(new_start_time, cfg.business_days)
-        if closed_msg:
-            return closed_msg
-        hours_msg = _closed_hours_message(new_start_time, new_end_time, cfg.business_hours, cfg.business_tz)
-        if hours_msg:
-            return hours_msg
+        # Prefer location from arg; fall back to event private props after load.
+        try:
+            loc = cfg.resolve_location(location) if location or not cfg.is_multi_location else None
+        except ValueError:
+            loc = None
 
         service = _get_calendar_service(tenant_id)
-        cal_id = cfg.calendar_id
-        event_id = _resolve_event_id(service, cal_id, event_id) or event_id
-        try:
-            event = (
-                service.events().get(calendarId=cal_id, eventId=event_id).execute()
-            )
-        except Exception:
+        cal_id, event_id, event = _resolve_event_across_calendars(tenant_id, event_id)
+        if not event or not cal_id or not event_id:
             return (
                 "I couldn't find that booking — it may have been canceled. "
                 "Want me to book a new time?"
             )
+
+        if loc is None:
+            loc_id = (
+                (event.get("extendedProperties") or {}).get("private") or {}
+            ).get("location_id")
+            try:
+                loc = cfg.resolve_location(loc_id) if loc_id else cfg.default_location()
+            except Exception:
+                loc = LocationConfig(
+                    id="default",
+                    name=cfg.company_name,
+                    calendar_id=cal_id,
+                    business_hours=cfg.business_hours,
+                    business_days=cfg.business_days,
+                )
+
+        closed_msg = _closed_day_message(
+            new_start_time, loc.effective_booking_days, booking_only=True
+        )
+        if closed_msg:
+            return closed_msg
+        try:
+            day_dt = datetime.fromisoformat(new_start_time)
+            day_hours = loc.hours_for_day(day_dt.weekday())
+        except Exception:
+            day_hours = loc.business_hours
+        hours_msg = _closed_hours_message(
+            new_start_time, new_end_time, day_hours, cfg.business_tz
+        )
+        if hours_msg:
+            return hours_msg
 
         ok, msg = _verify_and_consume_code(service, cal_id, event, confirmation_code)
         if not ok:
@@ -1405,11 +1782,18 @@ def reschedule_appointment(
         # Re-confirm by SMS for voice (phone) bookings.
         desc = event.get("description", "")
         if "Caller contact:" in desc and not event.get("attendees"):
-            phone = desc.split("Caller contact:", 1)[1].strip()
+            phone = desc.split("Caller contact:", 1)[1].strip().split("\n")[0].strip()
             if any(c.isdigit() for c in phone):
-                _send_sms_confirmation(phone, _friendly_when(new_start_time), tenant_id)
+                _send_sms_confirmation(
+                    phone,
+                    _friendly_when(new_start_time),
+                    tenant_id,
+                    location_name=loc.name,
+                )
 
         return f"Done — I've moved your appointment to {_friendly_when(new_start_time)}."
+    except ValueError as e:
+        return str(e)
     except RuntimeError as e:
         log.error("reschedule_appointment: calendar not configured: %s", e)
         return _CALENDAR_FALLBACK

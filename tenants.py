@@ -12,6 +12,10 @@
 # byte-identical. tools.py imports THIS module (one direction only); the late
 # import inside load_tenant() runs at request time, after tools.py is fully
 # loaded, so there is no import cycle.
+#
+# Multi-location (Otro Nivel): optional locations map + services map. Existing
+# single-location tenants keep working via a synthesized default location from
+# the legacy top-level calendar_id / business_hours / business_days fields.
 
 from __future__ import annotations
 
@@ -41,6 +45,51 @@ _DEFAULT_VOICE_SUMMARY = "Orchelix Intro Call"
 
 
 @dataclass(frozen=True)
+class LocationConfig:
+    """One physical shop / bookable calendar for a tenant."""
+
+    id: str
+    name: str
+    address: str = ""
+    calendar_id: str = "primary"
+    # Default [start_hour, end_hour) window when day_hours has no entry.
+    business_hours: tuple[int, int] = (9, 17)
+    # Weekdays the location is OPEN (Python weekday: Mon=0 … Sun=6).
+    business_days: tuple[int, ...] = (0, 1, 2, 3, 4)
+    # Weekdays that accept APPOINTMENTS. None → same as business_days.
+    # Example: open Sat (walk-in) but booking_days excludes Sat.
+    booking_days: Optional[tuple[int, ...]] = None
+    # Optional per-weekday hour overrides: {0: (10, 17), 1: (10, 19), ...}
+    day_hours: dict[int, tuple[int, int]] = field(default_factory=dict)
+    phone: str = ""
+
+    @property
+    def effective_booking_days(self) -> tuple[int, ...]:
+        return self.booking_days if self.booking_days is not None else self.business_days
+
+    def hours_for_day(self, weekday: int) -> tuple[int, int]:
+        """Return (open_hour, close_hour) for a Python weekday (Mon=0)."""
+        if weekday in self.day_hours:
+            return self.day_hours[weekday]
+        return self.business_hours
+
+
+@dataclass(frozen=True)
+class ServiceConfig:
+    """Bookable service with optional per-location price overrides."""
+
+    id: str
+    name: str
+    duration_min: int = 30
+    price: str = ""
+    # location_id → price string (e.g. {"weston": "$50", "keele": "$35–$40"})
+    price_by_location: dict[str, str] = field(default_factory=dict)
+
+    def price_for(self, location_id: str) -> str:
+        return self.price_by_location.get(location_id) or self.price
+
+
+@dataclass(frozen=True)
 class TenantConfig:
     """Immutable per-tenant configuration. Secrets are NOT stored here."""
     tenant_id: str
@@ -57,15 +106,91 @@ class TenantConfig:
     pricing_note: str = ""  # optional footer override for non-SaaS tenants (e.g. per-job pricing)
     vapi_assistant_ids: tuple[str, ...] = ()
     vapi_phone_number_ids: tuple[str, ...] = ()
-    calendar_id: str = "primary"  # Google Calendar identifier
+    calendar_id: str = "primary"  # Google Calendar identifier (legacy single-location)
     # Which weekdays the business is open, Python datetime.weekday() values
     # (Monday=0 ... Sunday=6). Default Mon-Fri for backward compatibility with
     # tenants that predate this field.
     business_days: tuple[int, ...] = (0, 1, 2, 3, 4)
+    # Multi-location / multi-service (optional; empty → synthesize default location)
+    locations: dict[str, LocationConfig] = field(default_factory=dict)
+    services: dict[str, ServiceConfig] = field(default_factory=dict)
+    # Optional SMS template overrides (EN/ES). Placeholders: {name} {when} {location} {service}
+    sms_templates: dict[str, str] = field(default_factory=dict)
+    transfer_phone: str = ""
 
     @property
     def hours_range(self) -> range:
         return range(self.business_hours[0], self.business_hours[1])
+
+    @property
+    def is_multi_location(self) -> bool:
+        return len(self.locations) > 1
+
+    def default_location(self) -> LocationConfig:
+        """Return the sole location, or synthesize one from legacy tenant fields."""
+        if self.locations:
+            if len(self.locations) == 1:
+                return next(iter(self.locations.values()))
+            raise ValueError(
+                f"Tenant '{self.tenant_id}' has multiple locations — location is required."
+            )
+        return LocationConfig(
+            id="default",
+            name=self.company_name,
+            calendar_id=self.calendar_id,
+            business_hours=self.business_hours,
+            business_days=self.business_days,
+            booking_days=self.business_days,
+        )
+
+    def resolve_location(self, location: Optional[str] = None) -> LocationConfig:
+        """Resolve a location key (id or name, case-insensitive) to LocationConfig.
+
+        Single-location tenants accept None / any empty value and return the
+        only (or synthesized) location. Multi-location tenants require a match.
+        """
+        key = (location or "").strip().lower()
+        if not self.locations:
+            return self.default_location()
+        if not key:
+            if len(self.locations) == 1:
+                return next(iter(self.locations.values()))
+            raise ValueError(
+                "Which location? This business has more than one — please specify."
+            )
+        # Exact id match
+        if key in self.locations:
+            return self.locations[key]
+        # Match by name (e.g. "Weston Road" → weston)
+        for loc in self.locations.values():
+            if loc.name.lower() == key or loc.id.lower() == key:
+                return loc
+            if key in loc.name.lower() or key in loc.id.lower():
+                return loc
+        known = ", ".join(sorted(self.locations.keys()))
+        raise ValueError(f"Unknown location '{location}'. Choose one of: {known}.")
+
+    def resolve_service(self, service: Optional[str] = None) -> Optional[ServiceConfig]:
+        """Resolve a service key or free-text name. None if tenant has no services map."""
+        if not self.services:
+            return None
+        key = (service or "").strip().lower()
+        if not key:
+            return None
+        if key in self.services:
+            return self.services[key]
+        for svc in self.services.values():
+            if svc.name.lower() == key or svc.id.lower() == key:
+                return svc
+            if key in svc.name.lower() or key in svc.id.lower():
+                return svc
+        return None
+
+    def all_calendar_ids(self) -> list[tuple[str, str]]:
+        """Return [(location_id, calendar_id), ...] for every bookable calendar."""
+        if self.locations:
+            return [(loc.id, loc.calendar_id) for loc in self.locations.values()]
+        return [("default", self.calendar_id)]
 
 
 _cache: dict[str, TenantConfig] = {}
@@ -111,6 +236,75 @@ def _default_config() -> TenantConfig:
     )
 
 
+def _parse_hours_pair(raw, fallback: tuple[int, int]) -> tuple[int, int]:
+    if not raw or len(raw) < 2:
+        return fallback
+    return (int(raw[0]), int(raw[1]))
+
+
+def _parse_day_hours(raw) -> dict[int, tuple[int, int]]:
+    """Parse day_hours from JSON: keys may be str or int weekday numbers."""
+    if not raw or not isinstance(raw, dict):
+        return {}
+    out: dict[int, tuple[int, int]] = {}
+    for k, v in raw.items():
+        try:
+            day = int(k)
+            if isinstance(v, (list, tuple)) and len(v) >= 2:
+                out[day] = (int(v[0]), int(v[1]))
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
+def _parse_locations(data: dict, base: TenantConfig) -> dict[str, LocationConfig]:
+    raw = data.get("locations")
+    if not raw or not isinstance(raw, dict):
+        return {}
+    out: dict[str, LocationConfig] = {}
+    for loc_id, loc in raw.items():
+        if not isinstance(loc, dict):
+            continue
+        lid = str(loc_id).strip().lower()
+        hours = _parse_hours_pair(
+            loc.get("business_hours"), base.business_hours
+        )
+        bdays = loc.get("business_days")
+        book_days = loc.get("booking_days")
+        out[lid] = LocationConfig(
+            id=lid,
+            name=str(loc.get("name") or lid).strip(),
+            address=str(loc.get("address") or "").strip(),
+            calendar_id=str(loc.get("calendar_id") or base.calendar_id),
+            business_hours=hours,
+            business_days=tuple(int(d) for d in bdays) if bdays is not None else base.business_days,
+            booking_days=tuple(int(d) for d in book_days) if book_days is not None else None,
+            day_hours=_parse_day_hours(loc.get("day_hours")),
+            phone=str(loc.get("phone") or "").strip(),
+        )
+    return out
+
+
+def _parse_services(data: dict, default_duration: int) -> dict[str, ServiceConfig]:
+    raw = data.get("services")
+    if not raw or not isinstance(raw, dict):
+        return {}
+    out: dict[str, ServiceConfig] = {}
+    for svc_id, svc in raw.items():
+        if not isinstance(svc, dict):
+            continue
+        sid = str(svc_id).strip().lower()
+        price_by = svc.get("price_by_location") or {}
+        out[sid] = ServiceConfig(
+            id=sid,
+            name=str(svc.get("name") or sid).strip(),
+            duration_min=int(svc.get("duration_min") or default_duration),
+            price=str(svc.get("price") or "").strip(),
+            price_by_location={str(k).lower(): str(v) for k, v in price_by.items()},
+        )
+    return out
+
+
 def _config_from_file(tenant_id: str, data: dict) -> TenantConfig:
     """Build a TenantConfig from a tenants/<id>/config.json dict.
 
@@ -121,12 +315,22 @@ def _config_from_file(tenant_id: str, data: dict) -> TenantConfig:
     emails = data.get("emails") or {}
     hours = data.get("business_hours") or list(base.business_hours)
     vapi = data.get("vapi") or {}
+    slot = int(data.get("slot_minutes", base.slot_minutes))
+    locations = _parse_locations(data, base)
+    services = _parse_services(data, slot)
+    sms_templates = data.get("sms_templates") or {}
+    # If multi-location, prefer first location calendar as legacy calendar_id
+    # for any code that still reads the top-level field.
+    legacy_cal = data.get("calendar_id", base.calendar_id)
+    if locations and not data.get("calendar_id"):
+        legacy_cal = next(iter(locations.values())).calendar_id
+
     return TenantConfig(
         tenant_id=tenant_id,
         company_name=data.get("company_name", base.company_name),
         business_tz=data.get("business_tz", base.business_tz),
         business_hours=(int(hours[0]), int(hours[1])),
-        slot_minutes=int(data.get("slot_minutes", base.slot_minutes)),
+        slot_minutes=slot,
         email_from=emails.get("from", base.email_from),
         email_booking_to=emails.get("booking_to", base.email_booking_to),
         email_escalation_to=emails.get("escalation_to", base.email_escalation_to),
@@ -136,8 +340,12 @@ def _config_from_file(tenant_id: str, data: dict) -> TenantConfig:
         pricing_note=data.get("pricing_note", ""),
         vapi_assistant_ids=tuple(vapi.get("assistant_ids") or ()),
         vapi_phone_number_ids=tuple(vapi.get("phone_number_ids") or ()),
-        calendar_id=data.get("calendar_id", "primary"),
+        calendar_id=legacy_cal,
         business_days=tuple(int(d) for d in data.get("business_days") or base.business_days),
+        locations=locations,
+        services=services,
+        sms_templates={str(k): str(v) for k, v in sms_templates.items()},
+        transfer_phone=str(data.get("transfer_phone") or "").strip(),
     )
 
 
@@ -179,6 +387,15 @@ def load_tenant(tenant_id: str = "default") -> TenantConfig:
                 )
         _cache[tid] = cfg
         return cfg
+
+
+def clear_tenant_cache(tenant_id: Optional[str] = None) -> None:
+    """Drop cached config(s). Used by tests after monkeypatching config files."""
+    with _lock:
+        if tenant_id is None:
+            _cache.clear()
+        else:
+            _cache.pop(_norm(tenant_id), None)
 
 
 def normalize_tenant_id(tenant_id: Optional[str]) -> str:
