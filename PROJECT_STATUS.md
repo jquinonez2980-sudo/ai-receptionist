@@ -8,6 +8,19 @@ A production AI receptionist system with two repos:
 |---|---|
 | `ai-receptionist` | Python backend — LangGraph agent, FastAPI SSE endpoint, Google Calendar, FAISS KB |
 | `orhelix-website` | Next.js frontend — chat UI at `/try-esmi`, API proxy to Railway |
+| `Otro Nivel Barbershop/website` | Client site — online booking wizard → Esmi `/bookings/*` |
+
+### Multi-location booking (2026-07)
+
+- **Tenant model** supports optional `locations` + `services` maps (`tenants.py`).
+  - Per location: `calendar_id`, `business_hours` / `day_hours`, `business_days`, **`booking_days`** (appointments ≠ open; e.g. Sat walk-in only).
+  - Per service: `duration_min`, `price` + `price_by_location`.
+  - Single-location tenants unchanged (synthesized default location from legacy fields).
+- **Shared calendar core** in `tools.py`: `compute_available_slots`, `book_appointment_core` used by voice tools and REST.
+- **REST (website)**: `GET /bookings/availability`, `POST /bookings`, `GET /bookings/lookup` — auth via `X-Booking-Secret` + `X-Tenant-Id`.
+- **Tenant `otro-nivel`**: Weston + Keele, bilingual prompt/KB, SMS templates EN/ES. Runbook: `tenants/otro-nivel/ONBOARDING.md`.
+
+**Still needs client/ops (not code):** two Google calendars + `TENANT_OTRO_NIVEL_GOOGLE_TOKEN_B64`, Twilio/SendGrid per-tenant secrets, `BOOKING_API_SECRET` (Railway) + `ESMI_API_URL` / `ESMI_BOOKING_SECRET` (Vercel), VAPI assistant + number port for (647) 340-7187.
 
 ---
 
