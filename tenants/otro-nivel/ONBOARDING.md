@@ -13,15 +13,18 @@ Create **two** calendars on a client-controlled or Orchelix-managed Google accou
 
 Until real IDs exist, both locations use `"primary"` (fine for a single test calendar; **not** for production — will double-book across shops).
 
-OAuth: produce a refreshable token JSON, base64-encode it, set on Railway:
+DONE (2026-07-14): both calendars created under the Orchelix-managed Google account
+(policy — see `sales/CLIENT_ONBOARDING_CHECKLIST.md` Phase 2) and real calendar IDs are in
+`config.json`. Credentials copied from the master Orchelix Google account (individual vars,
+matching how the master credential itself is stored on Railway):
 
 ```
-TENANT_OTRO_NIVEL_GOOGLE_TOKEN_B64=<base64 of token.json>
+TENANT_OTRO_NIVEL_GOOGLE_REFRESH_TOKEN=<same value as master GOOGLE_REFRESH_TOKEN>
+TENANT_OTRO_NIVEL_GOOGLE_CLIENT_ID=<same value as master GOOGLE_CLIENT_ID>
+TENANT_OTRO_NIVEL_GOOGLE_CLIENT_SECRET=<same value as master GOOGLE_CLIENT_SECRET>
 ```
 
-Optional individual vars: `TENANT_OTRO_NIVEL_GOOGLE_REFRESH_TOKEN`, `_CLIENT_ID`, `_CLIENT_SECRET`.
-
-Share both calendars with the OAuth account (write access).
+Verified live via `/bookings/availability` for both `weston` and `keele`.
 
 ## 2. Twilio SMS confirmations
 

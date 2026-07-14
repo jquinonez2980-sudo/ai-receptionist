@@ -6,8 +6,8 @@
   "slot_minutes": 45,
   "emails": {
     "from": "info@otronivelbarbershop.com",
-    "booking_to": "dawnatemporal1111@gmail.com",
-    "escalation_to": "dawnatemporal1111@gmail.com"
+    "booking_to": "aotronivelbarbershop02@gmail.com",
+    "escalation_to": "aotronivelbarbershop02@gmail.com"
   },
   "sms_signature": "Otro Nivel Barbershop",
   "voice_default_summary": "Haircut Appointment",
@@ -20,7 +20,7 @@
     "weston": {
       "name": "Weston",
       "address": "2851 Weston Road, Toronto, ON M9M 2S1",
-      "calendar_id": "primary",
+      "calendar_id": "c_04d64beea3e56d81e666a2e4ddfe4e14bf16d69ff0b0ebbbcd0201be4ce335de@group.calendar.google.com",
       "phone": "(647) 340-7187",
       "business_hours": [10, 20],
       "business_days": [0, 1, 2, 3, 4, 5, 6],
@@ -38,7 +38,7 @@
     "keele": {
       "name": "Keele",
       "address": "2266 Keele Street, North York, ON M6M 3Y9",
-      "calendar_id": "primary",
+      "calendar_id": "c_4364e89487e31bf2afcd13aa9e21ed08b7f777cbee71e9af1cd6d86940e70374@group.calendar.google.com",
       "phone": "(647) 340-7187",
       "business_hours": [10, 21],
       "business_days": [0, 1, 2, 3, 4, 5, 6],
