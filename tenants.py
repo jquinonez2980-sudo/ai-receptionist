@@ -429,11 +429,14 @@ def tenant_secret(tenant_id: str, name: str) -> Optional[str]:
     default tenant   → the global var (e.g. SENDGRID_API_KEY).
     other tenants    → TENANT_<ID>_<NAME> ONLY (no global fallback, so one
                        tenant can never read another's / the default's creds).
+                       Hyphens in the slug become underscores (env var names
+                       can't safely contain '-'), e.g. tenant "otro-nivel" →
+                       TENANT_OTRO_NIVEL_<NAME>.
     """
     tid = _norm(tenant_id)
     if tid == "default":
         return os.environ.get(name)
-    return os.environ.get(f"TENANT_{tid.upper()}_{name}")
+    return os.environ.get(f"TENANT_{tid.upper().replace('-', '_')}_{name}")
 
 
 # ── VAPI inbound → tenant mapping ─────────────────────────────────────────────
