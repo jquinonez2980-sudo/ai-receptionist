@@ -106,12 +106,14 @@ def _build_single_agent_graph(checkpointer):
 # Deliberately excludes ambiguous phrases that collide with non-booking intent:
 # "when are you" (catches "when are you open?" — an hours/FAQ question), "next
 # week"/weekday names (catches "I'm away next week, tell me about your
-# services"), and bare "cancel" (catches "how do I cancel the monthly
-# service?" — a pricing/terms question). The LLM router (below) handles those
-# correctly; only unambiguous booking verbs/phrases belong in this fast tier.
+# services"), bare "cancel" (catches "how do I cancel the monthly service?" —
+# a pricing/terms question), and bare "available" (catches "what residences
+# are available and how much do they cost?" on real-estate tenants — an
+# inventory/pricing question, not a scheduling one). The LLM router (below)
+# handles those correctly; only unambiguous booking verbs/phrases belong in
+# this fast tier.
 _BOOKING_KW = frozenset({
     "book", "schedule", "appointment", "slot", "availability",
-    "available",  # "whats available this thursday" / "times available"
     "reschedule", "cancel my appointment", "cancel my booking",
     "move my", "change my", "find my booking",
     "intro call", "demo call",
