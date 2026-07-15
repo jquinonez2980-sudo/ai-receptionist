@@ -1,0 +1,130 @@
+{
+  "company_name": "Coastline Condos",
+  "business_tz": "America/Guayaquil",
+  "business_hours": [9, 18],
+  "business_days": [0, 1, 2, 3, 4, 5],
+  "slot_minutes": 30,
+  "emails": {
+    "from": "hello@coastlinecondos.ec",
+    "booking_to": "hello@coastlinecondos.ec",
+    "escalation_to": "hello@coastlinecondos.ec"
+  },
+  "sms_signature": "Coastline Condos",
+  "voice_default_summary": "Coastline Condos Tour / Consultation",
+  "transfer_phone": "+593969943941",
+  "sms_templates": {
+    "confirmation_en": "Hi {name}! Your Coastline Condos visit is confirmed for {when}. Location: Km 5 Vía Data, Playas, Ecuador. Questions? WhatsApp +593 96 994 3941. See you soon! 🌊",
+    "confirmation_es": "¡Hola {name}! Tu visita a Coastline Condos está confirmada para {when}. Ubicación: Km 5 Vía Data, Playas, Ecuador. ¿Preguntas? WhatsApp +593 96 994 3941. ¡Nos vemos! 🌊"
+  },
+  "pricing": [
+    {
+      "name": "Unit 101 — 2BR Ground",
+      "popular": true,
+      "setup_from": 0,
+      "monthly_from": 0,
+      "price_label": "From $90,000 USD · Available",
+      "best_for": "Entry-level 2-bedroom ocean-view residence on ground floor.",
+      "highlights": [
+        "2 bedrooms · 2 baths",
+        "80.56 m² interior + 9.28 m² terrace",
+        "Status: available"
+      ]
+    },
+    {
+      "name": "Unit 102 — 2BR Ground",
+      "popular": true,
+      "setup_from": 0,
+      "monthly_from": 0,
+      "price_label": "From $90,000 USD · Available",
+      "best_for": "2-bedroom ground-floor residence, center bay.",
+      "highlights": [
+        "2 bedrooms · 2 baths",
+        "80.56 m² interior + 9.28 m² terrace",
+        "Status: available"
+      ]
+    },
+    {
+      "name": "Unit 103 — 3BR Ground",
+      "popular": true,
+      "setup_from": 0,
+      "monthly_from": 0,
+      "price_label": "From $120,000 USD · Available",
+      "best_for": "Larger 3-bedroom ground-floor residence.",
+      "highlights": [
+        "3 bedrooms · 2 baths",
+        "89.42 m² interior + 8.64 m² terrace",
+        "Status: available"
+      ]
+    },
+    {
+      "name": "Unit 201 — 2BR Level 2",
+      "popular": false,
+      "setup_from": 0,
+      "monthly_from": 0,
+      "price_label": "From $90,000 USD · Available",
+      "best_for": "Elevated 2-bedroom with terraces above the pool court.",
+      "highlights": [
+        "2 bedrooms · 2 baths",
+        "80.56 m² interior + 9.28 m² terrace",
+        "Status: available"
+      ]
+    },
+    {
+      "name": "Unit 202 — 2BR Level 2",
+      "popular": false,
+      "setup_from": 0,
+      "monthly_from": 0,
+      "price_label": "From $90,000 USD · Available",
+      "best_for": "Elevated 2-bedroom center bay, level 2.",
+      "highlights": [
+        "2 bedrooms · 2 baths",
+        "80.56 m² interior + 9.28 m² terrace",
+        "Status: available"
+      ]
+    },
+    {
+      "name": "Unit 203 — 3BR Level 2",
+      "popular": false,
+      "setup_from": 0,
+      "monthly_from": 0,
+      "price_label": "From $130,000 USD · Conditionally sold",
+      "best_for": "3-bedroom level-2 residence (conditionally sold).",
+      "highlights": [
+        "3 bedrooms · 2 baths",
+        "95.92 m² interior + 8.64 m² terrace",
+        "Status: conditionally sold — ask sales for current options"
+      ]
+    },
+    {
+      "name": "Unit 301 — 3BR Level 3",
+      "popular": false,
+      "setup_from": 0,
+      "monthly_from": 0,
+      "price_label": "From $130,000 USD · Sold",
+      "best_for": "Top-level 3-bedroom with large terrace (sold).",
+      "highlights": [
+        "3 bedrooms · 3 baths",
+        "90.34 m² interior + 16.12 m² terrace",
+        "Status: sold"
+      ]
+    },
+    {
+      "name": "Unit 302 — 4BR Flagship Level 3",
+      "popular": false,
+      "setup_from": 0,
+      "monthly_from": 0,
+      "price_label": "From $160,000 USD · Sold",
+      "best_for": "Flagship 4-bedroom penthouse-style residence (sold).",
+      "highlights": [
+        "4 bedrooms · 3 baths",
+        "145 m² interior + ~42 m² terrace",
+        "Status: sold"
+      ]
+    }
+  ],
+  "pricing_note": "Prices are starting figures in USD and may change. Units 301 and 302 are sold; 203 is conditionally sold. Register for VIP access for full current pricing and payment schedules.",
+  "vapi": {
+    "assistant_ids": [],
+    "phone_number_ids": []
+  }
+}
