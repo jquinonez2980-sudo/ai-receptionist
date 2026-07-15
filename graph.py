@@ -111,9 +111,19 @@ def _build_single_agent_graph(checkpointer):
 # correctly; only unambiguous booking verbs/phrases belong in this fast tier.
 _BOOKING_KW = frozenset({
     "book", "schedule", "appointment", "slot", "availability",
+    "available",  # "whats available this thursday" / "times available"
     "reschedule", "cancel my appointment", "cancel my booking",
     "move my", "change my", "find my booking",
     "intro call", "demo call",
+})
+
+# Mid-booking location/day switches must stay on booker (has calendar tools).
+# Without this, "how about keele" can be LLM-routed to informer, which only has
+# KB search and invents "couldn't find slots".
+_BOOKING_CONTINUE_KW = frozenset({
+    "weston", "keele", "location", "available", "instead",
+    "other day", "different day", "same day", "how about", "what about",
+    "walk-in", "walk in",
 })
 
 # Keywords that indicate urgency / hot-lead / human escalation needed.
@@ -203,12 +213,12 @@ _STICKY_ROUTER_SYSTEM = (
     "You are the router for an AI receptionist. The user is CURRENTLY in the middle "
     "of booking, rescheduling, or canceling an appointment. Classify their latest "
     "message into exactly one of:\n"
-    "- booker: continues the booking flow in any way — a date, time, name, email, "
-    "confirmation ('yes'/'that works'), or anything that could plausibly be part of "
-    "scheduling. Default to this whenever there's any doubt.\n"
-    "- informer: a CLEARLY unrelated question — about services, pricing, the "
-    "company, or general conversation — that has nothing to do with the booking "
-    "in progress.\n"
+    "- booker: continues the booking flow in any way — a date, time, name, phone, "
+    "email, confirmation ('yes'/'that works'), a LOCATION change (Weston, Keele, "
+    "'other shop', 'how about keele'), a service change, or anything that could "
+    "plausibly be part of scheduling. Default to this whenever there's any doubt.\n"
+    "- informer: a CLEARLY unrelated question — pure pricing/services FAQ with no "
+    "scheduling intent — that has nothing to do with the booking in progress.\n"
     "- closer: a hot lead signal — budget, timeline, urgency, frustration, or "
     "asking to speak with a human.\n"
     "Reply with ONLY one word: booker, informer, or closer."
@@ -284,8 +294,12 @@ def _route(state: AgentState) -> str:
     if decided is not None:
         return decided
     if state.get("next") == "booker":
+        human = _last_human_text(state)
+        # Location/day switches mid-booking need calendar tools — never informer.
+        if any(kw in human for kw in _BOOKING_CONTINUE_KW):
+            return "booker"
         if _LLM_ROUTER_ENABLED:
-            return _llm_route_sticky(_last_human_text(state))
+            return _llm_route_sticky(human)
         return "booker"  # no classifier available — preserve the old sticky behavior
     if _LLM_ROUTER_ENABLED:
         return _llm_route(_last_human_text(state))
