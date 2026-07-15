@@ -141,6 +141,22 @@ def test_prompt_company_substitution():
     assert "{company}" not in a
 
 
+def test_esmi_system_loads_tenant_system_md_alias():
+    """Single-agent mode asks for esmi_system.md; tenants ship system.md."""
+    from agents import _load_tenant_prompt
+
+    text = _load_tenant_prompt("esmi_system.md", "otro-nivel")
+    assert "Otro Nivel Barbershop" in text
+    assert "weston" in text.lower() and "keele" in text.lower()
+    # Must NOT fall through to the Orchelix single-location default prompt
+    assert "Never ask which location" not in text
+    assert "Location FIRST" in text or "location first" in text.lower()
+
+    fresh = _load_tenant_prompt("esmi_system.md", "fresh-cuts")
+    # fresh-cuts has its own system.md — should not be Orchelix sales copy
+    assert "Never ask which location" not in fresh
+
+
 # ── Per-tenant calendar isolation (no model) ─────────────────────────────────
 
 def test_calendar_service_raises_for_unconfigured_tenant(monkeypatch):

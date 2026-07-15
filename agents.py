@@ -44,11 +44,25 @@ def _load_tenant_prompt(prompt_name: str, tenant_id: str) -> str:
     shared base prompt in prompts/<name>; then fills {company} from the tenant
     config. The default tenant fills {company} → "Orchelix AI Consulting", so
     its prompts are byte-identical to before.
+
+    Alias: single-agent mode loads ``esmi_system.md``, but onboarding docs and
+    every client tenant ship the override as ``system.md``. Accept either name
+    so multi-location personas (Otro Nivel, Fresh Cuts, demos) actually load.
     """
     tenant_id = normalize_tenant_id(tenant_id)
-    override = _TENANTS_DIR / tenant_id / "prompts" / prompt_name
-    if tenant_id != "default" and override.exists():
-        text = override.read_text(encoding="utf-8")
+    if tenant_id != "default":
+        override = _TENANTS_DIR / tenant_id / "prompts" / prompt_name
+        if override.exists():
+            text = override.read_text(encoding="utf-8")
+        elif prompt_name == "esmi_system.md":
+            # Convention: tenants/<id>/prompts/system.md
+            system_alias = _TENANTS_DIR / tenant_id / "prompts" / "system.md"
+            if system_alias.exists():
+                text = system_alias.read_text(encoding="utf-8")
+            else:
+                text = _load_prompt(prompt_name)
+        else:
+            text = _load_prompt(prompt_name)
     else:
         text = _load_prompt(prompt_name)
     return text.replace("{company}", load_tenant(tenant_id).company_name)

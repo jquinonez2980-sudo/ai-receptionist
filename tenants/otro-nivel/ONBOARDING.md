@@ -46,18 +46,21 @@ Config already points:
 - `emails.from` → info@otronivelbarbershop.com (must be verified sender in SendGrid)
 - `emails.booking_to` / `escalation_to` → dawnatemporal1111@gmail.com
 
-## 4. Booking API secret (website ↔ Railway)
+## 4. Website ↔ Railway secrets
 
-Same value in both places:
+| Where | Env var | Purpose |
+|---|---|---|
+| Railway (Esmi) | `CHAT_PROXY_SECRET` | Protects `POST /chat` |
+| Vercel (website) | `CHAT_PROXY_SECRET` | **Same value** — sent as `X-Chat-Secret` by `/api/chat` |
+| Railway (Esmi) | `BOOKING_API_SECRET` | Protects `/bookings/*` |
+| Vercel (website) | `ESMI_BOOKING_SECRET` | **Same value** as Railway `BOOKING_API_SECRET` |
+| Vercel | `ESMI_API_URL=https://ai-receptionist-production-5375.up.railway.app` | |
+| Vercel | `ESMI_TENANT_ID=otro-nivel` | Optional; proxy defaults to this |
 
-| Where | Env var |
-|---|---|
-| Railway (Esmi) | `BOOKING_API_SECRET` |
-| Vercel (website) | `ESMI_BOOKING_SECRET` |
-| Vercel | `ESMI_API_URL=https://<esmi-railway-host>` |
-| Vercel | `ESMI_TENANT_ID=otro-nivel` (optional; proxy defaults to this) |
+Without matching `CHAT_PROXY_SECRET` on both sides, the chat widget shows
+“Esmi is having trouble right now” (upstream 401).
 
-Website never exposes the secret to the browser — only Next.js route handlers call Railway.
+Website never exposes secrets to the browser — only Next.js route handlers call Railway.
 
 ## 5. VAPI voice assistant
 
