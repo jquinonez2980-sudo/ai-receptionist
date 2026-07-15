@@ -240,5 +240,10 @@ def test_sticky_llm_router_keeps_ambiguous_replies_in_booker(msg):
 @pytestmark_model
 def test_sticky_llm_router_escapes_for_unrelated_question():
     """Finding 5.2: a clearly unrelated question mid-booking must now escape
-    to the informer instead of being trapped (the booker has no pricing tool)."""
-    assert _route(_state("wait, how much does the intro call cost?", next="booker")) == "informer"
+    to the informer instead of being trapped (the booker has no pricing tool).
+
+    Message must NOT contain deterministic booking keywords (e.g. "intro call",
+    "book", "available") or sticky continue keywords ("how about", "location") —
+    those correctly stay on booker. This only asserts the LLM sticky escape path.
+    """
+    assert _route(_state("wait, how much is the setup fee?", next="booker")) == "informer"
