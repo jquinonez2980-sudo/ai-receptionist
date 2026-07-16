@@ -688,14 +688,40 @@ def search_knowledge_base(query: str, config: RunnableConfig = None) -> str:
 
 _PRICING = [
     {
-        "name": "Esmi — AI Virtual Receptionist & Lead Qualification",
+        "name": "Esmi Local — AI Receptionist for Local Businesses",
         "popular": True,
+        "setup_from": 499,
+        "monthly_from": 299,
+        "best_for": "Single-location service businesses — barbershops, salons, auto shops, studios — that want every call answered without hiring front desk staff.",
+        "highlights": [
+            "Answers calls and website chat 24/7, live in 48 hours",
+            "Books directly into your Google Calendar",
+            "Bilingual (EN/ES) — chat-only option available at $299 setup + $199/mo",
+            "Month-to-month, cancel anytime",
+        ],
+    },
+    {
+        "name": "Esmi Pro — AI Receptionist & Lead Qualification",
+        "popular": False,
+        "setup_from": 2500,
+        "monthly_from": 699,
+        "best_for": "Established businesses where one missed call is worth hundreds — dental, med spa, HVAC, plumbing, contractors, kitchen and stone showrooms.",
+        "highlights": [
+            "Everything in Esmi Local, voice + chat",
+            "Custom knowledge base and custom persona for your business",
+            "Multi-agent lead qualification, scoring, and hot-lead escalation",
+            "Priority setup in 5 business days + 1 month of included tweaks",
+        ],
+    },
+    {
+        "name": "Esmi Enterprise — AI Virtual Receptionist & Lead Qualification",
+        "popular": False,
         "setup_from": 8500,
         "monthly_from": 1099,
-        "best_for": "Any business that receives inbound leads or inquiries and wants 24/7 coverage without missing a lead.",
+        "best_for": "Multi-location businesses, law firms, medical groups, and franchises that need custom multi-agent workflows and SLAs.",
         "highlights": [
-            "Never miss another lead",
-            "Intelligent 24/7 qualification and booking",
+            "Never miss another lead — 24/7 qualification and booking",
+            "Multi-location support with white-glove onboarding",
             "Bilingual support (EN/ES) available",
         ],
     },

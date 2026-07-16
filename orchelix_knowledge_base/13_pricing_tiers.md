@@ -3,15 +3,48 @@
 ## Pricing Model
 Every system includes a one-time setup fee (custom build + deployment) and a monthly managed service fee (monitoring, optimization, updates, and support). No long-term contracts required on the monthly service.
 
+Esmi comes in three tiers so businesses of any size can start: **Esmi Local** (single-location shops), **Esmi Pro** (established service businesses), and **Esmi Enterprise** (multi-location and firms).
+
 ---
 
-## Card 01 — Esmi AI Virtual Receptionist & Lead Qualification System
+## Esmi Local — AI Receptionist for Local Businesses
 **★ Most Popular**
+
+**One-time Setup: $499 (Chat + Voice) or $299 (Chat Only)**
+**Monthly: $299/month (Chat + Voice) or $199/month (Chat Only)**
+
+Best for single-location service businesses — barbershops, salons, auto shops, studios — that want every call answered without hiring front desk staff.
+
+**What You Get:**
+- Answers calls and website chat 24/7 — live in 48 hours
+- Books directly into your Google Calendar
+- Bilingual (English & Spanish)
+- Email notification for every booking and escalation
+- Month-to-month, cancel anytime
+
+---
+
+## Esmi Pro — AI Receptionist & Lead Qualification
+**One-time Setup: $2,500**
+**Monthly: $699/month**
+
+Best for established businesses where one missed call is worth hundreds — dental practices, med spas, HVAC, plumbing, electrical, contractors, kitchen and stone showrooms.
+
+**What You Get:**
+- Everything in Esmi Local (voice + chat, 24/7, bilingual)
+- Custom knowledge base written for your business
+- Custom persona — you name it, we tune the tone
+- Multi-agent lead qualification, scoring, and hot-lead escalation to your phone
+- Priority setup in 5 business days + 1 month of included tweaks
+
+---
+
+## Card 01 — Esmi Enterprise: AI Virtual Receptionist & Lead Qualification System
 
 **One-time Setup: Starting at $8,500**
 **Monthly Managed Service: Starting at $1,099/month**
 
-Best for any business that receives inbound leads or inquiries and wants 24/7 coverage without missing a lead.
+Best for multi-location businesses, law firms, medical groups, and franchises that need custom multi-agent workflows, SLAs, and white-glove onboarding.
 
 **Key Benefits:**
 - Never miss another lead
@@ -100,7 +133,10 @@ No. The monthly managed service is flexible with no long-term contracts required
 Yes. It's available as a module inside the Firm OS and can be discussed as an add-on for other packages.
 
 **How long does launch take?**
-Esmi and the Sales Assistant typically launch in 2–3 weeks. The Firm OS uses phased delivery, with the first phase live in 4–6 weeks.
+Esmi Local goes live in 48 hours and Esmi Pro in about 5 business days. Esmi Enterprise and the Sales Assistant typically launch in 2–3 weeks. The Firm OS uses phased delivery, with the first phase live in 4–6 weeks.
+
+**Which Esmi tier is right for me?**
+Single location and you mainly need calls answered and booked: Esmi Local. Established business with real inbound volume and high-value jobs: Esmi Pro. Multiple locations, a firm, or custom workflow needs: Esmi Enterprise.
 
 **How to get started:**
 Book a free 30-minute strategy call at orchelix.com/book. A senior consultant will map your workflow and recommend the right system.
