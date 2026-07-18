@@ -96,14 +96,21 @@ for the full decision table):
 - Existing number, want it live now → buy a new number, client forwards their old one to it.
 - Existing number, want it native → port into Twilio → import to VAPI (2–4 weeks).
 
-Steps:
+Steps (all doable via the VAPI REST API — preferred; see PROJECT_STATUS →
+"To set up VAPI for a new client" for the API pattern and its gotchas):
 
-1. **Create the assistant** in the VAPI dashboard: GPT-4o model, ElevenLabs voice
-   (bilingual if the client needs EN/ES).
-2. **Server URL**: `https://ai-receptionist-production-5375.up.railway.app/voice/tools`.
-   **Server URL Secret**: the same value already set as `VAPI_SERVER_SECRET` on Railway —
-   this is one shared secret for every tenant's assistant, not per-client.
-3. **Add tools** — one per row below, pointing at the same Server URL:
+1. **Create the assistant**: GPT-4.1 model, ElevenLabs voice, Deepgram flux transcriber
+   with `languages: [en, es]` if the client is bilingual.
+2. **Server config**: url `https://ai-receptionist-production-5375.up.railway.app/voice/tools`
+   + the shared VAPI credential **"Esmi Production Secret"** on the assistant's `server`.
+   The underlying secret is `VAPI_SERVER_SECRET` on Railway — one shared value for every
+   tenant, not per-client. (VAPI GET responses redact secrets — a read showing none set
+   does not mean auth is missing.)
+3. **Create tools** — standalone org-level tools, attached to the assistant via
+   `model.toolIds`. Each function tool's `server` carries the url plus
+   `headers: {"X-Vapi-Secret": <VAPI_SERVER_SECRET>}`. Fastest path: copy the schemas from
+   an existing tenant's tools (otro-nivel = multi-location template, coastline-condos =
+   single-location template). One per row below:
 
    | Tool | Parameters |
    |---|---|
@@ -118,20 +125,23 @@ Steps:
    | `escalate_to_human` | `reason`, `user_summary` |
    | `transferCall` (VAPI built-in) | destination = the client's `transfer_phone` from `config.json` |
 
-4. **System prompt**: paste `tenants/<slug>/prompts/system.md` (or the shared
-   `prompts/esmi_system.md` if the tenant has no override), then add at the top:
-   `Today is {{ "now" | date: "%A, %B %d, %Y", "<business_tz>" }}. Use this to resolve
-   relative dates. Do not call any tool to get the date.` — swap in the tenant's real
-   timezone. Voice callers give name only, not email — the caller's number is injected
-   automatically via `{{call.customer.number}}`.
+4. **Voice system prompt**: start from a similar tenant's mirror —
+   `tenants/otro-nivel/prompts/vapi_voice.md` (multi-location barbershop) or
+   `tenants/coastline-condos/prompts/vapi_voice.md` (single-location tour booking) — and
+   adapt. Must include: `Today is {{ "now" | date: "%A, %B %d, %Y", "<business_tz>" }}`
+   (the tenant's real timezone), the mandatory read-back before `book_appointment`, LATAM
+   Spanish rules, and the cancel/reschedule confirmation-code flow. Voice callers give
+   name only, not email — the caller's number is injected automatically via
+   `{{call.customer.number}}`. After pasting into the dashboard, mirror the final text to
+   `tenants/<slug>/prompts/vapi_voice.md`.
 5. **Pronunciation dictionary**: add the business name if it's non-obvious to TTS.
 6. **Attach the phone number** to the assistant.
 7. **Write the real IDs into the tenant config** — `tenants/<slug>/config.json`:
 
 ```json
 "vapi": {
-  "assistant_ids": ["asst_..."],
-  "phone_number_ids": ["pn_..."]
+  "assistant_ids": ["<assistant uuid>"],
+  "phone_number_ids": ["<phone-number uuid>"]
 }
 ```
 
@@ -146,6 +156,9 @@ either id — only one needs to be populated, but both is safer).
 
 - Book once via the website wizard (if built) → event on the calendar, SMS arrives,
   booking notification email arrives.
+- Before a live call: POST a simulated `tool-calls` payload (real `assistantId`,
+  `x-vapi-secret` header) to `/voice/tools` and confirm the RIGHT tenant's prices/slots
+  come back (proves webhook auth + tenant routing).
 - Call the VAPI number → book an appointment → calendar event + SMS confirmation.
 - Trigger an escalation (ask to speak to a person, or mention budget/urgency) → email
   lands at `escalation_to`, and `transferCall` rings the right number.

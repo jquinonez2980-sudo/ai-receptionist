@@ -18,8 +18,10 @@ voice setup, and runbooks. This file is the short, must-not-violate summary.
   slots/book/find/reschedule/cancel, escalate-to-human (SendGrid).
 - **Persistence:** LangGraph `AsyncPostgresSaver` (Railway `DATABASE_URL`); `MemorySaver`
   fallback loses history on restart.
-- **Channels:** web chat + VAPI voice (561-566-1066, ElevenLabs Bella). Voice prompt lives in
-  the VAPI dashboard (mirrored in `PROJECT_STATUS.md`), not in this repo.
+- **Channels:** web chat + VAPI voice — one assistant + number per tenant (Orchelix
+  561-566-1066, otro-nivel 437-292-3949, coastline-condos 754-799-2655). Voice prompts are
+  authoritative in the VAPI dashboard, mirrored at `prompts/vapi_system.md` (Orchelix) and
+  `tenants/<id>/prompts/vapi_voice.md` (tenants) — re-sync the mirror after dashboard edits.
 
 ## Hard rules — do not violate
 1. **Never write a live secret into a tracked file or the Dockerfile.** Secrets are Railway

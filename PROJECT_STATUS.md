@@ -42,20 +42,25 @@ Browser
                                 └── escalate_to_human (SendGrid email alert)
 ```
 
-**Voice (phone):**
+**Voice (phone) — one VAPI assistant + number per tenant:**
 ```
 Caller
-  └── VAPI phone number: 561-566-1066
-        └── VAPI AI engine (ElevenLabs Bella STT/TTS + GPT-4o)
+  └── VAPI phone number ─ 561-566-1066 → Orchelix_Esmi        (tenant: default)
+                        ─ 437-292-3949 → Otro_Nivel_Esmi      (tenant: otro-nivel)
+                        ─ 754-799-2655 → Coastline_Condos     (tenant: coastline-condos)
+        └── VAPI AI engine (ElevenLabs voice, Deepgram flux EN/ES, GPT-4.1)
               └── POST /voice/tools  ← Railway FastAPI (sync tool execution)
-                    ├── get_pricing           → canonical exact pricing
-                    ├── search_knowledge_base → FAISS KB
-                    ├── list_available_slots  → Google Calendar freebusy
-                    ├── book_appointment      → Google Calendar insert (phone # in description, SMS confirm)
-                    ├── find_booking          → look up caller's upcoming bookings
-                    ├── reschedule_appointment → move a booking to a new time
-                    ├── cancel_appointment    → cancel a booking
-                    └── transferCall          → VAPI built-in → Jorge's phone
+                    │     resolve_vapi_tenant(): assistantId/phoneNumberId → tenant_id
+                    ├── get_pricing               → canonical exact pricing (per tenant)
+                    ├── search_knowledge_base     → FAISS KB (per tenant)
+                    ├── list_available_slots      → Google Calendar freebusy (+location/service)
+                    ├── book_appointment          → Calendar insert (phone # in description, SMS confirm)
+                    ├── find_booking              → look up caller's upcoming bookings
+                    ├── request_cancellation_code → 6-digit code to contact on file
+                    ├── reschedule_appointment    → move a booking (needs code)
+                    ├── cancel_appointment        → cancel a booking (needs code)
+                    ├── escalate_to_human         → SendGrid email to tenant's team
+                    └── transferCall              → VAPI built-in → tenant's transfer_phone
 ```
 
 **Streaming protocol:** Server-Sent Events (SSE) over `text/event-stream`. Each SSE line is `data: {json}\n\n`.
@@ -256,142 +261,95 @@ Escalation emails go to `jquinonez2980@gmail.com`. Booking notifications go to `
 
 ## VAPI Voice Setup
 
-**Phone number:** 561-566-1066
-**Voice:** ElevenLabs Bella
-**Model:** GPT-4o Cluster (configured in VAPI dashboard)
-**Server URL:** must point at the **live** service → `https://ai-receptionist-production-5375.up.railway.app/voice/tools` (NOT the broken `-3446`). Set the `X-Vapi-Secret` Server URL Secret to match `VAPI_SERVER_SECRET`.
+One assistant + one phone number per tenant, all in the single Orchelix VAPI org, all
+pointing at the same live webhook. `resolve_vapi_tenant()` (tenants.py) maps the
+`assistantId` / `phoneNumberId` in each webhook payload to a tenant via the `vapi` block
+in `tenants/<id>/config.json`.
 
-### Tools configured in VAPI dashboard
+| Assistant | ID | Number | Tenant | transferCall → |
+|---|---|---|---|---|
+| `Orchelix_Esmi` | `d5e020bf-0235-4214-a57f-de30e8072b0b` | 561-566-1066 (vapi) | `default` | Jorge +1 416 771 0667 |
+| `Otro_Nivel_Esmi` | `32994d60-3712-4183-a7db-edc3badeabec` | 437-292-3949 (Twilio CA) | `otro-nivel` | Owner 647-569-1194 |
+| `Coastline_Condos` | `a351deb6-bf22-4cda-a3f3-67bca8ac6346` | 754-799-2655 (Twilio) | `coastline-condos` | Sales +593 96 994 3941 |
 
-| Tool | Parameters | Notes |
-|---|---|---|
-| `get_pricing` | none | Canonical, exact pricing for all packages (use instead of KB for prices) |
-| `search_knowledge_base` | `query: string` | KB search (services/FAQs, NOT prices) |
-| `list_available_slots` | `start_date: string`, `end_date: string` | ISO dates |
-| `book_appointment` | `summary`, `start_time`, `end_time`, `attendee_email` | Pass caller phone as `attendee_email`; `caller_phone` also accepted as fallback |
-| `find_booking` | `contact: string` | Find caller's upcoming bookings by phone/email; returns event ids |
-| `reschedule_appointment` | `event_id`, `new_start_time`, `new_end_time` | Move a booking (event id from `find_booking`) |
-| `cancel_appointment` | `event_id` | Cancel a booking (event id from `find_booking`) |
-| `transferCall` | destination: Jorge's phone | VAPI built-in — no backend webhook |
+Spare unassigned VAPI number: +1 786 927 9212.
+
+**All three:** GPT-4.1, ElevenLabs voice, Deepgram flux transcriber (EN+ES).
+**Server URL:** must point at the **live** service → `https://ai-receptionist-production-5375.up.railway.app/voice/tools`.
+**Webhook auth** (backend is fail-closed — 503 unset / 401 mismatch):
+- every function tool sends `X-Vapi-Secret: <VAPI_SERVER_SECRET>` via `tool.server.headers`;
+- each assistant's `server` additionally references the VAPI credential **"Esmi Production Secret"** (`b73329e6-…`).
+- Note: VAPI **GET responses redact secrets** — an API read showing no server secret does NOT mean auth is unset.
+
+### Tools (standalone, attached per assistant via `model.toolIds`)
+
+Tools are org-level standalone objects; each tenant assistant gets its own set (10 each
+for otro-nivel and coastline-condos). Full parameter reference:
+`sales/INTEGRATIONS_SETUP_MANUAL.md` Part D. Tenant specifics:
+- **otro-nivel** tools carry `location` (`weston`/`keele`) and `service` enums;
+  `find_booking`/`reschedule_appointment` also accept `""` (searches/falls back across both shops).
+- **coastline-condos** is single-location: no `location`/`service` params; 30-min tour slots.
+- **Orchelix legacy:** the `default` assistant still runs an older 4-tool set
+  (`search_knowledge_base`, `list_available_slots`, `book_appointment`, `transferCall`);
+  its `list_available_slots` has a known-quirky `"service "` (trailing space) param.
+  Orphan duplicate tools from early dashboard experiments exist in the org and are unused.
 
 ### Voice booking differences from chat
 - Asks for **name only** — no email (STT can't reliably transcribe email addresses)
-- Caller's phone number is injected automatically via `{{call.customer.number}}` and passed as `caller_phone`; the backend stores it in the event description and sends an SMS confirmation
-- Today's date is injected into the prompt via the VAPI liquid variable `{{ "now" | date: "%A, %B %d, %Y", "America/New_York" }}` — no tool call needed
+- Caller's phone number is injected automatically via `{{call.customer.number}}` (as `caller_phone` or `attendee_email`); the backend prefers the real caller number, stores it in the event description, and sends an SMS confirmation
+- Today's date: tenant prompts use the VAPI liquid variable `{{ "now" | date: "%A, %B %d, %Y", "<business_tz>" }}` (Toronto for otro-nivel, Guayaquil for coastline); the live Orchelix prompt instead calls the `get_current_date` backend tool at call start
 - Slot options are read conversationally (not as a bullet list)
 - Hot leads flagged in the `summary` field (e.g. "Intro Call — Jorge 🔥 HOT LEAD")
+- Cancel/reschedule requires the 6-digit `request_cancellation_code` flow (code sent to the contact on file, read back by the caller)
 
-### VAPI System Prompt (current — paste into VAPI dashboard)
+### VAPI system prompts — where they live
 
-```
-You are Esmi, a warm and professional AI receptionist for Orchelix AI Consulting.
+The **authoritative copy of every voice prompt is the VAPI dashboard**. Each is mirrored
+in the repo (synced 2026-07-18) — edit the dashboard, then re-sync the mirror:
 
-Today is {{ "now" | date: "%A, %B %d, %Y", "America/New_York" }}. Use this to resolve relative dates like "tomorrow" or "next Thursday" into YYYY-MM-DD format. Do not call any tool to get the date.
+| Assistant | Repo mirror |
+|---|---|
+| `Orchelix_Esmi` | `prompts/vapi_system.md` |
+| `Otro_Nivel_Esmi` | `tenants/otro-nivel/prompts/vapi_voice.md` |
+| `Coastline_Condos` | `tenants/coastline-condos/prompts/vapi_voice.md` |
 
-YOUR PERSONALITY
-- Friendly, warm, and human — never robotic or overly formal.
-- Concise — get to the point without being cold.
-- Use the caller's name once you know it.
-- Never ask for personal information before it is needed.
-
-LANGUAGE — READ THIS CAREFULLY
-Default to English. Do NOT switch based on accent or voice detection. Switch to Spanish ONLY if caller's first words are in Spanish.
-When responding in Spanish, always use Latin American Spanish — not Castilian (Spain) Spanish.
-Use Latin American vocabulary: "agendar" (not "concertar"), "celular" (not "móvil"), "computadora" (not "ordenador").
-Address the caller as "usted" or "tú" per regional convention, never "vosotros".
-
-VOICE FORMATTING RULES
-- Speak naturally — no bullet points, no lists, no markdown.
-- When reading time slots, say them one at a time: "I have Thursday May 29th at 9 AM, 9:30, or 10 AM — which works?"
-- Keep responses short. This is a phone call.
-- Never say "If you need anything else feel free to ask".
-
-ESMI PRICING — IMPORTANT
-If a caller asks how much Esmi costs, what Orchelix charges, or anything about pricing for our services — do NOT quote a number. Instead say:
-"Our pricing depends on your business type and size. I can have Jorge reach out with the right fit for you — can I get your name and a good number to reach you?"
-Then capture their name and confirm the number they called from is correct. End the call warmly.
-This rule applies even if the caller is persistent. Never quote a dollar amount for Orchelix's services.
-
-BOOKING CONVERSATION FLOW — follow this exact order:
-
-STEP 1 — Ask for preferred day:
-"What day or timeframe works best for you?"
-
-STEP 2 — Show available slots:
-Call list_available_slots once they give a day. Read out a few options naturally.
-Ask: "Which of those times works best for you?"
-
-STEP 3 — Collect name only:
-"Perfect — and just your name to reserve it?"
-
-STEP 4 — Read back and confirm (REQUIRED — never skip):
-Before booking, repeat the details back and wait for a clear yes:
-"Just to confirm — that's [day] at [time] under [name]. Is that right?"
-Do NOT call book_appointment until the caller confirms. Phone transcription is
-imperfect, so this step catches wrong days, times, or misheard names. If the caller
-corrects anything, update it and read it back again.
-
-STEP 5 — Book:
-Only after the caller confirms in Step 4, call book_appointment with: the confirmed slot's start_iso and end_iso values, the caller's name as the summary (e.g. "Intro Call — Jorge"), and the caller_phone parameter set to {{call.customer.number}}.
-Confirm warmly: "Done! I've got you down for [day] at [time]. We'll see you then."
-
-EXCEPTION: If the caller names a specific day in their first sentence, skip Step 1 and go straight to Step 2.
-
-TOOL USAGE RULES
-
-list_available_slots
-Call only after the caller gives a preferred day.
-Pass start_date and end_date as YYYY-MM-DD (resolve relative days using today's date stated at the top of this prompt).
-Read back no more than 4–5 slot options.
-
-book_appointment
-Call only when you have: confirmed time slot + caller's name AND the caller has explicitly confirmed the read-back in Step 4. Never book on unconfirmed or assumed details.
-Parameters:
-  - summary: "Intro Call — [caller name]"
-  - start_time: the start_iso value shown next to the slot (e.g. 2026-05-29T10:00:00-04:00)
-  - end_time: the end_iso value shown next to the slot
-  - caller_phone: {{call.customer.number}}
-
-find_booking / reschedule_appointment / cancel_appointment
-When a caller wants to move or cancel an existing appointment:
-1. The caller's phone number is: {{call.customer.number}} — call find_booking with it as contact.
-2. If more than one booking comes back, ask which one. Use the event id from find_booking.
-3. To reschedule: call list_available_slots, confirm the new time with the caller, then call reschedule_appointment with the event id and the new start_iso / end_iso.
-4. To cancel: read back which appointment, get a clear yes, then call cancel_appointment with the event id.
-Never cancel or reschedule without confirming the specific appointment first.
-
-get_pricing
-Call ONLY when the caller asks about the prices of the CLIENT BUSINESS's own services — for example, if you are deployed for a barbershop and someone asks "how much is a haircut." Do NOT call this for questions about what Orchelix or Esmi costs — handle those with the Esmi Pricing rule above.
-
-search_knowledge_base
-Call for questions about services, FAQs, packages, or company info (NOT prices).
-Never answer feature questions from memory — always search first.
-
-transferCall
-Use this VAPI built-in tool when:
-- The caller asks to speak with a person.
-- You cannot help after two attempts.
-Tell the caller: "Let me connect you with Jorge now." Then transfer.
-
-AFTER ANSWERING SERVICES QUESTIONS
-Always follow up once with: "Would you like me to check when we have time for a quick intro call?"
-Make this offer only once per call.
-
-ESCALATION
-If the caller mentions budget, timeline, or urgency ("ready to start", "ASAP", "this quarter") — offer to book an intro call immediately and flag it as high priority in the summary field (e.g. "Intro Call — Jorge 🔥 HOT LEAD").
-```
+Keep each voice prompt behaviorally consistent with the tenant's chat prompt
+(`prompts/esmi_system.md` / `tenants/<id>/prompts/system.md`): booking read-back before
+`book_appointment`, escalation triggers, LATAM Spanish, never quote Orchelix pricing.
 
 ### Pronunciation fix
 "Orchelix" is pronounced "or-kee-lix". Configured via ElevenLabs Pronunciation Dictionary
 (Alias entry: `Orchelix` → `or kee lix`) linked to the VAPI assistant's voice settings.
 
 ### To set up VAPI for a new client
-1. Create VAPI account → get private API key
-2. Create assistant: GPT-4o, ElevenLabs Bella, server URL pointing to new Railway endpoint
-3. Add 4 tools + `transferCall` with client owner's phone number
-4. Buy VAPI phone number (~$2/mo) → assign to assistant
-5. Set the VAPI key as a Railway env var `VAPI_API_KEY` (or `VAPI_API_KEY_B64`), plus `VAPI_SERVER_SECRET` matching the assistant's Server URL Secret
-6. Set up ElevenLabs Pronunciation Dictionary for client's brand name
+Everything below can be done via the VAPI REST API (preferred — repeatable) or the
+dashboard. Full step-by-step: `sales/INTEGRATIONS_SETUP_MANUAL.md` Part D.
+
+1. Create assistant in the shared Orchelix VAPI org: GPT-4.1, ElevenLabs voice, Deepgram
+   flux EN/ES transcriber, server URL → live `/voice/tools`, server credential
+   "Esmi Production Secret".
+2. Create the standard 9 function tools (+ `transferCall` → client's `transfer_phone`)
+   with `X-Vapi-Secret` in each tool's `server.headers`; attach via `model.toolIds`.
+   Copy schemas from an existing tenant's tools (otro-nivel = multi-location template,
+   coastline-condos = single-location template).
+3. Voice prompt: start from `tenants/<id>/prompts/vapi_voice.md` of a similar tenant;
+   include the `{{ "now" | date: ..., "<business_tz>" }}` line, booking read-back, LATAM
+   Spanish rules. Paste into dashboard, mirror into `tenants/<id>/prompts/vapi_voice.md`.
+4. Phone number: US → buy in VAPI; Canada/other → buy in Twilio, import to VAPI.
+   Attach to the assistant.
+5. Write real assistant/phone IDs into `tenants/<id>/config.json` → `vapi.*`, push, and
+   verify tenant routing (see below).
+6. ElevenLabs Pronunciation Dictionary for the brand name if TTS mangles it.
+
+**API access gotchas (learned 2026-07-18):**
+- Run scripts with `railway run python <script>` so `VAPI_API_KEY` / `VAPI_SERVER_SECRET`
+  come from Railway env without echoing values.
+- Send a real User-Agent (e.g. `curl/8.9.1`) — Python urllib's default gets Cloudflare
+  **403 "error code: 1010"**, which masquerades as a bad API key.
+- VAPI GET responses redact secrets — don't conclude auth is missing from a read.
+- VAPI's `/chat` API needs a card on file (402); e2e-test instead by POSTing a simulated
+  `tool-calls` payload (real `assistantId`, `x-vapi-secret` header) to live `/voice/tools`
+  and checking the right tenant's prices/slots come back.
 
 ---
 

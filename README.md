@@ -73,7 +73,7 @@ Health checks after deploy:
 | Channel | Details |
 |---|---|
 | **Web chat** | `POST /chat` (SSE streaming) — proxied by the Next.js frontend at `/try-esmi` |
-| **Voice (phone)** | VAPI number 561-566-1066 → `POST /voice/tools` webhook |
+| **Voice (phone)** | Per-tenant VAPI numbers (Orchelix 561-566-1066, otro-nivel 437-292-3949, coastline-condos 754-799-2655) → `POST /voice/tools` webhook |
 
 For full architecture, KB structure, VAPI prompt, and multi-tenant runbook, see
 [PROJECT_STATUS.md](PROJECT_STATUS.md).
