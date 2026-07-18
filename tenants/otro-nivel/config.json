@@ -110,18 +110,20 @@
   },
   "pricing": [
     {
-      "name": "Fade (Weston)",
+      "name": "Fade",
       "popular": true,
       "setup_from": 0,
       "monthly_from": 50,
-      "best_for": "Signature fade at Weston Road — 45 min.",
+      "price_label": "Weston $50 / Keele $35–$40",
+      "best_for": "Signature fade — skin, taper, or drop. 45 min.",
       "highlights": ["Skin, taper, or drop fade", "45 minutes", "Weston $50 / Keele $35–$40"]
     },
     {
-      "name": "VIP Package (Weston)",
+      "name": "VIP Package (Weston only)",
       "popular": true,
       "setup_from": 0,
       "monthly_from": 70,
+      "price_label": "$70 · Weston only",
       "best_for": "Full premium treatment — haircut, beard, finish. Weston exclusive.",
       "highlights": ["1 hr 15 min", "Weston only", "$70"]
     },
@@ -130,16 +132,36 @@
       "popular": false,
       "setup_from": 0,
       "monthly_from": 35,
+      "price_label": "Weston $40 / Keele $35",
       "best_for": "Classic cut at either location.",
       "highlights": ["Weston $40 / Keele $35", "45 minutes"]
+    },
+    {
+      "name": "Fade + Beard (Weston only)",
+      "popular": false,
+      "setup_from": 0,
+      "monthly_from": 60,
+      "price_label": "$60 · Weston only",
+      "best_for": "Fade plus full beard work in one visit. 1 hour.",
+      "highlights": ["Fade + beard shaping", "1 hour", "Weston only — $60"]
     },
     {
       "name": "Beard Trim",
       "popular": false,
       "setup_from": 0,
       "monthly_from": 20,
+      "price_label": "$20 both locations",
       "best_for": "Shaped and lined beard — both shops.",
       "highlights": ["$20 both locations", "25–30 min"]
+    },
+    {
+      "name": "Children's Haircut",
+      "popular": false,
+      "setup_from": 0,
+      "monthly_from": 30,
+      "price_label": "Weston $30–$35 / Keele $30",
+      "best_for": "Kids' cuts at either location. 45 min.",
+      "highlights": ["Weston $30–$35 / Keele $30", "45 minutes"]
     }
   ],
   "pricing_note": "Prices may vary slightly at the barber's discretion. Unlisted services — ask in shop.",
