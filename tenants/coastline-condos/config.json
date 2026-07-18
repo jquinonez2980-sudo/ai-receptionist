@@ -125,7 +125,7 @@
   ],
   "pricing_note": "Prices are starting figures in USD and may change. Units 301 and 302 are sold; 203 is conditionally sold. Register for VIP access for full current pricing and payment schedules.",
   "vapi": {
-    "assistant_ids": [],
-    "phone_number_ids": []
+    "assistant_ids": ["a351deb6-bf22-4cda-a3f3-67bca8ac6346"],
+    "phone_number_ids": ["dc03d2e6-f090-4e8f-bffa-cdfaeaf30777"]
   }
 }

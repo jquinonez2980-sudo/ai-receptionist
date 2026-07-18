@@ -144,7 +144,7 @@
   ],
   "pricing_note": "Prices may vary slightly at the barber's discretion. Unlisted services — ask in shop.",
   "vapi": {
-    "assistant_ids": ["otro-nivel-vapi-placeholder"],
-    "phone_number_ids": ["otro-nivel-phone-placeholder"]
+    "assistant_ids": ["32994d60-3712-4183-a7db-edc3badeabec"],
+    "phone_number_ids": ["8313f753-67f4-4c11-8f31-778b11692089"]
   }
 }
