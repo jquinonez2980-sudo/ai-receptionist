@@ -4,10 +4,11 @@
   "business_hours": [9, 18],
   "business_days": [0, 1, 2, 3, 4, 5],
   "slot_minutes": 30,
+  "calendar_id": "c_acdec65556ac9569cd46b5f6e903d7a1cfe27a5c1c70661734dcec7710aab7b9@group.calendar.google.com",
   "emails": {
-    "from": "hello@coastlinecondos.ec",
-    "booking_to": "hello@coastlinecondos.ec",
-    "escalation_to": "hello@coastlinecondos.ec"
+    "from": "info@orchelix.com",
+    "booking_to": "coastlinecondosecu@gmail.com",
+    "escalation_to": "coastlinecondosecu@gmail.com"
   },
   "sms_signature": "Coastline Condos",
   "voice_default_summary": "Coastline Condos Tour / Consultation",
