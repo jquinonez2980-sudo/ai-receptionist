@@ -46,7 +46,7 @@ TENANT_COASTLINE_CONDOS_TWILIO_SMS_FROM=+17547992655
   - `ESMI_TENANT_ID` = `coastline-condos`
 - [ ] Add Coastline origin to Railway `ALLOWED_ORIGINS` only if browser hits Railway directly
 - [ ] Smoke: site chat answers as Coastline; book a tour → event on this calendar + email to client Gmail
-- [ ] Voice / VAPI: create assistant, attach `+17547992655`, put IDs in `config.json` → `vapi.assistant_ids` / `vapi.phone_number_ids`
+- [x] Voice / VAPI (done 2026-07-18): assistant `Coastline_Condos` (`a351deb6-bf22-4cda-a3f3-67bca8ac6346`) with dedicated voice prompt (tour booking flow, EN/ES, America/Guayaquil), 10 tools (slots/book/find/code/cancel/reschedule/pricing/KB/escalate + transferCall → +593 96 994 3941), Twilio number `+17547992655` (`dc03d2e6-f090-4e8f-bffa-cdfaeaf30777`) attached; IDs live in `config.json` → `vapi.*`, tenant routing verified end-to-end
 
 ## Demo URL
 `https://www.orchelix.com/try-esmi?tenant=coastline-condos&company=Coastline+Condos`

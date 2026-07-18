@@ -20,7 +20,7 @@ A production AI receptionist system with two repos:
 - **REST (website)**: `GET /bookings/availability`, `POST /bookings`, `GET /bookings/lookup` — auth via `X-Booking-Secret` + `X-Tenant-Id`.
 - **Tenant `otro-nivel`**: Weston + Keele, bilingual prompt/KB, SMS templates EN/ES. Runbook: `tenants/otro-nivel/ONBOARDING.md`.
 
-**Still needs client/ops (not code):** two Google calendars + `TENANT_OTRO_NIVEL_GOOGLE_TOKEN_B64`, Twilio/SendGrid per-tenant secrets, `BOOKING_API_SECRET` (Railway) + `ESMI_API_URL` / `ESMI_BOOKING_SECRET` (Vercel), VAPI assistant + number port for (647) 340-7187.
+**Still needs client/ops (not code):** client call-forwarding of (647) 340-7187 → the VAPI Twilio number +1 437 292 3949 (native porting optional, later). Done as of 2026-07-18: Google calendars + per-tenant Google/Twilio/SendGrid secrets on Railway, `BOOKING_API_SECRET`, VAPI assistants + numbers for otro-nivel and coastline-condos (IDs in each tenant's `config.json`).
 
 ---
 

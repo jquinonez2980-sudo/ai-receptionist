@@ -62,21 +62,19 @@ Without matching `CHAT_PROXY_SECRET` on both sides, the chat widget shows
 
 Website never exposes secrets to the browser — only Next.js route handlers call Railway.
 
-## 5. VAPI voice assistant
+## 5. VAPI voice assistant — DONE (2026-07-18)
 
-1. Create assistant in VAPI dashboard (ElevenLabs bilingual voice recommended).
-2. Attach / port number **(647) 340-7187** (porting still pending per knowledge base §12).
-3. Point tool webhook at `https://<esmi-host>/voice/tools` with `VAPI_SERVER_SECRET`.
-4. Put real IDs into `tenants/otro-nivel/config.json`:
+- Assistant `Otro_Nivel_Esmi` (`32994d60-3712-4183-a7db-edc3badeabec`), GPT-4.1,
+  ElevenLabs voice, Deepgram flux EN/ES, 10 tools attached (slots/book/find/
+  code/cancel/reschedule/pricing/KB/escalate + transferCall → 647-569-1194).
+- Twilio CA number **+1 437 292 3949** (`8313f753-67f4-4c11-8f31-778b11692089`)
+  imported to VAPI and pointed at the assistant.
+- Tool webhook → `.../voice/tools` with `X-Vapi-Secret` header on every function
+  tool; assistant server uses the "Esmi Production Secret" VAPI credential.
+- Real IDs are in `tenants/otro-nivel/config.json` → `vapi.*` (tenant routing verified).
 
-```json
-"vapi": {
-  "assistant_ids": ["asst_..."],
-  "phone_number_ids": ["pn_..."]
-}
-```
-
-5. Transfer number for human handoff: **647-569-1194** (`transfer_phone` in config).
+**Still pending (client-side):** have the shop call-forward **(647) 340-7187**
+to +1 437 292 3949; port the number natively later if desired (2–4 weeks).
 
 ## 6. Deploy
 
