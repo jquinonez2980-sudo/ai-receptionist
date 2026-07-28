@@ -56,6 +56,17 @@ from tools import (
     search_knowledge_base,
 )
 
+# Route module-level INFO logs (tenants' "config loaded from DB", the VAPI
+# call-log writes) to stderr so they reach Railway logs. Uvicorn only
+# configures its own "uvicorn.*" loggers; without this the root logger has no
+# handler and Python's last-resort handler drops everything below WARNING.
+logging.basicConfig(
+    level=os.environ.get("LOG_LEVEL", "INFO").upper(),
+    format="%(levelname)s %(name)s: %(message)s",
+)
+for _noisy in ("httpx", "httpcore", "urllib3", "googleapiclient", "openai"):
+    logging.getLogger(_noisy).setLevel(logging.WARNING)
+
 log = logging.getLogger(__name__)
 
 # Shared secret the Next.js proxy sends on every /chat request. Defined here
@@ -119,9 +130,19 @@ app.add_middleware(
         "X-Chat-Secret",
         "X-Booking-Secret",
         "X-Tenant-Id",
+        "X-Platform-Secret",
         "Idempotency-Key",
     ],
 )
+
+# Control-plane routers (PLATFORM_BLUEPRINT.md): /webhooks/vapi + /platform/*.
+# Import placed here (not with the top imports) to keep the runtime import
+# graph unchanged until the app object exists — platform_api must never be a
+# dependency of the agent path.
+from platform_api import calls_router, vapi_webhook_router  # noqa: E402
+
+app.include_router(vapi_webhook_router)
+app.include_router(calls_router)
 
 
 # ── Auth helpers ──────────────────────────────────────────────────────────────
