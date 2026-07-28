@@ -6,6 +6,12 @@
 # convention TENANT_<ID>_<NAME> (per-tenant) with the global var as the
 # "default" tenant's source. This satisfies CLAUDE.md hard rule #1.
 #
+# DB-first config (PLATFORM_BLUEPRINT.md Ticket 1): load_tenant() now prefers
+# the highest published row in the tenant_configs Postgres table (same JSON
+# shape as config.json), cached in-process for 60s, and falls back to the
+# tenants/<id>/config.json file when the DB row is missing or the DB is
+# unavailable. Set TENANT_CONFIG_FROM_DB=0 to force file-only (kill switch).
+#
 # Backward compatibility: tenant_id "default" == Orchelix. Its config is built
 # from the existing canonical constants in tools.py (_PRICING, _BUSINESS_TZ,
 # _HOURS, _SLOT_MIN) via a late import, so the single live deployment is
@@ -27,6 +33,7 @@ import threading
 import warnings
 from dataclasses import dataclass, field
 from pathlib import Path
+from time import monotonic
 from typing import Optional
 
 log = logging.getLogger(__name__)
@@ -193,7 +200,12 @@ class TenantConfig:
         return [("default", self.calendar_id)]
 
 
-_cache: dict[str, TenantConfig] = {}
+# tid → (config, monotonic-clock expiry). 'default' never expires (it is
+# code-canonical in tools.py); other tenants expire after _TTL_SECONDS so a
+# tenant_configs row published by the dashboard goes live within a minute
+# without a redeploy.
+_TTL_SECONDS = 60.0
+_cache: dict[str, tuple[TenantConfig, float]] = {}
 _lock = threading.Lock()
 
 
@@ -367,26 +379,86 @@ def _build(tenant_id: str) -> TenantConfig:
     return _config_from_file(tenant_id, data)
 
 
+def _db_enabled() -> bool:
+    """DB-first lookup kill switch: TENANT_CONFIG_FROM_DB=0 forces file-only."""
+    return os.environ.get("TENANT_CONFIG_FROM_DB", "1").strip().lower() not in (
+        "0", "false", "off",
+    )
+
+
+def _config_from_db(tenant_id: str) -> Optional[TenantConfig]:
+    """Load the highest PUBLISHED tenant_configs row, or None to fall back.
+
+    None on: kill switch off, DATABASE_URL unset, table not migrated yet, DB
+    outage, or simply no row for this tenant. Never raises — any problem here
+    must leave the runtime on the file-based path.
+    """
+    if not _db_enabled():
+        return None
+    try:
+        from platform_db import get_engine
+
+        engine = get_engine()
+        if engine is None:
+            return None
+        from sqlalchemy import text as _sql
+
+        with engine.connect() as conn:
+            row = conn.execute(
+                _sql(
+                    "SELECT config, version FROM tenant_configs "
+                    "WHERE tenant_id = :tid AND published "
+                    "ORDER BY version DESC LIMIT 1"
+                ),
+                {"tid": tenant_id},
+            ).first()
+        if row is None:
+            return None
+        data = row[0]
+        if isinstance(data, str):  # driver returned jsonb as text
+            data = json.loads(data)
+        log.info("Tenant '%s': config loaded from DB (v%s).", tenant_id, row[1])
+        return _config_from_file(tenant_id, data)
+    except Exception as e:
+        log.warning(
+            "Tenant '%s': DB config lookup failed (%s: %s) — using file config.",
+            tenant_id, type(e).__name__, e,
+        )
+        return None
+
+
 def load_tenant(tenant_id: str = "default") -> TenantConfig:
-    """Return the cached TenantConfig for tenant_id (default == Orchelix)."""
+    """Return the TenantConfig for tenant_id (default == Orchelix).
+
+    Resolution order: in-process cache (60s TTL) → highest published row in
+    the tenant_configs DB table → tenants/<id>/config.json (the exact pre-DB
+    behavior). The build runs OUTSIDE the lock so one tenant's slow DB lookup
+    can never block another tenant's load; duplicate concurrent builds are
+    harmless because TenantConfig is immutable.
+    """
     tid = _norm(tenant_id)
-    cached = _cache.get(tid)
-    if cached is not None:
-        return cached
+    hit = _cache.get(tid)
+    if hit is not None and monotonic() < hit[1]:
+        return hit[0]
+
+    if tid == "default":
+        cfg = _default_config()
+        expires = float("inf")
+    else:
+        cfg = _config_from_db(tid)
+        if cfg is None:
+            cfg = _build(tid)
+        expires = monotonic() + _TTL_SECONDS
+        if cfg.email_from == _DEFAULT_EMAIL_FROM or cfg.email_booking_to == _DEFAULT_EMAIL_BOOKING_TO:
+            warnings.warn(
+                f"Tenant '{tid}' is inheriting Orchelix email config. "
+                f"Set emails.from / emails.booking_to in tenants/{tid}/config.json.",
+                stacklevel=2,
+            )
+
     with _lock:
-        cached = _cache.get(tid)
-        if cached is not None:
-            return cached
-        cfg = _build(tid)
-        if tid != "default":
-            if cfg.email_from == _DEFAULT_EMAIL_FROM or cfg.email_booking_to == _DEFAULT_EMAIL_BOOKING_TO:
-                warnings.warn(
-                    f"Tenant '{tid}' is inheriting Orchelix email config. "
-                    f"Set emails.from / emails.booking_to in tenants/{tid}/config.json.",
-                    stacklevel=2,
-                )
-        _cache[tid] = cfg
-        return cfg
+        _cache[tid] = (cfg, expires)
+    return cfg
 
 
 def clear_tenant_cache(tenant_id: Optional[str] = None) -> None:

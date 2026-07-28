@@ -12,6 +12,7 @@
   "sms_signature": "Otro Nivel Barbershop",
   "voice_default_summary": "Haircut Appointment",
   "transfer_phone": "647-569-1194",
+  "calendar_id": "c_04d64beea3e56d81e666a2e4ddfe4e14bf16d69ff0b0ebbbcd0201be4ce335de@group.calendar.google.com",
   "sms_templates": {
     "confirmation_en": "Hi {name}! Your appointment at Otro Nivel Barbershop ({location}) is confirmed for {when}. Free parking available. Questions? Call (647) 340-7187. See you soon! ✂️",
     "confirmation_es": "¡Hola {name}! Tu cita en Otro Nivel Barbershop ({location}) está confirmada para {when}. Hay estacionamiento gratis. ¿Preguntas? Llama al (647) 340-7187. ¡Nos vemos! ✂️"
