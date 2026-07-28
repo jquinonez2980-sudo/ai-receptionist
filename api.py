@@ -16,12 +16,13 @@ import hmac
 import json
 import logging
 import os
+import time
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field, field_validator
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
@@ -403,6 +404,72 @@ async def health() -> dict:
     g = _graph_module.graph
     checkpointer_type = type(g.checkpointer).__name__ if g is not None else "none"
     return {"status": "ok", "agent": "esmi", "checkpointer": checkpointer_type}
+
+
+# /health/deep exists because /health stayed green through the Railway-trial
+# incident: the process was up and answering the phone while Google Calendar
+# auth was dead, so callers were told every slot was taken. Free uptime
+# monitors can't send the VAPI secret header that gates /health/calendar, so
+# this endpoint is public — it must therefore expose pass/fail booleans only,
+# never error text. The cache keeps monitor polling (or abuse within the rate
+# limit) from turning into a Google Calendar API call per request.
+_DEEP_HEALTH_TTL_SECONDS = 60.0
+_deep_health_cache: dict = {"expires": 0.0, "body": None, "code": 200}
+
+
+def _check_calendar_sync() -> bool:
+    """Same probe as /health/calendar, reduced to a boolean."""
+    try:
+        from datetime import date as _date
+
+        from googleapiclient.discovery import build
+
+        from tools import resolve_google_credentials
+        creds = resolve_google_credentials("default")
+        cal_id = load_tenant("default").calendar_id
+        service = build("calendar", "v3", credentials=creds, cache_discovery=False)
+        today = _date.today().isoformat()
+        service.freebusy().query(body={
+            "timeMin": f"{today}T00:00:00Z",
+            "timeMax": f"{today}T23:59:59Z",
+            "timeZone": "America/Toronto",
+            "items": [{"id": cal_id}],
+        }).execute()
+        return True
+    except Exception:
+        log.warning("Deep health: calendar check failed", exc_info=True)
+        return False
+
+
+@app.get("/health/deep")
+@limiter.limit("6/minute")
+async def health_deep(request: Request) -> JSONResponse:
+    """Unauthenticated deep health check for uptime monitors.
+
+    200 {"status": "ok"} when the checkpointer is Postgres-backed AND Google
+    Calendar auth + freebusy work; 503 {"status": "degraded"} otherwise, so a
+    plain HTTP monitor (UptimeRobot free tier) alerts on either failure.
+    """
+    now = time.monotonic()
+    if _deep_health_cache["body"] is not None and now < _deep_health_cache["expires"]:
+        return JSONResponse(_deep_health_cache["body"], status_code=_deep_health_cache["code"])
+
+    g = _graph_module.graph
+    checkpointer_ok = g is not None and "postgres" in type(g.checkpointer).__name__.lower()
+    try:
+        calendar_ok = await asyncio.wait_for(asyncio.to_thread(_check_calendar_sync), timeout=20.0)
+    except asyncio.TimeoutError:
+        log.warning("Deep health: calendar check timed out")
+        calendar_ok = False
+
+    all_ok = checkpointer_ok and calendar_ok
+    body = {
+        "status": "ok" if all_ok else "degraded",
+        "components": {"checkpointer": checkpointer_ok, "calendar": calendar_ok},
+    }
+    code = 200 if all_ok else 503
+    _deep_health_cache.update({"expires": now + _DEEP_HEALTH_TTL_SECONDS, "body": body, "code": code})
+    return JSONResponse(body, status_code=code)
 
 
 @app.get("/health/env")
