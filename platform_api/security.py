@@ -70,10 +70,21 @@ def require_tenant(request: Request) -> str:
     silently show another tenant's (or Orchelix's) data."""
     raw = request.headers.get("X-Tenant-Id")
     if not raw or not str(raw).strip():
+        log.warning(
+            "Rejected %s %s: X-Tenant-Id header missing.",
+            request.method, request.url.path,
+        )
         raise HTTPException(status_code=400, detail="X-Tenant-Id header is required")
     tid = normalize_tenant_id(raw)
     if (tid == "default" and raw.strip().lower() != "default") or not tenant_exists(tid):
         # normalize_tenant_id silently maps invalid ids to 'default' — for the
         # platform API that silent fallback would be a data-isolation bug.
+        # Logged so a rejected slug (e.g. an org whose Clerk slug isn't a
+        # registered tenant) is visible in Railway logs instead of only ever
+        # showing up as an unexplained 400 in the dashboard.
+        log.warning(
+            "Rejected %s %s: unknown tenant %r.",
+            request.method, request.url.path, raw,
+        )
         raise HTTPException(status_code=400, detail=f"Unknown tenant '{raw}'")
     return tid
