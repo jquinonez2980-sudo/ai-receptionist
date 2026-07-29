@@ -766,53 +766,80 @@ _PRICING = [
 ]
 
 
-def _format_service_price(svc: ServiceConfig, tenant: TenantConfig) -> str:
+def _format_service_price(svc: ServiceConfig, tenant: TenantConfig, spanish: bool = False) -> str:
     """Render one service's price, splitting out per-location amounts when
-    they differ (e.g. "Weston $50 / Keele $35–$40"), or "X only" when only
-    one of several locations has a price set for it (e.g. Weston-only add-ons)."""
+    they differ (e.g. "Weston $50 / Keele $35–$40"), or a "X only" /
+    "Solo en X" qualifier when only one of several locations has a price set
+    for it (e.g. Weston-only add-ons)."""
     if svc.price_by_location and tenant.locations:
-        parts = [
-            f"{tenant.locations[lid].name} {svc.price_by_location[lid]}"
+        entries = [
+            (tenant.locations[lid].name, svc.price_by_location[lid])
             for lid in tenant.locations
             if lid in svc.price_by_location
         ]
-        if parts:
-            if len(parts) == 1 and len(tenant.locations) > 1:
-                return f"{parts[0]} only"
-            return " / ".join(parts)
-    return svc.price or "Contact us for current pricing"
+        if entries:
+            if len(entries) == 1 and len(tenant.locations) > 1:
+                name, price = entries[0]
+                return f"Solo en {name}: {price}" if spanish else f"{name} {price} only"
+            return " / ".join(f"{name} {price}" for name, price in entries)
+    if svc.price:
+        return svc.price
+    return "Consulte el precio actual con nosotros" if spanish else "Contact us for current pricing"
 
 
-def _pricing_from_services(tenant: TenantConfig) -> str:
+def _pricing_from_services(tenant: TenantConfig, spanish: bool = False) -> str:
     """Build the get_pricing() reply from tenant.services — the same data
     Settings' PUT /platform/config writes, so an edit there is reflected on
-    the very next call (subject only to load_tenant()'s 60s cache)."""
+    the very next call (subject only to load_tenant()'s 60s cache).
+
+    spanish=True renders service names (via ServiceConfig.name_es, falling
+    back to the English name when no translation is set), price phrasing,
+    and the footer entirely in Spanish — never a mix of the two, which was
+    the original bug (the model partially translating an English string).
+    """
     lines: list[str] = []
     for svc in tenant.services.values():
-        lines.append(f"{svc.name} — {svc.duration_min} min")
-        lines.append(f"  {_format_service_price(svc, tenant)}")
+        name = (svc.name_es if spanish and svc.name_es else svc.name)
+        lines.append(f"{name} — {svc.duration_min} min")
+        lines.append(f"  {_format_service_price(svc, tenant, spanish)}")
         lines.append("")
-    footer = tenant.pricing_note or "Prices may vary — ask in store for anything not listed here."
+    if spanish:
+        footer = (
+            tenant.pricing_note_es
+            or "Los precios pueden variar — pregunte en el local por cualquier servicio no listado aquí."
+        )
+    else:
+        footer = tenant.pricing_note or "Prices may vary — ask in store for anything not listed here."
     lines.append(footer)
     return "\n".join(lines)
 
 
 @tool
-def get_pricing(config: RunnableConfig = None) -> str:
-    """Return the current, canonical pricing for every package.
+def get_pricing(lang: str = "en", config: RunnableConfig = None) -> str:
+    """Return the current, canonical pricing for every package/service.
 
     Use this for ANY pricing question instead of the knowledge base — these
     numbers are authoritative and exact. Never quote prices from memory or KB
     search; always call this tool first.
+
+    Args:
+        lang: The caller's language for this reply — "es" for Spanish, "en"
+            for English (default). Pass "es" whenever you're already
+            replying in Spanish, so the prices and labels come back
+            pre-translated instead of you translating this tool's output
+            yourself — that partial-translation is exactly the bug this
+            argument fixes.
     """
     tenant = load_tenant(_tenant_from_config(config))
+    spanish = (lang or "en").lower().startswith("es")
 
     # Tenants with their own services (e.g. a barbershop's menu, set up in
-    # Settings) are priced from that live data. Tenants without one (Orchelix
-    # itself, and every tenant that predates the services map) keep the
-    # original SaaS-style marketing-card behavior below, unchanged.
+    # Settings) are priced from that live data, in the requested language.
+    # Tenants without one (Orchelix itself, and every tenant that predates
+    # the services map) keep the original SaaS-style marketing-card
+    # behavior below — English only, unchanged regardless of `lang`.
     if tenant.services:
-        return _pricing_from_services(tenant)
+        return _pricing_from_services(tenant, spanish)
 
     pricing = tenant.pricing
     lines: list[str] = []

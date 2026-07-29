@@ -91,6 +91,10 @@ class ServiceConfig:
     price: str = ""
     # location_id → price string (e.g. {"weston": "$50", "keele": "$35–$40"})
     price_by_location: dict[str, str] = field(default_factory=dict)
+    # Optional Spanish display name (get_pricing()'s Spanish path). Empty ->
+    # callers fall back to `name`, same "_es override, else default" pattern
+    # already used by sms_templates' confirmation_en/confirmation_es keys.
+    name_es: str = ""
 
     def price_for(self, location_id: str) -> str:
         return self.price_by_location.get(location_id) or self.price
@@ -111,6 +115,10 @@ class TenantConfig:
     voice_default_summary: str
     pricing: list = field(default_factory=list)   # list[dict] (see tools._PRICING shape)
     pricing_note: str = ""  # optional footer override for non-SaaS tenants (e.g. per-job pricing)
+    # Optional Spanish override for pricing_note (get_pricing()'s Spanish path).
+    # Deliberately NOT falling back to pricing_note when unset — that string is
+    # English, and leaking it into a Spanish reply is the exact bug being fixed.
+    pricing_note_es: str = ""
     vapi_assistant_ids: tuple[str, ...] = ()
     vapi_phone_number_ids: tuple[str, ...] = ()
     calendar_id: str = "primary"  # Google Calendar identifier (legacy single-location)
@@ -319,6 +327,7 @@ def _parse_services(data: dict, default_duration: int) -> dict[str, ServiceConfi
             duration_min=int(svc.get("duration_min") or default_duration),
             price=str(svc.get("price") or "").strip(),
             price_by_location={str(k).lower(): str(v) for k, v in price_by.items()},
+            name_es=str(svc.get("name_es") or "").strip(),
         )
     return out
 
@@ -356,6 +365,7 @@ def _config_from_file(tenant_id: str, data: dict) -> TenantConfig:
         voice_default_summary=data.get("voice_default_summary", base.voice_default_summary),
         pricing=data.get("pricing") or list(base.pricing),
         pricing_note=data.get("pricing_note", ""),
+        pricing_note_es=data.get("pricing_note_es", ""),
         vapi_assistant_ids=tuple(vapi.get("assistant_ids") or ()),
         vapi_phone_number_ids=tuple(vapi.get("phone_number_ids") or ()),
         calendar_id=legacy_cal,

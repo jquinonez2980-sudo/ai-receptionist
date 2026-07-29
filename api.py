@@ -636,7 +636,12 @@ def _run_voice_tool(name: str, params: dict, tenant_id: str = "default") -> str:
             f"ISO format: {today.isoformat()}."
         )
     if name == "get_pricing":
-        return str(get_pricing.invoke({}, config=cfg))
+        # NOTE: VAPI's registered function schema for get_pricing currently
+        # declares no parameters (sales/INTEGRATIONS_SETUP_MANUAL.md), so
+        # params.get("lang") will be absent until that dashboard-side tool
+        # definition is updated to add one — this forwards it the moment it
+        # is, without needing another backend deploy.
+        return str(get_pricing.invoke({"lang": params.get("lang", "en")}, config=cfg))
     if name == "search_knowledge_base":
         return str(search_knowledge_base.invoke({"query": params["query"]}, config=cfg))
     if name == "list_available_slots":
