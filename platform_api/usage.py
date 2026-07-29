@@ -1,10 +1,13 @@
-# platform_api/usage.py — GET /platform/usage (Phase 3 ticket 3.1).
+# platform_api/usage.py — GET /platform/usage (Phase 3 tickets 3.1 + 3.2).
 #
 # Current-calendar-month rollup from the existing `calls` table: no new
-# table, no Stripe, no plan limits — just surfacing usage that's already
-# being captured by the VAPI end-of-call webhook (call_log.py). Later Phase 3
-# tickets (usage_records, metered Stripe reporting, plan limits) build on top
-# of this once the underlying numbers are trusted.
+# table, no Stripe — just surfacing usage that's already being captured by
+# the VAPI end-of-call webhook (call_log.py). Ticket 3.2 adds the tenant's
+# plan (tenants.plan, already in the schema but unread until now) and a SOFT
+# usage-vs-limit status (platform_api/plans.py) — display only, nothing here
+# blocks a call. Later Phase 3 tickets (usage_records, metered Stripe
+# reporting, hard enforcement) build on top of this once the underlying
+# numbers are trusted.
 
 from __future__ import annotations
 
@@ -14,6 +17,7 @@ from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, HTTPException, Request
 
+from platform_api.plans import get_plan, usage_status
 from platform_api.security import require_tenant, verify_platform_secret
 from tenants import load_tenant
 
@@ -65,6 +69,15 @@ def platform_usage(request: Request) -> dict:
             ),
             {"tid": tenant_id, "period_start": period_start},
         ).one()
+        # No row (tenant not yet created in `tenants`, e.g. never had a VAPI
+        # call land) falls back to the `managed`/unlimited default below —
+        # same as an explicit but unrecognized plan value.
+        plan_row = conn.execute(
+            text("SELECT plan FROM tenants WHERE id = :tid"), {"tid": tenant_id}
+        ).first()
+
+    minutes = round((row.seconds or 0) / 60.0, 1)
+    plan = get_plan(plan_row[0] if plan_row else None)
 
     return {
         "tenant_id": tenant_id,
@@ -72,7 +85,12 @@ def platform_usage(request: Request) -> dict:
         "period_start": period_start.date().isoformat(),
         "period_end": now.isoformat(),
         "calls": row.calls,
-        "minutes": round((row.seconds or 0) / 60.0, 1),
+        "minutes": minutes,
         "cost_vapi": float(row.cost_vapi) if row.cost_vapi is not None else None,
         "cost_llm": float(row.cost_llm) if row.cost_llm is not None else None,
+        "plan": {
+            "key": plan.key,
+            "label": plan.label,
+            **usage_status(minutes, plan),
+        },
     }
