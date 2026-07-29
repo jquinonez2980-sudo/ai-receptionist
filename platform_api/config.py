@@ -45,6 +45,21 @@ router = APIRouter()
 
 _MAX_GREETING_LEN = 500
 _MAX_NAME_LEN = 200
+_MAX_VERSIONS = 100
+
+# Top-level config.json keys the version-history diff considers — the same
+# allow-list PUT /platform/config writes to. A human-readable label for each,
+# used to build the one-line "what changed" summary.
+_DIFF_LABELS = {
+    "company_name": "business name",
+    "greeting": "greeting",
+    "transfer_phone": "transfer number",
+    "business_hours": "hours",
+    "business_days": "days open",
+    "emails": "notification emails",
+    "locations": "locations/hours",
+    "services": "services",
+}
 
 
 # ── request models (the safe, self-serve subset only) ────────────────────────
@@ -150,6 +165,21 @@ def _current_row(engine, tenant_id: str) -> Optional[tuple[dict, int]]:
     if isinstance(data, str):
         data = json.loads(data)
     return data, row[1]
+
+
+def _summarize_change(prev: Optional[dict], curr: dict) -> str:
+    """One-line "what changed" for the version-history list.
+
+    Compares only the self-serve allow-list (the same keys PUT writes) so an
+    out-of-band field (vapi ids, pricing cards, ...) never shows up as noise
+    here. None `prev` means this is the oldest row this tenant has.
+    """
+    if prev is None:
+        return "Initial config"
+    changed = [k for k in _DIFF_LABELS if prev.get(k) != curr.get(k)]
+    if not changed:
+        return "No changes to editable fields"
+    return ", ".join(_DIFF_LABELS[k] for k in changed) + " changed"
 
 
 def _validate_hours_pair(pair: list[int], label: str) -> None:
@@ -295,6 +325,115 @@ def platform_get_config(request: Request) -> dict:
                 version = row[1]
 
     return {"tenant_id": tenant_id, "version": version, "config": _safe_config_out(cfg)}
+
+
+@router.get("/platform/config/versions")
+def platform_config_versions(request: Request) -> dict:
+    """List published tenant_configs versions, newest first.
+
+    Sync `def` on purpose (FastAPI threadpool) — blocking SQLAlchemy query.
+    """
+    verify_platform_secret(request)
+    tenant_id = require_tenant(request)
+
+    if tenant_id == "default":
+        raise HTTPException(
+            status_code=400,
+            detail="Orchelix's own config is code-managed — no version history.",
+        )
+
+    from sqlalchemy import text
+
+    from platform_db import get_engine
+
+    engine = get_engine()
+    if engine is None:
+        raise HTTPException(status_code=503, detail="Platform DB not configured.")
+
+    with engine.connect() as conn:
+        rows = conn.execute(
+            text(
+                "SELECT version, config, created_by, created_at FROM tenant_configs "
+                "WHERE tenant_id = :tid AND published ORDER BY version DESC LIMIT :limit"
+            ),
+            {"tid": tenant_id, "limit": _MAX_VERSIONS},
+        ).mappings().all()
+
+    # Oldest-to-newest to diff each version against the one before it, then
+    # reverse for the newest-first response the UI wants.
+    rows = list(reversed(rows))
+    versions = []
+    prev_cfg: Optional[dict] = None
+    for r in rows:
+        cfg = r["config"]
+        if isinstance(cfg, str):
+            cfg = json.loads(cfg)
+        versions.append(
+            {
+                "version": r["version"],
+                "created_at": r["created_at"].isoformat() if r["created_at"] else None,
+                "created_by": r["created_by"],
+                "summary": _summarize_change(prev_cfg, cfg),
+            }
+        )
+        prev_cfg = cfg
+    versions.reverse()
+
+    return {"tenant_id": tenant_id, "versions": versions}
+
+
+@router.get("/platform/config/versions/{version}")
+def platform_config_version_detail(version: int, request: Request) -> dict:
+    """Read-only: a past version's safe config, for the history viewer.
+
+    Sync `def` on purpose (FastAPI threadpool) — blocking SQLAlchemy query.
+    """
+    verify_platform_secret(request)
+    tenant_id = require_tenant(request)
+
+    if tenant_id == "default":
+        raise HTTPException(
+            status_code=400,
+            detail="Orchelix's own config is code-managed — no version history.",
+        )
+
+    from sqlalchemy import text
+
+    from platform_db import get_engine
+    from tenants import _config_from_file
+
+    engine = get_engine()
+    if engine is None:
+        raise HTTPException(status_code=503, detail="Platform DB not configured.")
+
+    with engine.connect() as conn:
+        row = conn.execute(
+            text(
+                "SELECT config, created_by, created_at FROM tenant_configs "
+                "WHERE tenant_id = :tid AND version = :version AND published"
+            ),
+            {"tid": tenant_id, "version": version},
+        ).mappings().first()
+
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"Version {version} not found")
+
+    data = row["config"]
+    if isinstance(data, str):
+        data = json.loads(data)
+
+    try:
+        cfg = _config_from_file(tenant_id, data)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Stored version is invalid: {e}")
+
+    return {
+        "tenant_id": tenant_id,
+        "version": version,
+        "created_at": row["created_at"].isoformat() if row["created_at"] else None,
+        "created_by": row["created_by"],
+        "config": _safe_config_out(cfg),
+    }
 
 
 @router.put("/platform/config")
