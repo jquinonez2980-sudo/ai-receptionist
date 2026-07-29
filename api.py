@@ -139,10 +139,11 @@ app.add_middleware(
 # Import placed here (not with the top imports) to keep the runtime import
 # graph unchanged until the app object exists — platform_api must never be a
 # dependency of the agent path.
-from platform_api import calls_router, vapi_webhook_router  # noqa: E402
+from platform_api import calls_router, overview_router, vapi_webhook_router  # noqa: E402
 
 app.include_router(vapi_webhook_router)
 app.include_router(calls_router)
+app.include_router(overview_router)
 
 
 # ── Auth helpers ──────────────────────────────────────────────────────────────
