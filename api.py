@@ -142,6 +142,7 @@ app.add_middleware(
 from platform_api import (  # noqa: E402
     appointments_router,
     calls_router,
+    leads_router,
     overview_router,
     vapi_webhook_router,
 )
@@ -150,6 +151,7 @@ app.include_router(vapi_webhook_router)
 app.include_router(calls_router)
 app.include_router(overview_router)
 app.include_router(appointments_router)
+app.include_router(leads_router)
 
 
 # ── Auth helpers ──────────────────────────────────────────────────────────────
