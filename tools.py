@@ -766,10 +766,10 @@ _PRICING = [
 ]
 
 
-def _format_service_price(svc: ServiceConfig, tenant: TenantConfig, spanish: bool = False) -> str:
-    """Render one service's price, splitting out per-location amounts when
-    they differ (e.g. "Weston $50 / Keele $35–$40"), or a "X only" /
-    "Solo en X" qualifier when only one of several locations has a price set
+def _format_service_price(svc: ServiceConfig, tenant: TenantConfig) -> str:
+    """Render one service's price (English), splitting out per-location
+    amounts when they differ (e.g. "Weston $50 / Keele $35–$40"), or an
+    "X only" qualifier when only one of several locations has a price set
     for it (e.g. Weston-only add-ons)."""
     if svc.price_by_location and tenant.locations:
         entries = [
@@ -780,11 +780,133 @@ def _format_service_price(svc: ServiceConfig, tenant: TenantConfig, spanish: boo
         if entries:
             if len(entries) == 1 and len(tenant.locations) > 1:
                 name, price = entries[0]
-                return f"Solo en {name}: {price}" if spanish else f"{name} {price} only"
+                return f"{name} {price} only"
             return " / ".join(f"{name} {price}" for name, price in entries)
-    if svc.price:
-        return svc.price
-    return "Consulte el precio actual con nosotros" if spanish else "Contact us for current pricing"
+    return svc.price or "Contact us for current pricing"
+
+
+# ── Spanish number words (0-999) — enough range for any realistic price ──────
+
+_ES_ONES = [
+    "cero", "uno", "dos", "tres", "cuatro", "cinco", "seis", "siete", "ocho", "nueve",
+    "diez", "once", "doce", "trece", "catorce", "quince", "dieciséis", "diecisiete",
+    "dieciocho", "diecinueve",
+]
+_ES_TWENTIES = {
+    20: "veinte", 21: "veintiuno", 22: "veintidós", 23: "veintitrés", 24: "veinticuatro",
+    25: "veinticinco", 26: "veintiséis", 27: "veintisiete", 28: "veintiocho", 29: "veintinueve",
+}
+_ES_TENS = {
+    30: "treinta", 40: "cuarenta", 50: "cincuenta", 60: "sesenta",
+    70: "setenta", 80: "ochenta", 90: "noventa",
+}
+_ES_HUNDREDS = {
+    100: "cien", 200: "doscientos", 300: "trescientos", 400: "cuatrocientos",
+    500: "quinientos", 600: "seiscientos", 700: "setecientos", 800: "ochocientos", 900: "novecientos",
+}
+
+
+def _num_to_words_es(n: int) -> str:
+    """Spanish cardinal number words, 0-999. Falls back to plain digits outside
+    that range — get_pricing never needs anything larger for a per-service price."""
+    if n < 0 or n > 999:
+        return str(n)
+    if n < 20:
+        return _ES_ONES[n]
+    if n < 30:
+        return _ES_TWENTIES[n]
+    if n < 100:
+        tens, rem = (n // 10) * 10, n % 10
+        return _ES_TENS[tens] if rem == 0 else f"{_ES_TENS[tens]} y {_ES_ONES[rem]}"
+    if n == 100:
+        return "cien"
+    hundreds, rem = (n // 100) * 100, n % 100
+    base = _ES_HUNDREDS[hundreds]
+    return base if rem == 0 else f"{base} {_num_to_words_es(rem)}"
+
+
+def _spoken_amount_es(amount: float) -> str:
+    """Bare number words for a dollar amount (no 'dólar(es)' attached yet),
+    applying the standard uno -> un apocope before a noun: veintiuno ->
+    veintiún, treinta y uno -> treinta y un, ciento uno -> ciento un."""
+    if amount != int(amount):
+        # Non-integer price (e.g. $19.99) — spelling out cents in speech is
+        # more confusing than helpful; fall back to a plain, still-readable
+        # numeral using Spanish decimal notation.
+        return f"{amount:g}".replace(".", ",")
+    n = int(amount)
+    words = _num_to_words_es(n)
+    if n == 21:
+        return "veintiún"
+    if words == "uno":
+        return "un"
+    if words.endswith(" uno"):
+        return words[:-3] + "un"
+    return words
+
+
+_ES_PRICE_RANGE_RE = re.compile(r"^\$?\s*([\d,]+(?:\.\d+)?)\s*[-–—]\s*\$?\s*([\d,]+(?:\.\d+)?)\s*$")
+_ES_PRICE_SINGLE_RE = re.compile(r"^\$?\s*([\d,]+(?:\.\d+)?)\s*$")
+
+
+def _spanish_amount_phrase(raw: str) -> Optional[str]:
+    """Bare Spanish words for a price string — a single amount ('veinte') or
+    a range ('treinta y cinco a cuarenta') — with no 'dólares' attached yet.
+    None when `raw` isn't a parseable amount (empty, "Not Available", free
+    text, ...) — the caller treats that as "no price at this location",
+    never a crash or a garbled sentence."""
+    if not raw:
+        return None
+    raw = raw.strip()
+    m = _ES_PRICE_RANGE_RE.match(raw)
+    if m:
+        lo = float(m.group(1).replace(",", ""))
+        hi = float(m.group(2).replace(",", ""))
+        return f"{_spoken_amount_es(lo)} a {_spoken_amount_es(hi)}"
+    m = _ES_PRICE_SINGLE_RE.match(raw)
+    if m:
+        return _spoken_amount_es(float(m.group(1).replace(",", "")))
+    return None
+
+
+def _spanish_pricing_sentence(svc: ServiceConfig, tenant: TenantConfig) -> str:
+    """One natural spoken-Spanish sentence per service, e.g.:
+    "Arreglo de Barba cuesta veinte dólares en Keele y veinticinco en Weston."
+
+    "dólares" is attached only once, right after the first amount — repeating
+    it after every location reads unnaturally out loud; omitting it after the
+    first mention (as a fluent speaker would) doesn't. A location whose price
+    doesn't parse (empty, "Not Available", ...) is simply left out rather than
+    read aloud as garbage; if none parse, a graceful fallback sentence is used
+    instead of a broken one.
+    """
+    name = svc.name_es or svc.name
+
+    if svc.price_by_location and tenant.locations:
+        entries = [
+            (tenant.locations[lid].name, _spanish_amount_phrase(svc.price_by_location[lid]))
+            for lid in tenant.locations
+            if lid in svc.price_by_location
+        ]
+        entries = [(loc, words) for loc, words in entries if words is not None]
+    else:
+        parsed = _spanish_amount_phrase(svc.price) if svc.price else None
+        entries = [(None, parsed)] if parsed is not None else []
+
+    if not entries:
+        return f"{name}: consulte el precio actual con nosotros."
+
+    first_loc, first_words = entries[0]
+    if len(entries) == 1:
+        tail = f"{first_words} dólares" + (f" en {first_loc}" if first_loc else "")
+        return f"{name} cuesta {tail}."
+
+    parts = [f"{first_words} dólares en {first_loc}"]
+    for loc, words in entries[1:-1]:
+        parts.append(f"{words} en {loc}")
+    last_loc, last_words = entries[-1]
+    sentence = ", ".join(parts) + f" y {last_words} en {last_loc}"
+    return f"{name} cuesta {sentence}."
 
 
 def _pricing_from_services(tenant: TenantConfig, spanish: bool = False) -> str:
@@ -792,25 +914,25 @@ def _pricing_from_services(tenant: TenantConfig, spanish: bool = False) -> str:
     Settings' PUT /platform/config writes, so an edit there is reflected on
     the very next call (subject only to load_tenant()'s 60s cache).
 
-    spanish=True renders service names (via ServiceConfig.name_es, falling
-    back to the English name when no translation is set), price phrasing,
-    and the footer entirely in Spanish — never a mix of the two, which was
-    the original bug (the model partially translating an English string).
+    spanish=True renders natural spoken Spanish sentences (see
+    _spanish_pricing_sentence) instead of the English bullet-style list —
+    the English path below is untouched.
     """
-    lines: list[str] = []
-    for svc in tenant.services.values():
-        name = (svc.name_es if spanish and svc.name_es else svc.name)
-        lines.append(f"{name} — {svc.duration_min} min")
-        lines.append(f"  {_format_service_price(svc, tenant, spanish)}")
-        lines.append("")
     if spanish:
-        footer = (
+        lines = [_spanish_pricing_sentence(svc, tenant) for svc in tenant.services.values()]
+        lines.append("")
+        lines.append(
             tenant.pricing_note_es
             or "Los precios pueden variar — pregunte en el local por cualquier servicio no listado aquí."
         )
-    else:
-        footer = tenant.pricing_note or "Prices may vary — ask in store for anything not listed here."
-    lines.append(footer)
+        return "\n".join(lines)
+
+    lines: list[str] = []
+    for svc in tenant.services.values():
+        lines.append(f"{svc.name} — {svc.duration_min} min")
+        lines.append(f"  {_format_service_price(svc, tenant)}")
+        lines.append("")
+    lines.append(tenant.pricing_note or "Prices may vary — ask in store for anything not listed here.")
     return "\n".join(lines)
 
 
