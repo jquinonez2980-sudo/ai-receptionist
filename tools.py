@@ -652,6 +652,21 @@ def _get_kb_index(tenant_id: str = "default") -> Optional[FAISS]:
         return vs
 
 
+def invalidate_kb_index(tenant_id: str = "default") -> None:
+    """Drop the in-process FAISS cache for tenant_id so the next
+    search_knowledge_base call rebuilds from the on-disk .md files.
+
+    _get_kb_index() is build-once-per-process with no TTL (unlike
+    tenants.load_tenant()'s 60s cache) — without this, a KB edit made through
+    platform_api/knowledge.py would sit unused until the next deploy restarts
+    the process. _build_kb_index() already re-embeds only when its content
+    hash changed, so this just forces that check to happen now instead of
+    never.
+    """
+    with _KB_LOCK:
+        _KB_CACHE.pop(normalize_tenant_id(tenant_id), None)
+
+
 # ── Tool: search_knowledge_base ──────────────────────────────────────────
 @tool
 def search_knowledge_base(query: str, config: RunnableConfig = None) -> str:

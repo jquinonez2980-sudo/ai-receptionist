@@ -12,6 +12,7 @@
 from platform_api.appointments import router as appointments_router
 from platform_api.calls import router as calls_router
 from platform_api.config import router as config_router
+from platform_api.knowledge import router as knowledge_router
 from platform_api.leads import router as leads_router
 from platform_api.overview import router as overview_router
 from platform_api.vapi_webhook import router as vapi_webhook_router
@@ -20,6 +21,7 @@ __all__ = [
     "appointments_router",
     "calls_router",
     "config_router",
+    "knowledge_router",
     "leads_router",
     "overview_router",
     "vapi_webhook_router",

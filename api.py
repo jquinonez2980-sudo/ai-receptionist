@@ -143,6 +143,7 @@ from platform_api import (  # noqa: E402
     appointments_router,
     calls_router,
     config_router,
+    knowledge_router,
     leads_router,
     overview_router,
     vapi_webhook_router,
@@ -154,6 +155,7 @@ app.include_router(overview_router)
 app.include_router(appointments_router)
 app.include_router(leads_router)
 app.include_router(config_router)
+app.include_router(knowledge_router)
 
 
 # ── Auth helpers ──────────────────────────────────────────────────────────────
