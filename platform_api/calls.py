@@ -96,6 +96,8 @@ def platform_calls(
             {**params, "limit": limit, "offset": offset},
         ).mappings().all()
 
+    from platform_api.recordings import playable_recording_url
+
     calls = [
         {
             "id": str(r["id"]),
@@ -107,9 +109,9 @@ def platform_calls(
             "outcome": r["outcome"],
             "summary": r["summary"],
             "transcript": r["transcript"],
-            # TODO(R2): becomes a signed R2 URL once recordings are copied out
-            # of VAPI (see call_log.parse_end_of_call).
-            "recording_url": r["recording_key"],
+            # R2 object keys are presigned into short-lived URLs here; legacy
+            # raw VAPI URLs pass through (see platform_api/recordings.py).
+            "recording_url": playable_recording_url(r["recording_key"]),
             "cost_vapi": float(r["cost_vapi"]) if r["cost_vapi"] is not None else None,
             "cost_llm": float(r["cost_llm"]) if r["cost_llm"] is not None else None,
         }

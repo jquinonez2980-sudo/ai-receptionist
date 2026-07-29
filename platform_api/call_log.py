@@ -178,9 +178,14 @@ def parse_end_of_call(payload: dict) -> Optional[dict]:
         # renders text now, and richer views can use messages later.
         "transcript": json.dumps({"text": transcript_text, "messages": messages}),
         "summary": _first(analysis.get("summary"), msg.get("summary")),
-        # TODO(R2): recording URLs from VAPI expire — Phase 1 copies the file
-        # to R2 and stores the object key here. Until then store the raw URL.
+        # PRESIGNED URL preferred: artifact.recordingUrl/stereoRecordingUrl
+        # are UNSIGNED R2 paths that 400 for everyone — only the presigned*
+        # fields are fetchable, and only for ~1h. record_end_of_call() swaps
+        # this for a permanent R2 object key after the row is safely
+        # upserted (see platform_api/recordings.py).
         "recording_key": _first(
+            artifact.get("presignedStereoUrl"),
+            artifact.get("presignedMonoUrl"),
             artifact.get("recordingUrl"),
             (artifact.get("recording") or {}).get("url"),
             msg.get("recordingUrl"),
@@ -271,9 +276,45 @@ def record_end_of_call(payload: dict) -> Optional[dict]:
             tenant_id, row["vapi_call_id"], row["outcome"],
             row["duration_sec"], row["cost_vapi"],
         )
+        # AFTER the row is safe: move the recording to permanent storage.
+        # Any failure here leaves the (temporary) VAPI URL in place — the
+        # backfill script can retry until the URL actually expires.
+        _archive_recording(tenant_id, row)
     return {
         "tenant_id": tenant_id,
         "call_id": row["vapi_call_id"],
         "outcome": row["outcome"],
         "stored": stored,
     }
+
+
+def _archive_recording(tenant_id: str, row: dict) -> None:
+    """Copy the VAPI recording to R2 and swap recording_key to the object key.
+
+    No-op when R2 is unconfigured or the row has no URL. Never raises."""
+    try:
+        from platform_api.recordings import archive_call_recording, r2_configured
+
+        url = row.get("recording_key") or ""
+        if not r2_configured() or not url.lower().startswith(("http://", "https://")):
+            return
+        # archive_call_recording retries with a freshly-minted presigned URL
+        # from the VAPI API if the payload's URL is already dead.
+        key = archive_call_recording(tenant_id, row["vapi_call_id"], url)
+        if not key:
+            return
+
+        from sqlalchemy import text
+
+        from platform_db import get_engine
+
+        engine = get_engine()
+        if engine is None:
+            return
+        with engine.begin() as conn:
+            conn.execute(
+                text("UPDATE calls SET recording_key = :key WHERE vapi_call_id = :cid"),
+                {"key": key, "cid": row["vapi_call_id"]},
+            )
+    except Exception:
+        log.exception("Recording archive failed for %s — VAPI URL kept.", row.get("vapi_call_id"))

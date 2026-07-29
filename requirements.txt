@@ -115,3 +115,7 @@ slowapi==0.1.9
 twilio==9.10.5
 alembic==1.18.5
 Mako==1.3.12
+boto3==1.43.58
+botocore==1.43.58
+s3transfer==0.19.2
+jmespath==1.1.0
