@@ -124,6 +124,12 @@ class TenantConfig:
     # Optional SMS template overrides (EN/ES). Placeholders: {name} {when} {location} {service}
     sms_templates: dict[str, str] = field(default_factory=dict)
     transfer_phone: str = ""
+    # Optional custom opening line (dashboard "Greeting" field, Phase 2 self-
+    # serve config). Not yet wired into the live prompt — prompts/esmi_system.md
+    # and tenants/<id>/prompts/ remain authoritative (CLAUDE.md rule #4) until a
+    # later change compiles this into the prompt template. Stored now so the
+    # settings UI has somewhere durable to write.
+    greeting: str = ""
 
     @property
     def hours_range(self) -> range:
@@ -358,6 +364,7 @@ def _config_from_file(tenant_id: str, data: dict) -> TenantConfig:
         services=services,
         sms_templates={str(k): str(v) for k, v in sms_templates.items()},
         transfer_phone=str(data.get("transfer_phone") or "").strip(),
+        greeting=str(data.get("greeting") or "").strip(),
     )
 
 
