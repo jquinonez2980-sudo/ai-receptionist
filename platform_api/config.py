@@ -80,6 +80,7 @@ class ServiceUpdate(BaseModel):
     duration_min: int = Field(gt=0, le=480)
     price: str = ""
     price_by_location: dict[str, str] = Field(default_factory=dict)
+    name_es: str = ""
 
 
 class EmailsUpdate(BaseModel):
@@ -123,6 +124,7 @@ def _service_out(svc: ServiceConfig) -> dict:
         "duration_min": svc.duration_min,
         "price": svc.price,
         "price_by_location": dict(svc.price_by_location),
+        "name_es": svc.name_es,
     }
 
 
@@ -294,6 +296,7 @@ def _apply_update(raw: dict, body: ConfigUpdate) -> dict:
                 "duration_min": svc.duration_min,
                 "price": svc.price.strip(),
                 "price_by_location": {k: v.strip() for k, v in svc.price_by_location.items()},
+                "name_es": svc.name_es.strip(),
             }
         out["services"] = new_services
 
