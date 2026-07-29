@@ -146,12 +146,14 @@ from platform_api import (  # noqa: E402
     knowledge_router,
     leads_router,
     overview_router,
+    usage_router,
     vapi_webhook_router,
 )
 
 app.include_router(vapi_webhook_router)
 app.include_router(calls_router)
 app.include_router(overview_router)
+app.include_router(usage_router)
 app.include_router(appointments_router)
 app.include_router(leads_router)
 app.include_router(config_router)
