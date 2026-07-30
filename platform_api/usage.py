@@ -5,9 +5,10 @@
 # the VAPI end-of-call webhook (call_log.py). Ticket 3.2 adds the tenant's
 # plan (tenants.plan, already in the schema but unread until now) and a SOFT
 # usage-vs-limit status (platform_api/plans.py) — display only, nothing here
-# blocks a call. Later Phase 3 tickets (usage_records, metered Stripe
-# reporting, hard enforcement) build on top of this once the underlying
-# numbers are trusted.
+# blocks a call. compute_tenant_usage() is shared with platform_api/billing.py
+# (ticket 3.3) so both endpoints run one query instead of two. Later Phase 3
+# tickets (usage_records, metered Stripe reporting, hard enforcement) build
+# on top of this once the underlying numbers are trusted.
 
 from __future__ import annotations
 
@@ -26,17 +27,14 @@ log = logging.getLogger(__name__)
 router = APIRouter()
 
 
-@router.get("/platform/usage")
-def platform_usage(request: Request) -> dict:
-    """Tenant usage for the current calendar month, in the tenant's own
-    timezone: call count, voice minutes, VAPI cost, LLM cost.
+def compute_tenant_usage(tenant_id: str) -> dict:
+    """Current-calendar-month usage + plan status for one tenant, in its own
+    timezone: call count, voice minutes, VAPI cost, LLM cost, plan/limit
+    status, and the account status (tenants.status).
 
-    Sync `def` on purpose (FastAPI threadpool) — blocking SQLAlchemy query,
-    same convention as overview.py / calls.py.
+    Raises HTTPException(503) if the platform DB isn't configured — callers
+    are FastAPI route handlers, so letting it propagate is correct.
     """
-    verify_platform_secret(request)
-    tenant_id = require_tenant(request)
-
     from sqlalchemy import text
 
     from platform_db import get_engine
@@ -70,17 +68,17 @@ def platform_usage(request: Request) -> dict:
             {"tid": tenant_id, "period_start": period_start},
         ).one()
         # No row (tenant not yet created in `tenants`, e.g. never had a VAPI
-        # call land) falls back to the `managed`/unlimited default below —
-        # same as an explicit but unrecognized plan value.
-        plan_row = conn.execute(
-            text("SELECT plan FROM tenants WHERE id = :tid"), {"tid": tenant_id}
+        # call land) falls back to the `managed`/unlimited plan and a "live"
+        # account status below — same as an explicit but unrecognized value.
+        tenant_row = conn.execute(
+            text("SELECT plan, status FROM tenants WHERE id = :tid"), {"tid": tenant_id}
         ).first()
 
     minutes = round((row.seconds or 0) / 60.0, 1)
-    plan = get_plan(plan_row[0] if plan_row else None)
+    plan = get_plan(tenant_row[0] if tenant_row else None)
+    account_status = (tenant_row[1] if tenant_row else None) or "live"
 
     return {
-        "tenant_id": tenant_id,
         "business_tz": cfg.business_tz,
         "period_start": period_start.date().isoformat(),
         "period_end": now.isoformat(),
@@ -88,9 +86,34 @@ def platform_usage(request: Request) -> dict:
         "minutes": minutes,
         "cost_vapi": float(row.cost_vapi) if row.cost_vapi is not None else None,
         "cost_llm": float(row.cost_llm) if row.cost_llm is not None else None,
+        "account_status": account_status,
         "plan": {
             "key": plan.key,
             "label": plan.label,
             **usage_status(minutes, plan),
         },
+    }
+
+
+@router.get("/platform/usage")
+def platform_usage(request: Request) -> dict:
+    """Tenant usage for the current calendar month: call count, voice
+    minutes, VAPI cost, LLM cost, plan + soft-limit status.
+
+    Sync `def` on purpose (FastAPI threadpool) — blocking SQLAlchemy query,
+    same convention as overview.py / calls.py.
+    """
+    verify_platform_secret(request)
+    tenant_id = require_tenant(request)
+    data = compute_tenant_usage(tenant_id)
+    return {
+        "tenant_id": tenant_id,
+        "business_tz": data["business_tz"],
+        "period_start": data["period_start"],
+        "period_end": data["period_end"],
+        "calls": data["calls"],
+        "minutes": data["minutes"],
+        "cost_vapi": data["cost_vapi"],
+        "cost_llm": data["cost_llm"],
+        "plan": data["plan"],
     }

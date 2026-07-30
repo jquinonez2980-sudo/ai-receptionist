@@ -141,6 +141,7 @@ app.add_middleware(
 # dependency of the agent path.
 from platform_api import (  # noqa: E402
     appointments_router,
+    billing_router,
     calls_router,
     config_router,
     knowledge_router,
@@ -154,6 +155,7 @@ app.include_router(vapi_webhook_router)
 app.include_router(calls_router)
 app.include_router(overview_router)
 app.include_router(usage_router)
+app.include_router(billing_router)
 app.include_router(appointments_router)
 app.include_router(leads_router)
 app.include_router(config_router)
