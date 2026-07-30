@@ -9,6 +9,7 @@
 # tables and must never be imported by the agent runtime path (tools.py,
 # agents.py, graph.py). api.py mounts the routers; that is the only coupling.
 
+from platform_api.admin import router as admin_router
 from platform_api.appointments import router as appointments_router
 from platform_api.billing import router as billing_router
 from platform_api.calls import router as calls_router
@@ -20,6 +21,7 @@ from platform_api.usage import router as usage_router
 from platform_api.vapi_webhook import router as vapi_webhook_router
 
 __all__ = [
+    "admin_router",
     "appointments_router",
     "billing_router",
     "calls_router",

@@ -64,6 +64,28 @@ def verify_platform_secret(request: Request) -> None:
         raise HTTPException(status_code=401, detail="Unauthorized")
 
 
+def verify_platform_admin_secret(request: Request) -> None:
+    """Gate /platform/admin/* on X-Platform-Admin-Secret vs PLATFORM_ADMIN_SECRET.
+
+    Deliberately a DIFFERENT secret from PLATFORM_API_SECRET (verify_platform_secret
+    above), not a shared one — a leaked client-facing platform secret must never
+    unlock admin actions (assigning any tenant's plan). Fail-closed when unset,
+    same as verify_platform_secret. Only the Next.js server holds this value
+    (never the browser); the frontend page itself is additionally gated on the
+    caller's active Clerk org being "default" (Orchelix's own org).
+    """
+    secret = os.environ.get("PLATFORM_ADMIN_SECRET")
+    if not secret:
+        log.error("PLATFORM_ADMIN_SECRET is not set — refusing /platform/admin request.")
+        raise HTTPException(
+            status_code=503,
+            detail="Admin API not configured — set PLATFORM_ADMIN_SECRET.",
+        )
+    provided = request.headers.get("X-Platform-Admin-Secret", "")
+    if not hmac.compare_digest(provided, secret):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+
 def require_tenant(request: Request) -> str:
     """Strict tenant resolution for /platform/*: X-Tenant-Id must name a real
     tenant. No default fallback — a dashboard bug must surface as 400, never

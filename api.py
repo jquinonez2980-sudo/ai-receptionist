@@ -140,6 +140,7 @@ app.add_middleware(
 # graph unchanged until the app object exists — platform_api must never be a
 # dependency of the agent path.
 from platform_api import (  # noqa: E402
+    admin_router,
     appointments_router,
     billing_router,
     calls_router,
@@ -156,6 +157,7 @@ app.include_router(calls_router)
 app.include_router(overview_router)
 app.include_router(usage_router)
 app.include_router(billing_router)
+app.include_router(admin_router)
 app.include_router(appointments_router)
 app.include_router(leads_router)
 app.include_router(config_router)
