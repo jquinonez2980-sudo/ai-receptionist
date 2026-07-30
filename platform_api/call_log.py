@@ -280,6 +280,12 @@ def record_end_of_call(payload: dict) -> Optional[dict]:
         # Any failure here leaves the (temporary) VAPI URL in place — the
         # backfill script can retry until the URL actually expires.
         _archive_recording(tenant_id, row)
+        # Also after the row is safe: this call may have just pushed the
+        # tenant's monthly usage past a soft plan threshold — check and send
+        # a one-time warning email if so (fail-soft, never raises).
+        from platform_api.usage_alerts import check_and_notify_usage
+
+        check_and_notify_usage(tenant_id)
     return {
         "tenant_id": tenant_id,
         "call_id": row["vapi_call_id"],
