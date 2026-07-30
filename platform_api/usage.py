@@ -6,9 +6,12 @@
 # plan (tenants.plan, already in the schema but unread until now) and a SOFT
 # usage-vs-limit status (platform_api/plans.py) — display only, nothing here
 # blocks a call. compute_tenant_usage() is shared with platform_api/billing.py
-# (ticket 3.3) so both endpoints run one query instead of two. Later Phase 3
-# tickets (usage_records, metered Stripe reporting, hard enforcement) build
-# on top of this once the underlying numbers are trusted.
+# (ticket 3.3) and platform_api/admin.py so all three run one query instead
+# of several. Ticket 3.6 adds tenants.stripe_customer_id/subscription_id
+# (identifiers only — no Stripe API calls anywhere in this app) and derives
+# billing_mode from whether a subscription id is set. Later Phase 3 tickets
+# (usage_records, metered Stripe reporting, hard enforcement) build on top
+# of this once the underlying numbers are trusted.
 
 from __future__ import annotations
 
@@ -71,12 +74,22 @@ def compute_tenant_usage(tenant_id: str) -> dict:
         # call land) falls back to the `managed`/unlimited plan and a "live"
         # account status below — same as an explicit but unrecognized value.
         tenant_row = conn.execute(
-            text("SELECT plan, status FROM tenants WHERE id = :tid"), {"tid": tenant_id}
+            text(
+                "SELECT plan, status, stripe_customer_id, stripe_subscription_id "
+                "FROM tenants WHERE id = :tid"
+            ),
+            {"tid": tenant_id},
         ).first()
 
     minutes = round((row.seconds or 0) / 60.0, 1)
     plan = get_plan(tenant_row[0] if tenant_row else None)
     account_status = (tenant_row[1] if tenant_row else None) or "live"
+    stripe_customer_id = tenant_row[2] if tenant_row else None
+    stripe_subscription_id = tenant_row[3] if tenant_row else None
+    # "stripe" only once a subscription actually exists — linking a Stripe
+    # customer record during onboarding (e.g. before checkout completes)
+    # must not flip billing_mode before there's a real subscription behind it.
+    billing_mode = "stripe" if stripe_subscription_id else "managed"
 
     return {
         "business_tz": cfg.business_tz,
@@ -87,6 +100,9 @@ def compute_tenant_usage(tenant_id: str) -> dict:
         "cost_vapi": float(row.cost_vapi) if row.cost_vapi is not None else None,
         "cost_llm": float(row.cost_llm) if row.cost_llm is not None else None,
         "account_status": account_status,
+        "stripe_customer_id": stripe_customer_id,
+        "stripe_subscription_id": stripe_subscription_id,
+        "billing_mode": billing_mode,
         "plan": {
             "key": plan.key,
             "label": plan.label,

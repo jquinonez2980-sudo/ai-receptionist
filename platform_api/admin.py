@@ -1,5 +1,6 @@
-# platform_api/admin.py — internal-only tenant plan/status assignment
-# (Phase 3 ticket 3.5). GET /platform/admin/tenants + PATCH .../plan.
+# platform_api/admin.py — internal-only tenant plan/status/Stripe assignment
+# (Phase 3 tickets 3.5 + 3.6). GET /platform/admin/tenants, PATCH .../plan,
+# PATCH .../stripe.
 #
 # Access model (two independent layers — see platform_api/security.py):
 #   1. The frontend page only renders for a signed-in Orchelix staff member
@@ -10,7 +11,11 @@
 #
 # Every plan/status write is recorded in tenant_plan_changes (insert-only —
 # see alembic 0004) before returning, mirroring how tenant_configs already
-# tracks created_by/created_at for config edits.
+# tracks created_by/created_at for config edits. Stripe ID changes (ticket
+# 3.6) are logged (log.info below) rather than given their own audit table —
+# smallest useful slice; add one later if a real audit trail is needed.
+# Stripe IDs are identifiers only, pasted in from the Stripe Dashboard —
+# this app makes no live Stripe API calls anywhere.
 
 from __future__ import annotations
 
@@ -36,11 +41,32 @@ class PlanUpdate(BaseModel):
     status: str | None = None
 
 
+class StripeUpdate(BaseModel):
+    stripe_customer_id: str | None = None
+    stripe_subscription_id: str | None = None
+
+
+def _tenant_admin_row(tenant_id: str, data: dict) -> dict:
+    """Shared response shape for the list endpoint and both PATCH endpoints."""
+    return {
+        "tenant_id": tenant_id,
+        "account_status": data["account_status"],
+        "calls": data["calls"],
+        "minutes": data["minutes"],
+        "period_start": data["period_start"],
+        "period_end": data["period_end"],
+        "plan": data["plan"],
+        "stripe_customer_id": data["stripe_customer_id"],
+        "stripe_subscription_id": data["stripe_subscription_id"],
+        "billing_mode": data["billing_mode"],
+    }
+
+
 @router.get("/platform/admin/tenants")
 def list_admin_tenants(request: Request) -> dict:
-    """Every tenant in the registry with its plan/status and this month's
-    usage summary. Sync `def` on purpose — blocking SQLAlchemy queries,
-    same convention as the other /platform/* read routes.
+    """Every tenant in the registry with its plan/status, Stripe linkage,
+    and this month's usage summary. Sync `def` on purpose — blocking
+    SQLAlchemy queries, same convention as the other /platform/* read routes.
     """
     verify_platform_admin_secret(request)
 
@@ -57,20 +83,10 @@ def list_admin_tenants(request: Request) -> dict:
             text("SELECT id FROM tenants ORDER BY id")
         ).all()
 
-    tenants_out = []
-    for (tenant_id,) in rows:
-        data = compute_tenant_usage(tenant_id)
-        tenants_out.append(
-            {
-                "tenant_id": tenant_id,
-                "account_status": data["account_status"],
-                "calls": data["calls"],
-                "minutes": data["minutes"],
-                "period_start": data["period_start"],
-                "period_end": data["period_end"],
-                "plan": data["plan"],
-            }
-        )
+    tenants_out = [
+        _tenant_admin_row(tenant_id, compute_tenant_usage(tenant_id))
+        for (tenant_id,) in rows
+    ]
     return {"tenants": tenants_out}
 
 
@@ -150,13 +166,88 @@ def update_tenant_plan(tenant_id: str, body: PlanUpdate, request: Request) -> di
         tenant_id, old_plan, body.plan, old_status, new_status, changed_by,
     )
 
-    data = compute_tenant_usage(tenant_id)
-    return {
-        "tenant_id": tenant_id,
-        "account_status": data["account_status"],
-        "calls": data["calls"],
-        "minutes": data["minutes"],
-        "period_start": data["period_start"],
-        "period_end": data["period_end"],
-        "plan": data["plan"],
-    }
+    return _tenant_admin_row(tenant_id, compute_tenant_usage(tenant_id))
+
+
+@router.patch("/platform/admin/tenants/{tenant_id}/stripe")
+def update_tenant_stripe(tenant_id: str, body: StripeUpdate, request: Request) -> dict:
+    """Set or clear a tenant's Stripe customer/subscription id.
+
+    Light format validation only (must start with 'cus_' / 'sub_') — no live
+    Stripe API call, this app has no Stripe secret key. A field omitted from
+    the request body is left unchanged; a field explicitly sent as null
+    clears it (distinguished via body.model_fields_set, not just truthiness).
+    """
+    verify_platform_admin_secret(request)
+
+    if not tenant_exists(tenant_id):
+        raise HTTPException(status_code=404, detail=f"Unknown tenant '{tenant_id}'")
+
+    fields_set = body.model_fields_set
+    if "stripe_customer_id" in fields_set and body.stripe_customer_id:
+        if not body.stripe_customer_id.startswith("cus_"):
+            raise HTTPException(
+                status_code=400, detail="stripe_customer_id must start with 'cus_'"
+            )
+    if "stripe_subscription_id" in fields_set and body.stripe_subscription_id:
+        if not body.stripe_subscription_id.startswith("sub_"):
+            raise HTTPException(
+                status_code=400, detail="stripe_subscription_id must start with 'sub_'"
+            )
+
+    from sqlalchemy import text
+
+    from platform_db import get_engine
+
+    engine = get_engine()
+    if engine is None:
+        raise HTTPException(status_code=503, detail="Platform DB not configured.")
+
+    changed_by = request.headers.get("X-Platform-User", "dashboard")
+
+    with engine.begin() as conn:
+        current = conn.execute(
+            text(
+                "SELECT stripe_customer_id, stripe_subscription_id FROM tenants WHERE id = :tid"
+            ),
+            {"tid": tenant_id},
+        ).first()
+        old_customer_id = current[0] if current else None
+        old_subscription_id = current[1] if current else None
+
+        new_customer_id = (
+            body.stripe_customer_id if "stripe_customer_id" in fields_set else old_customer_id
+        )
+        new_subscription_id = (
+            body.stripe_subscription_id
+            if "stripe_subscription_id" in fields_set
+            else old_subscription_id
+        )
+
+        # ON CONFLICT DO UPDATE for the same reason update_tenant_plan uses
+        # it — this can be the first admin write for a tenant with no
+        # `tenants` row yet (plan/status fall back to their column defaults).
+        conn.execute(
+            text(
+                """
+                INSERT INTO tenants (id, stripe_customer_id, stripe_subscription_id)
+                VALUES (:tid, :customer_id, :subscription_id)
+                ON CONFLICT (id) DO UPDATE
+                    SET stripe_customer_id = :customer_id,
+                        stripe_subscription_id = :subscription_id
+                """
+            ),
+            {
+                "tid": tenant_id,
+                "customer_id": new_customer_id,
+                "subscription_id": new_subscription_id,
+            },
+        )
+
+    log.info(
+        "Tenant Stripe IDs changed: tenant=%s customer=%s->%s subscription=%s->%s by=%s",
+        tenant_id, old_customer_id, new_customer_id,
+        old_subscription_id, new_subscription_id, changed_by,
+    )
+
+    return _tenant_admin_row(tenant_id, compute_tenant_usage(tenant_id))

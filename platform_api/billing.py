@@ -1,14 +1,15 @@
-# platform_api/billing.py — GET /platform/billing (Phase 3 ticket 3.3).
+# platform_api/billing.py — GET /platform/billing (Phase 3 tickets 3.3 + 3.6).
 #
 # Reuses compute_tenant_usage() (platform_api/usage.py) for the same
 # calls-table + plan-status computation, then adds account_status
-# (tenants.status — already in the schema, unread until now) and a constant
-# billing_mode: no per-tenant Stripe customer/subscription linkage exists yet
-# (see PLATFORM_BLUEPRINT.md), so "managed" (billed manually) is the only
-# honest value today. Deliberately omits cost_vapi/cost_llm: those are
-# Orchelix's own internal costs, not the tenant's bill, and don't belong on
-# a client-facing billing page even though the Usage page already shows them
-# (labeled) as an FYI estimate.
+# (tenants.status — already in the schema, unread until now) and billing_mode
+# — "stripe" once a tenant has a real Stripe subscription linked (ticket
+# 3.6), "managed" otherwise. Deliberately omits cost_vapi/cost_llm (Orchelix's
+# own internal costs, not the tenant's bill — the Usage page shows those,
+# labeled, as an FYI estimate) AND the raw stripe_customer_id/
+# stripe_subscription_id: those aren't secrets, but this is a client-facing
+# endpoint and the IDs have no use to a tenant — only /platform/admin/*
+# (staff-only, separate admin secret) returns them.
 
 from __future__ import annotations
 
@@ -22,8 +23,6 @@ from platform_api.usage import compute_tenant_usage
 log = logging.getLogger(__name__)
 
 router = APIRouter()
-
-BILLING_MODE = "managed"
 
 
 @router.get("/platform/billing")
@@ -40,7 +39,7 @@ def platform_billing(request: Request) -> dict:
     return {
         "tenant_id": tenant_id,
         "account_status": data["account_status"],
-        "billing_mode": BILLING_MODE,
+        "billing_mode": data["billing_mode"],
         "period_start": data["period_start"],
         "period_end": data["period_end"],
         "calls": data["calls"],
