@@ -58,7 +58,7 @@
   "services": {
     "regular-haircut": {
       "name": "Regular Haircut",
-      "duration_min": 45,
+      "duration_min": 35,
       "price": "$40",
       "price_by_location": {
         "weston": "$40",
@@ -67,45 +67,55 @@
     },
     "fade": {
       "name": "Fade",
-      "duration_min": 45,
-      "price": "$50",
+      "duration_min": 40,
+      "price": "$40–$45",
       "price_by_location": {
-        "weston": "$50",
+        "weston": "$40–$45",
         "keele": "$35–$40"
       }
     },
     "fade-beard": {
       "name": "Fade + Beard",
-      "duration_min": 60,
+      "duration_min": 40,
+      "price": "$50–$55",
+      "price_by_location": {
+        "weston": "$50–$55",
+        "keele": "$50"
+      }
+    },
+    "beard-trim": {
+      "name": "Beard Trim",
+      "duration_min": 20,
+      "price": "$25",
+      "price_by_location": {
+        "weston": "$25",
+        "keele": "$20"
+      }
+    },
+    "vip-package": {
+      "name": "VIP Package (Hot Towel + Cream Facial)",
+      "duration_min": 45,
       "price": "$60",
       "price_by_location": {
         "weston": "$60"
       }
     },
-    "beard-trim": {
-      "name": "Beard Trim",
-      "duration_min": 30,
+    "kids-haircut": {
+      "name": "Children's Haircut (10 and under)",
+      "duration_min": 35,
+      "price": "$30",
+      "price_by_location": {
+        "weston": "$30",
+        "keele": "$30"
+      }
+    },
+    "line-up": {
+      "name": "Line-Up",
+      "duration_min": 15,
       "price": "$20",
       "price_by_location": {
         "weston": "$20",
         "keele": "$20"
-      }
-    },
-    "vip-package": {
-      "name": "VIP Package",
-      "duration_min": 75,
-      "price": "$70",
-      "price_by_location": {
-        "weston": "$70"
-      }
-    },
-    "kids-haircut": {
-      "name": "Children's Haircut",
-      "duration_min": 45,
-      "price": "$30–$35",
-      "price_by_location": {
-        "weston": "$30–$35",
-        "keele": "$30"
       }
     }
   },
@@ -114,19 +124,19 @@
       "name": "Fade",
       "popular": true,
       "setup_from": 0,
-      "monthly_from": 50,
-      "price_label": "Weston $50 / Keele $35–$40",
-      "best_for": "Signature fade — skin, taper, or drop. 45 min.",
-      "highlights": ["Skin, taper, or drop fade", "45 minutes", "Weston $50 / Keele $35–$40"]
+      "monthly_from": 40,
+      "price_label": "Weston $40–$45 / Keele $35–$40",
+      "best_for": "Signature fade — skin, taper, or drop. 40 min.",
+      "highlights": ["Skin, taper, or drop fade", "40 minutes", "Weston $40–$45 / Keele $35–$40"]
     },
     {
-      "name": "VIP Package (Weston only)",
+      "name": "VIP Package",
       "popular": true,
       "setup_from": 0,
-      "monthly_from": 70,
-      "price_label": "$70 · Weston only",
-      "best_for": "Full premium treatment — haircut, beard, finish. Weston exclusive.",
-      "highlights": ["1 hr 15 min", "Weston only", "$70"]
+      "monthly_from": 60,
+      "price_label": "$60 · Weston only",
+      "best_for": "Full premium treatment — hot towel, cream facial finish. Weston exclusive.",
+      "highlights": ["Hot towel + cream facial", "45 min", "Weston only — $60"]
     },
     {
       "name": "Regular Haircut",
@@ -135,34 +145,43 @@
       "monthly_from": 35,
       "price_label": "Weston $40 / Keele $35",
       "best_for": "Classic cut at either location.",
-      "highlights": ["Weston $40 / Keele $35", "45 minutes"]
+      "highlights": ["Weston $40 / Keele $35", "35 minutes"]
     },
     {
-      "name": "Fade + Beard (Weston only)",
+      "name": "Fade + Beard",
       "popular": false,
       "setup_from": 0,
-      "monthly_from": 60,
-      "price_label": "$60 · Weston only",
-      "best_for": "Fade plus full beard work in one visit. 1 hour.",
-      "highlights": ["Fade + beard shaping", "1 hour", "Weston only — $60"]
+      "monthly_from": 50,
+      "price_label": "Weston $50–$55 / Keele $50",
+      "best_for": "Fade plus full beard work in one visit. 40 min.",
+      "highlights": ["Fade + beard shaping", "40 minutes", "Weston $50–$55 / Keele $50"]
     },
     {
       "name": "Beard Trim",
       "popular": false,
       "setup_from": 0,
       "monthly_from": 20,
-      "price_label": "$20 both locations",
+      "price_label": "Weston $25 / Keele $20",
       "best_for": "Shaped and lined beard — both shops.",
-      "highlights": ["$20 both locations", "25–30 min"]
+      "highlights": ["Weston $25 / Keele $20", "20 min"]
     },
     {
       "name": "Children's Haircut",
       "popular": false,
       "setup_from": 0,
       "monthly_from": 30,
-      "price_label": "Weston $30–$35 / Keele $30",
-      "best_for": "Kids' cuts at either location. 45 min.",
-      "highlights": ["Weston $30–$35 / Keele $30", "45 minutes"]
+      "price_label": "$30 both locations",
+      "best_for": "Kids' cuts (10 and under) at either location. 35 min.",
+      "highlights": ["$30 both locations", "35 minutes", "Ages 10 and under"]
+    },
+    {
+      "name": "Line-Up",
+      "popular": false,
+      "setup_from": 0,
+      "monthly_from": 20,
+      "price_label": "$20 both locations",
+      "best_for": "Clean edge-up, with or without beard line. 15 min.",
+      "highlights": ["With or without beard line", "15 minutes", "$20 both locations"]
     }
   ],
   "pricing_note": "Prices may vary slightly at the barber's discretion. Unlisted services — ask in shop.",

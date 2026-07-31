@@ -17,9 +17,9 @@ Saturdays are walk-in only (no appointments). Walk-ins welcome every day.
 Closed Christmas Day and New Year's Day; open most other holidays.
 
 ## PRICES (authoritative — call get_pricing; do not invent)
-Weston: Regular $40 · Fade $50 · Fade+Beard $60 · Beard $20 · VIP $70 · Kids $30–$35
-Keele: Regular $35 · Fade $35–$40 · Beard $20 · Kids $30
-VIP and Fade+Beard are Weston only. Prices may vary slightly at the barber's discretion.
+Weston: Regular $40 · Fade $40–$45 · Fade+Beard $50–$55 · Beard $25 · VIP $60 (hot towel + cream facial) · Kids $30 · Line-Up $20
+Keele: Regular $35 · Fade $35–$40 · Fade+Beard $50 · Beard $20 · Kids $30 · Line-Up $20
+VIP Package is Weston only. Prices may vary slightly at the barber's discretion.
 
 ## TOOL RULES
 - get_pricing for price questions (not memory, not KB).

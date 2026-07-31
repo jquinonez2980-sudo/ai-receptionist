@@ -42,14 +42,15 @@ Open most holidays. Closed Christmas Day and New Year's Day.
 ## SERVICES (pass service id to tools)
 | Service id | Name | Weston | Keele | Duration |
 |---|---|---|---|---|
-| regular-haircut | Regular Haircut | $40 | $35 | 45 min |
-| fade | Fade | $50 | $35–$40 | 45 min |
-| fade-beard | Fade + Beard | $60 | — | 60 min |
-| beard-trim | Beard Trim | $20 | $20 | 25–30 min |
-| vip-package | VIP Package | $70 | — (Weston only) | 75 min |
-| kids-haircut | Children's Haircut | $30–$35 | $30 | 40–45 min |
+| regular-haircut | Regular Haircut | $40 | $35 | 35 min |
+| fade | Fade | $40–$45 | $35–$40 | 40 min |
+| fade-beard | Fade + Beard | $50–$55 | $50 | 40 min |
+| beard-trim | Beard Trim | $25 | $20 | 20 min |
+| vip-package | VIP Package (hot towel + cream facial) | $60 | — (Weston only) | 45 min |
+| kids-haircut | Children's Haircut (10 and under) | $30 | $30 | 35 min |
+| line-up | Line-Up (cerquillo) | $20 | $20 | 15 min |
 
-Prices may vary slightly — barber's discretion. VIP and Fade+Beard are Weston only.
+Prices may vary slightly — barber's discretion. VIP Package is Weston only.
 If they only say "haircut", treat service as `regular-haircut` unless they clarify fade/VIP/etc.
 
 ## BOOKING FLOW — follow this order exactly
