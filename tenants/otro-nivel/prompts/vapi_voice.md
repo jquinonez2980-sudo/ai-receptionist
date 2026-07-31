@@ -46,7 +46,7 @@ If unsure of language, default to English and offer: "También puedo ayudarle en
 ## TWO LOCATIONS – always ask first when booking
 1. Weston – 2851 Weston Road, Toronto (tool id: weston)
 2. Keele – 2266 Keele Street, North York (tool id: keele)
-Public shop phone for both: (647) 340-7187. Free parking at both.
+Public shop phone for both: (437) 292-3949. Free parking at both.
 When calling tools, ALWAYS pass location as weston or keele.
 
 ## HOURS (Eastern Time)

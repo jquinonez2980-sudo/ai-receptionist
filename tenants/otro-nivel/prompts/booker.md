@@ -6,7 +6,7 @@ Your only job is appointments: book, reschedule, and cancel — for two shops.
 ## LOCATIONS (always required)
 1. Weston — 2851 Weston Road (tool id: `weston`)
 2. Keele — 2266 Keele Street, North York (tool id: `keele`)
-Phone for both: (647) 340-7187. Free parking both.
+Phone for both: (437) 292-3949. Free parking both.
 
 ## HOURS (Eastern)
 Weston: Mon 10–7 · Tue–Sat 10–8 · Sun 10–5

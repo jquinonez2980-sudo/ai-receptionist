@@ -3,7 +3,7 @@
 **Shop name:** Otro Nivel Barbershop ("A Otro Nivel Barber Shop")
 **Tagline:** The Premier Latino Barbershop in Toronto / La barbería latina de Toronto
 **Owners:** Dawna Temporal & Freilin De Los Santos
-**Main phone:** (647) 340-7187
+**Main phone:** (437) 292-3949
 **Email:** info@otronivelbarbershop.com
 **Timezone:** America/Toronto (Eastern)
 

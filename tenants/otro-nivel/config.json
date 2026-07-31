@@ -14,15 +14,15 @@
   "transfer_phone": "647-569-1194",
   "calendar_id": "c_04d64beea3e56d81e666a2e4ddfe4e14bf16d69ff0b0ebbbcd0201be4ce335de@group.calendar.google.com",
   "sms_templates": {
-    "confirmation_en": "Hi {name}! Your appointment at Otro Nivel Barbershop ({location}) is confirmed for {when}. Free parking available. Questions? Call (647) 340-7187. See you soon! ✂️",
-    "confirmation_es": "¡Hola {name}! Tu cita en Otro Nivel Barbershop ({location}) está confirmada para {when}. Hay estacionamiento gratis. ¿Preguntas? Llama al (647) 340-7187. ¡Nos vemos! ✂️"
+    "confirmation_en": "Hi {name}! Your appointment at Otro Nivel Barbershop ({location}) is confirmed for {when}. Free parking available. Questions? Call (437) 292-3949. See you soon! ✂️",
+    "confirmation_es": "¡Hola {name}! Tu cita en Otro Nivel Barbershop ({location}) está confirmada para {when}. Hay estacionamiento gratis. ¿Preguntas? Llama al (437) 292-3949. ¡Nos vemos! ✂️"
   },
   "locations": {
     "weston": {
       "name": "Weston",
       "address": "2851 Weston Road, Toronto, ON M9M 2S1",
       "calendar_id": "c_04d64beea3e56d81e666a2e4ddfe4e14bf16d69ff0b0ebbbcd0201be4ce335de@group.calendar.google.com",
-      "phone": "(647) 340-7187",
+      "phone": "(437) 292-3949",
       "business_hours": [10, 20],
       "business_days": [0, 1, 2, 3, 4, 5, 6],
       "booking_days": [0, 1, 2, 3, 4, 6],
@@ -40,7 +40,7 @@
       "name": "Keele",
       "address": "2266 Keele Street, North York, ON M6M 3Y9",
       "calendar_id": "c_4364e89487e31bf2afcd13aa9e21ed08b7f777cbee71e9af1cd6d86940e70374@group.calendar.google.com",
-      "phone": "(647) 340-7187",
+      "phone": "(437) 292-3949",
       "business_hours": [10, 21],
       "business_days": [0, 1, 2, 3, 4, 5, 6],
       "booking_days": [0, 1, 2, 3, 4, 6],
