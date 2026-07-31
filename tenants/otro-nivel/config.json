@@ -63,7 +63,8 @@
       "price_by_location": {
         "weston": "$40",
         "keele": "$35"
-      }
+      },
+      "name_es": "Corte Regular"
     },
     "fade": {
       "name": "Fade",
@@ -72,7 +73,8 @@
       "price_by_location": {
         "weston": "$40–$45",
         "keele": "$35–$40"
-      }
+      },
+      "name_es": "Fade"
     },
     "fade-beard": {
       "name": "Fade + Beard",
@@ -81,7 +83,8 @@
       "price_by_location": {
         "weston": "$50–$55",
         "keele": "$50"
-      }
+      },
+      "name_es": "Fade + Barba"
     },
     "beard-trim": {
       "name": "Beard Trim",
@@ -90,24 +93,28 @@
       "price_by_location": {
         "weston": "$25",
         "keele": "$20"
-      }
+      },
+      "name_es": "Arreglo de Barba"
     },
     "vip-package": {
-      "name": "VIP Package (Hot Towel + Cream Facial)",
+      "name": "VIP Package",
       "duration_min": 45,
       "price": "$60",
       "price_by_location": {
-        "weston": "$60"
-      }
+        "weston": "$60",
+        "keele": "Not Available"
+      },
+      "name_es": "Paquete VIP"
     },
     "kids-haircut": {
-      "name": "Children's Haircut (10 and under)",
+      "name": "Children's Haircut",
       "duration_min": 35,
       "price": "$30",
       "price_by_location": {
         "weston": "$30",
         "keele": "$30"
-      }
+      },
+      "name_es": "Corte para Niños"
     },
     "line-up": {
       "name": "Line-Up",
@@ -116,7 +123,8 @@
       "price_by_location": {
         "weston": "$20",
         "keele": "$20"
-      }
+      },
+      "name_es": "Cerquillo"
     }
   },
   "pricing": [
