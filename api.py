@@ -41,6 +41,7 @@ from tenants import (
     normalize_tenant_id,
     resolve_vapi_tenant,
     tenant_exists,
+    tenant_is_active,
 )
 from tools import (
     book_appointment,
@@ -147,7 +148,9 @@ from platform_api import (  # noqa: E402
     config_router,
     knowledge_router,
     leads_router,
+    onboarding_router,
     overview_router,
+    signup_router,
     usage_router,
     vapi_webhook_router,
 )
@@ -162,6 +165,8 @@ app.include_router(appointments_router)
 app.include_router(leads_router)
 app.include_router(config_router)
 app.include_router(knowledge_router)
+app.include_router(signup_router)
+app.include_router(onboarding_router)
 
 
 # ── Auth helpers ──────────────────────────────────────────────────────────────
@@ -288,6 +293,14 @@ def _resolve_tenant(request: Request, req: "ChatRequest | None" = None) -> str:
     if not tenant_exists(tid):
         log.warning("Unknown tenant_id '%s' — falling back to default.", tid)
         return "default"
+    # Approve-to-activate gate (Phase 4): a tenant still in onboarding exists
+    # and can use its dashboard, but must not serve customer conversations.
+    # Same graceful degradation as the unknown-tenant case above.
+    if not tenant_is_active(tid):
+        log.warning(
+            "Tenant '%s' is not active yet — falling back to default.", tid
+        )
+        return "default"
     return tid
 
 
@@ -298,6 +311,12 @@ def _resolve_tenant_strict(request: Request) -> str:
         raise HTTPException(status_code=400, detail="X-Tenant-Id header is required")
     tid = normalize_tenant_id(raw)
     if not tenant_exists(tid):
+        raise HTTPException(status_code=404, detail=f"Unknown tenant '{tid}'")
+    # Booking is production traffic — a pre-approval tenant must not be able to
+    # take real appointments. 404 (not 403) to match the line above: to an
+    # unapproved caller this tenant is simply not a bookable business yet.
+    if not tenant_is_active(tid):
+        log.warning("Rejected booking request: tenant '%s' is not active yet.", tid)
         raise HTTPException(status_code=404, detail=f"Unknown tenant '{tid}'")
     return tid
 

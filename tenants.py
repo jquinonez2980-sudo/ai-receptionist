@@ -22,6 +22,14 @@
 # Multi-location (Otro Nivel): optional locations map + services map. Existing
 # single-location tenants keep working via a synthesized default location from
 # the legacy top-level calendar_id / business_hours / business_days fields.
+#
+# Self-serve onboarding (Phase 4 ticket 4.1): a tenant created through signup
+# lives ONLY in Postgres — it has no tenants/<id>/ directory. So tenant_exists()
+# and _all_tenant_ids() are DB-aware (DB checked after the filesystem, which
+# stays the zero-query fast path for every tenant that predates this), and
+# tenant_is_active() gates production traffic on tenants.onboarding_status
+# reaching 'active'. Same fallback contract as the config lookup: any DB
+# problem leaves resolution on the pre-Phase-4 filesystem behavior.
 
 from __future__ import annotations
 
@@ -40,6 +48,19 @@ log = logging.getLogger(__name__)
 
 _REGISTRY_DIR = Path(__file__).parent / "tenants"
 _TENANT_ID_RE = re.compile(r"^[a-z0-9-]{1,64}$")
+
+# Onboarding lifecycle (alembic 0006 — keep in sync with that migration's
+# CHECK constraint). Only ACTIVE_ONBOARDING_STATUS may serve production
+# traffic; the rest are pre-approval states or the terminal 'rejected'.
+ONBOARDING_STATUSES = (
+    "draft",
+    "submitted",
+    "provisioning",
+    "review",
+    "active",
+    "rejected",
+)
+ACTIVE_ONBOARDING_STATUS = "active"
 
 # ── Default-tenant (Orchelix) non-secret constants that are NOT already in
 #    tools.py. Pricing / tz / hours / slot come from tools.py at load time.
@@ -222,6 +243,19 @@ _TTL_SECONDS = 60.0
 _cache: dict[str, tuple[TenantConfig, float]] = {}
 _lock = threading.Lock()
 
+# tid → (onboarding_status | None, expiry). None means "queried the DB, this
+# tenant has no row" — a real answer worth caching, distinct from _UNAVAILABLE
+# (below) which is never cached. Same 60s TTL as the config cache so an admin
+# approval goes live within a minute without a redeploy.
+_status_cache: dict[str, tuple[Optional[str], float]] = {}
+
+# Sentinel: the DB could not answer (kill switch off, DATABASE_URL unset, table
+# or column not migrated yet, connection failure). Callers must fall back to
+# the filesystem registry — the exact pre-Phase-4 behavior — rather than
+# treating it as "no such tenant". Deliberately NOT cached, so a transient
+# blip recovers on the next request instead of sticking for a full TTL.
+_UNAVAILABLE = object()
+
 
 def _norm(tenant_id: Optional[str]) -> str:
     """Normalize + validate a client-supplied tenant id.
@@ -342,6 +376,16 @@ def _config_from_file(tenant_id: str, data: dict) -> TenantConfig:
     emails = data.get("emails") or {}
     hours = data.get("business_hours") or list(base.business_hours)
     vapi = data.get("vapi") or {}
+    # MISSING pricing inherits the default tenant's (long-standing behavior for
+    # partial configs). An EXPLICIT empty list means "this tenant has no price
+    # list yet" and must stay empty — `or` would treat [] as falsy and hand a
+    # brand-new tenant Orchelix's own SaaS pricing cards, which the agent would
+    # then quote to that tenant's customers. Self-serve onboarding seeds
+    # exactly this shape (see platform_api/signup.py), so the distinction is
+    # load-bearing. No existing tenants/<id>/config.json has an empty pricing
+    # array, so nothing already live changes behavior.
+    raw_pricing = data.get("pricing")
+    pricing = list(base.pricing) if raw_pricing is None else list(raw_pricing)
     slot = int(data.get("slot_minutes", base.slot_minutes))
     locations = _parse_locations(data, base)
     services = _parse_services(data, slot)
@@ -363,7 +407,7 @@ def _config_from_file(tenant_id: str, data: dict) -> TenantConfig:
         email_escalation_to=emails.get("escalation_to", base.email_escalation_to),
         sms_signature=data.get("sms_signature", data.get("company_name", base.sms_signature)),
         voice_default_summary=data.get("voice_default_summary", base.voice_default_summary),
-        pricing=data.get("pricing") or list(base.pricing),
+        pricing=pricing,
         pricing_note=data.get("pricing_note", ""),
         pricing_note_es=data.get("pricing_note_es", ""),
         vapi_assistant_ids=tuple(vapi.get("assistant_ids") or ()),
@@ -444,6 +488,77 @@ def _config_from_db(tenant_id: str) -> Optional[TenantConfig]:
         return None
 
 
+def _db_tenant_status(tenant_id: str):
+    """Read tenants.onboarding_status for tenant_id.
+
+    Returns the status string, None (queried successfully, no such row), or
+    _UNAVAILABLE (DB off / unreachable / not migrated). Never raises.
+
+    The UndefinedColumn case matters operationally: migrations are applied
+    manually on Railway, so this code ships live BEFORE alembic 0006 runs.
+    That error lands in the same `except` as a connection failure, which is
+    exactly right — both mean "the DB can't tell me, use the filesystem".
+    """
+    if not _db_enabled():
+        return _UNAVAILABLE
+    try:
+        from platform_db import get_engine
+
+        engine = get_engine()
+        if engine is None:
+            return _UNAVAILABLE
+        from sqlalchemy import text as _sql
+
+        with engine.connect() as conn:
+            row = conn.execute(
+                _sql("SELECT onboarding_status FROM tenants WHERE id = :tid"),
+                {"tid": tenant_id},
+            ).first()
+        return row[0] if row is not None else None
+    except Exception as e:
+        log.warning(
+            "Tenant '%s': onboarding_status lookup failed (%s: %s) — "
+            "falling back to the filesystem registry.",
+            tenant_id, type(e).__name__, e,
+        )
+        return _UNAVAILABLE
+
+
+def _cached_tenant_status(tenant_id: str):
+    """_db_tenant_status with the 60s cache in front. Same return contract."""
+    hit = _status_cache.get(tenant_id)
+    if hit is not None and monotonic() < hit[1]:
+        return hit[0]
+    status = _db_tenant_status(tenant_id)
+    if status is not _UNAVAILABLE:
+        with _lock:
+            _status_cache[tenant_id] = (status, monotonic() + _TTL_SECONDS)
+    return status
+
+
+def _db_tenant_ids() -> Optional[list[str]]:
+    """Every tenant id in the DB, or None when the DB cannot answer."""
+    if not _db_enabled():
+        return None
+    try:
+        from platform_db import get_engine
+
+        engine = get_engine()
+        if engine is None:
+            return None
+        from sqlalchemy import text as _sql
+
+        with engine.connect() as conn:
+            rows = conn.execute(_sql("SELECT id FROM tenants")).all()
+        return [r[0] for r in rows]
+    except Exception as e:
+        log.warning(
+            "Tenant id listing from DB failed (%s: %s) — filesystem registry only.",
+            type(e).__name__, e,
+        )
+        return None
+
+
 def load_tenant(tenant_id: str = "default") -> TenantConfig:
     """Return the TenantConfig for tenant_id (default == Orchelix).
 
@@ -479,12 +594,20 @@ def load_tenant(tenant_id: str = "default") -> TenantConfig:
 
 
 def clear_tenant_cache(tenant_id: Optional[str] = None) -> None:
-    """Drop cached config(s). Used by tests after monkeypatching config files."""
+    """Drop cached config(s) AND cached onboarding status.
+
+    Used by tests after monkeypatching config files, and by the platform API
+    after a write that must take effect immediately rather than at the next
+    TTL expiry (config publish, tenant approval).
+    """
     with _lock:
         if tenant_id is None:
             _cache.clear()
+            _status_cache.clear()
         else:
-            _cache.pop(_norm(tenant_id), None)
+            tid = _norm(tenant_id)
+            _cache.pop(tid, None)
+            _status_cache.pop(tid, None)
 
 
 def normalize_tenant_id(tenant_id: Optional[str]) -> str:
@@ -496,11 +619,56 @@ def normalize_tenant_id(tenant_id: Optional[str]) -> str:
 
 
 def tenant_exists(tenant_id: str) -> bool:
-    """True if tenant_id is 'default' or has a tenants/<id>/ directory."""
+    """True if tenant_id is 'default', has a tenants/<id>/ directory, or has a
+    row in the tenants table.
+
+    Filesystem is checked FIRST and short-circuits: every tenant that predates
+    self-serve onboarding resolves with zero queries, and the answer survives a
+    DB outage. The DB check is what lets a signup-created tenant — which has no
+    directory — reach the dashboard at all.
+
+    Existence is NOT permission to serve traffic; see tenant_is_active().
+    """
     tid = _norm(tenant_id)
     if tid == "default":
         return True
-    return (_REGISTRY_DIR / tid).is_dir()
+    if (_REGISTRY_DIR / tid).is_dir():
+        return True
+    return _cached_tenant_status(tid) not in (None, _UNAVAILABLE)
+
+
+def tenant_onboarding_status(tenant_id: str) -> Optional[str]:
+    """Onboarding lifecycle value for tenant_id, or None if it has no DB row.
+
+    'default' (Orchelix itself) is code-canonical and was never onboarded — it
+    reports 'active'. A filesystem tenant with no DB row also reports 'active':
+    it went live before this column existed, and a missing row must never take
+    a paying customer off the air.
+    """
+    tid = _norm(tenant_id)
+    if tid == "default":
+        return ACTIVE_ONBOARDING_STATUS
+    status = _cached_tenant_status(tid)
+    if status is _UNAVAILABLE or status is None:
+        return ACTIVE_ONBOARDING_STATUS if (_REGISTRY_DIR / tid).is_dir() else None
+    return status
+
+
+def tenant_is_active(tenant_id: str) -> bool:
+    """True if tenant_id may serve PRODUCTION traffic (voice + web chat).
+
+    This is the approve-to-activate gate (Phase 4 ticket 4.1). A tenant in
+    draft / submitted / provisioning / review / rejected exists, can sign in,
+    and can configure itself through the dashboard — but must not answer a
+    single customer call or chat until Orchelix approves it.
+
+    Legacy and outage behavior are both fail-OPEN by design, because the only
+    tenants that can reach those branches are ones that were already live
+    before this gate existed: a filesystem tenant with no DB row, and any
+    tenant when the DB is unreachable. A self-serve tenant has neither a
+    directory nor a pre-approval path to 'active', so it stays gated.
+    """
+    return tenant_onboarding_status(tenant_id) == ACTIVE_ONBOARDING_STATUS
 
 
 def namespaced_thread(tenant_id: str, thread_id: str) -> str:
@@ -531,9 +699,19 @@ def tenant_secret(tenant_id: str, name: str) -> Optional[str]:
 # ── VAPI inbound → tenant mapping ─────────────────────────────────────────────
 
 def _all_tenant_ids() -> list[str]:
-    if not _REGISTRY_DIR.is_dir():
-        return []
-    return [p.name for p in _REGISTRY_DIR.iterdir() if p.is_dir() and p.name != "default"]
+    """Every known tenant id except 'default' — filesystem registry ∪ DB rows.
+
+    Sorted so callers (VAPI resolution, scripts/update_vapi_webhooks.py) get a
+    stable order regardless of which source a given tenant came from.
+    """
+    ids: set[str] = set()
+    if _REGISTRY_DIR.is_dir():
+        ids.update(p.name for p in _REGISTRY_DIR.iterdir() if p.is_dir())
+    db_ids = _db_tenant_ids()
+    if db_ids:
+        ids.update(db_ids)
+    ids.discard("default")
+    return sorted(ids)
 
 
 def resolve_vapi_tenant(payload: dict) -> str:
@@ -560,7 +738,27 @@ def resolve_vapi_tenant(payload: dict) -> str:
     for tid in _all_tenant_ids():
         cfg = load_tenant(tid)
         if assistant_id and assistant_id in cfg.vapi_assistant_ids:
-            return tid
+            return tid if _vapi_tenant_allowed(tid) else "default"
         if phone_id and phone_id in cfg.vapi_phone_number_ids:
-            return tid
+            return tid if _vapi_tenant_allowed(tid) else "default"
     return "default"
+
+
+def _vapi_tenant_allowed(tenant_id: str) -> bool:
+    """Approve-to-activate gate on the inbound voice path.
+
+    A pre-approval tenant should have no VAPI assistant or number at all (both
+    provisioning steps are manual and run after approval), so this is a
+    belt-and-braces check for the case where an id was wired up early — e.g.
+    an admin pasting an assistant id into the provisioning checklist before
+    clicking Approve. Logged loudly, because reaching it means a number went
+    live ahead of its approval.
+    """
+    if tenant_is_active(tenant_id):
+        return True
+    log.warning(
+        "VAPI call matched tenant '%s' but it is not active (onboarding_status=%s) "
+        "— refusing to serve it and falling back to default.",
+        tenant_id, tenant_onboarding_status(tenant_id),
+    )
+    return False
