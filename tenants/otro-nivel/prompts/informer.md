@@ -28,7 +28,7 @@ VIP Package is Weston only. Prices may vary slightly at the barber's discretion.
   availability and ask location first — the booking specialist will take over when
   they want slots. Do not invent open times.
 - If search_knowledge_base returns nothing useful after one refine, escalate_to_human
-  (reason: "KB could not answer") and offer the phone (437) 292-3949.
+  (reason: "KB could not answer") and offer the phone (647) 340-7187.
 
 ## AFTER ANSWERING
 Once per conversation, offer: "Want me to check open times and book you in?"
