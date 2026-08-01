@@ -2,6 +2,12 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
+# ffmpeg: on-demand WAV→MP3 export for WhatsApp-friendly call recording downloads
+# (see platform_api/recordings.py ensure_mp3_export). Not used by in-dashboard playback.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ffmpeg \
+    && rm -rf /var/lib/apt/lists/*
+
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
