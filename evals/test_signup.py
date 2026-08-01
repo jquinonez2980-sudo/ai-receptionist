@@ -46,6 +46,14 @@ class FakeResult:
         row = self._rows[0]
         return row[0] if isinstance(row, tuple) else row
 
+    def one(self):
+        """Mirrors SQLAlchemy: raises when there is no row, so a handler that
+        assumes RETURNING produced something fails in tests the same way it
+        would in production."""
+        if not self._rows:
+            raise AssertionError("one() on an empty result")
+        return self._rows[0]
+
     def mappings(self):
         return self
 

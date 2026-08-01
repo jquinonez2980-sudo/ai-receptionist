@@ -25,15 +25,23 @@
 #     KB entry is still created from the extracted text even if R2 is
 #     unconfigured or the archive call fails).
 #
-# Dashboard-managed entries live under a dedicated tenants/<id>/kb/dashboard/
-# subfolder, one small .md file per entry (filename = entry id), kept
-# separate from the hand-authored onboarding docs (01_about.md, 02_services.md,
-# ...) so a tenant can never accidentally delete those through this API — this
-# endpoint only ever touches files it created itself. PDF-derived entries live
-# one level deeper, tenants/<id>/kb/dashboard/pdf/ — still covered by the
-# index's recursive glob, but naturally excluded from the plain-text/FAQ list
-# (kb/dashboard/*.md is non-recursive) and from other_docs_count (still a
-# descendant of kb/dashboard/).
+# STORAGE (changed in alembic 0007 — this fixed a data-loss bug):
+# Dashboard-managed entries live in the kb_entries Postgres table, NOT on
+# disk. They previously lived under tenants/<id>/kb/dashboard/*.md, which is
+# inside the container's writable layer; the ai-receptionist service has no
+# Railway volume, so every deploy silently deleted them while the manager
+# carried on looking like it worked. Verified before migrating: all 11
+# non-default tenants had 0 entries and 0 PDFs, so nothing needed rescuing.
+#
+# The hand-authored onboarding docs (01_about.md, 02_services.md, ...) stay on
+# disk under tenants/<id>/kb/. They are git-tracked, ship with the image, and
+# were never at risk. This API never touches them — it only ever reads/writes
+# its own kb_entries rows, so a tenant cannot delete them through the
+# dashboard. They are surfaced here purely as other_docs_count.
+#
+# Retrieval reads BOTH: tools._build_kb_index() embeds the git-tracked files
+# union the tenant's kb_entries rows, and folds the DB content into the index
+# hash so an edit rebuilds correctly.
 
 from __future__ import annotations
 
@@ -42,7 +50,6 @@ import logging
 import re
 import tempfile
 import uuid
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -59,7 +66,6 @@ _MAX_ANSWER_LEN = 4000
 _MAX_QUESTION_LEN = 300
 _MAX_ENTRIES = 200
 _ENTRY_ID_RE = re.compile(r"^[0-9a-f]{32}$")
-_PARSE_QA_RE = re.compile(r"^\*\*Q: (.+?)\*\*\s*\nA: ([\s\S]*)$")
 
 
 # 4MB, not the 10-20MB one might expect: uploads route through the same
@@ -75,37 +81,70 @@ _MAX_PDF_TEXT_CHARS = 200_000  # ~40-50 pages of text; plenty for a KB doc
 _MAX_PDFS = 20  # separate, lower cap than _MAX_ENTRIES — PDFs are heavier to embed
 
 
+# ── storage: kb_entries (Postgres) — see the STORAGE note in the header ────
+
+
+def _db():
+    """Engine, or 503. Fail closed — with the DB down we cannot tell an empty
+    knowledge base from an unreadable one, and answering "you have no entries"
+    would invite a tenant to re-add everything they already have."""
+    from platform_db import get_engine
+
+    engine = get_engine()
+    if engine is None:
+        raise HTTPException(status_code=503, detail="Platform DB not configured.")
+    return engine
+
+
+def _entry_out(row) -> dict:
+    """FAQ row -> the same shape the filesystem version returned."""
+    return {
+        "id": row["id"],
+        "question": row["question"],
+        "answer": row["answer"],
+        "created_at": row["created_at"].isoformat() if row["created_at"] else None,
+    }
+
+
+def _pdf_out(row) -> dict:
+    """PDF row -> the same shape the filesystem version returned. Display-only
+    fields come from `meta`; `source` holds the R2 key when the original was
+    archived."""
+    meta = row["meta"] or {}
+    if isinstance(meta, str):
+        meta = json.loads(meta)
+    return {
+        "id": row["id"],
+        "filename": meta.get("filename") or f"{row['id']}.pdf",
+        "size_bytes": meta.get("size_bytes"),
+        "pages": meta.get("pages"),
+        "truncated": bool(meta.get("truncated")),
+        "has_original": bool(row["source"]),
+        "created_at": row["created_at"].isoformat() if row["created_at"] else None,
+    }
+
+
+def _count_kind(conn, tenant_id: str, kind: str) -> int:
+    from sqlalchemy import text
+
+    return conn.execute(
+        text("SELECT count(*) FROM kb_entries WHERE tenant_id = :tid AND kind = :kind"),
+        {"tid": tenant_id, "kind": kind},
+    ).scalar_one()
+
+
 def _dashboard_dir(tenant_id: str) -> Path:
+    """Retained ONLY so other_docs_count can exclude the legacy directory if a
+    stale one is still present in an image. Nothing writes here any more."""
     from tools import _kb_dir
 
     return _kb_dir(tenant_id) / "dashboard"
 
 
-def _entry_path(tenant_id: str, entry_id: str) -> Path:
-    return _dashboard_dir(tenant_id) / f"{entry_id}.md"
-
-
-def _render_entry(question: Optional[str], answer: str) -> str:
-    """Same '**Q: ... **\\nA: ...' shape the hand-authored FAQ docs already
-    use (see tenants/*/kb/*_faq.md) — new entries read naturally alongside
-    the existing ones, and this format round-trips cleanly in _parse_entry."""
-    if question:
-        return f"**Q: {question}**\nA: {answer}\n"
-    return f"{answer}\n"
-
-
-def _parse_entry(path: Path) -> dict:
-    text = path.read_text(encoding="utf-8").strip()
-    m = _PARSE_QA_RE.match(text)
-    question = m.group(1) if m else None
-    answer = m.group(2) if m else text
-    created_at = datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc).isoformat()
-    return {
-        "id": path.stem,
-        "question": question,
-        "answer": answer,
-        "created_at": created_at,
-    }
+# NOTE: the "**Q: ...**\nA: ..." rendering that used to live here now happens
+# in tools._kb_db_entries(), at the point the corpus is assembled for
+# embedding — the same shape the hand-authored *_faq.md files use, so a
+# dashboard entry reads identically to a git-tracked one once retrieved.
 
 
 def _reject_default(tenant_id: str) -> None:
@@ -116,40 +155,47 @@ def _reject_default(tenant_id: str) -> None:
         )
 
 
-def _pdf_dir(tenant_id: str) -> Path:
-    return _dashboard_dir(tenant_id) / "pdf"
+def _validate_entry_body(question: Optional[str], answer: str) -> tuple[Optional[str], str]:
+    """Shared by add and edit so the two can't drift on limits."""
+    answer = (answer or "").strip()
+    if not answer:
+        raise HTTPException(status_code=400, detail="answer is required")
+    if len(answer) > _MAX_ANSWER_LEN:
+        raise HTTPException(
+            status_code=400, detail=f"answer must be at most {_MAX_ANSWER_LEN} characters"
+        )
+    q = (question or "").strip() or None
+    if q and len(q) > _MAX_QUESTION_LEN:
+        raise HTTPException(
+            status_code=400, detail=f"question must be at most {_MAX_QUESTION_LEN} characters"
+        )
+    return q, answer
 
 
-def _pdf_md_path(tenant_id: str, entry_id: str) -> Path:
-    return _pdf_dir(tenant_id) / f"{entry_id}.md"
+def _publish(tenant_id: str) -> None:
+    """Make a write visible to retrieval.
 
+    Drops this process's FAISS cache; the next search_knowledge_base call
+    recomputes the corpus hash (which now covers kb_entries — see
+    tools._kb_content_hash) and re-embeds. Deliberately best-effort: the row is
+    already committed, and a failure here means the edit goes live at the next
+    rebuild rather than immediately. Never fail a successful write over it.
+    """
+    try:
+        from tools import invalidate_kb_index
 
-def _pdf_meta_path(tenant_id: str, entry_id: str) -> Path:
-    return _pdf_dir(tenant_id) / f"{entry_id}.json"
+        invalidate_kb_index(tenant_id)
+    except Exception as e:
+        log.warning(
+            "Tenant '%s': KB cache invalidation failed (%s: %s) — the entry is "
+            "saved and will be picked up on the next index rebuild.",
+            tenant_id, type(e).__name__, e,
+        )
 
 
 def _pdf_r2_key(tenant_id: str, entry_id: str) -> str:
+    """Unchanged — R2 keys for already-archived originals must stay stable."""
     return f"knowledge-pdfs/{tenant_id}/{entry_id}.pdf"
-
-
-def _parse_pdf_entry(md_path: Path) -> dict:
-    meta: dict = {}
-    meta_path = md_path.with_suffix(".json")
-    if meta_path.exists():
-        try:
-            meta = json.loads(meta_path.read_text(encoding="utf-8"))
-        except Exception:
-            meta = {}
-    created_at = datetime.fromtimestamp(md_path.stat().st_mtime, tz=timezone.utc).isoformat()
-    return {
-        "id": md_path.stem,
-        "filename": meta.get("filename") or f"{md_path.stem}.pdf",
-        "size_bytes": meta.get("size_bytes"),
-        "pages": meta.get("pages"),
-        "truncated": bool(meta.get("truncated")),
-        "has_original": bool(meta.get("r2_key")),
-        "created_at": created_at,
-    }
 
 
 class KnowledgeEntryCreate(BaseModel):
@@ -165,40 +211,36 @@ class KnowledgeTestQuery(BaseModel):
 def platform_list_knowledge(request: Request) -> dict:
     """List the tenant's dashboard-managed KB entries, newest first.
 
-    Sync `def` on purpose (FastAPI threadpool) — blocking filesystem reads.
+    Sync `def` on purpose (FastAPI threadpool) — blocking SQLAlchemy query.
     """
     verify_platform_secret(request)
     tenant_id = require_tenant(request)
     _reject_default(tenant_id)
 
+    from sqlalchemy import text
+
     from tools import _kb_dir
 
-    kb_dir = _kb_dir(tenant_id)
-    dash_dir = _dashboard_dir(tenant_id)
+    engine = _db()
+    with engine.connect() as conn:
+        rows = conn.execute(
+            text(
+                "SELECT id, kind, question, answer, source, meta, created_at "
+                "FROM kb_entries WHERE tenant_id = :tid "
+                "ORDER BY created_at DESC"
+            ),
+            {"tid": tenant_id},
+        ).mappings().all()
 
-    entries = []
-    if dash_dir.is_dir():
-        files = sorted(dash_dir.glob("*.md"), key=lambda p: p.stat().st_mtime, reverse=True)
-        for p in files:
-            try:
-                entries.append(_parse_entry(p))
-            except Exception as e:
-                log.warning("Knowledge entry %s unreadable, skipping: %s", p, e)
-
-    pdfs = []
-    pdf_dir = _pdf_dir(tenant_id)
-    if pdf_dir.is_dir():
-        files = sorted(pdf_dir.glob("*.md"), key=lambda p: p.stat().st_mtime, reverse=True)
-        for p in files:
-            try:
-                pdfs.append(_parse_pdf_entry(p))
-            except Exception as e:
-                log.warning("PDF entry %s unreadable, skipping: %s", p, e)
+    entries = [_entry_out(r) for r in rows if r["kind"] == "faq"]
+    pdfs = [_pdf_out(r) for r in rows if r["kind"] == "pdf"]
 
     # Onboarding-authored docs (01_about.md, ...) aren't editable here — just
-    # surfaced as a count so the tenant knows Esmi also draws on those.
-    # dash_dir appears in a PDF entry's .parents too (kb/dashboard/pdf/x.md),
-    # so PDFs are correctly excluded from this count already.
+    # surfaced as a count so the tenant knows Esmi also draws on those. These
+    # are git-tracked and ship with the image, so they are the one part of the
+    # KB that was never at risk from the ephemeral-disk bug.
+    kb_dir = _kb_dir(tenant_id)
+    dash_dir = _dashboard_dir(tenant_id)
     other_docs_count = 0
     if kb_dir.is_dir():
         other_docs_count = sum(
@@ -215,45 +257,81 @@ def platform_list_knowledge(request: Request) -> dict:
 
 @router.post("/platform/knowledge")
 def platform_add_knowledge(body: KnowledgeEntryCreate, request: Request) -> dict:
-    """Add one FAQ/text entry, written as its own .md file, then invalidate
-    the in-process KB cache so it's searchable immediately (no redeploy)."""
+    """Add one FAQ/text entry, then invalidate the in-process KB cache so it's
+    searchable immediately (no redeploy)."""
     verify_platform_secret(request)
     tenant_id = require_tenant(request)
     _reject_default(tenant_id)
 
-    answer = body.answer.strip()
-    if not answer:
-        raise HTTPException(status_code=400, detail="answer is required")
-    if len(answer) > _MAX_ANSWER_LEN:
-        raise HTTPException(
-            status_code=400, detail=f"answer must be at most {_MAX_ANSWER_LEN} characters"
-        )
-    question = (body.question or "").strip() or None
-    if question and len(question) > _MAX_QUESTION_LEN:
-        raise HTTPException(
-            status_code=400, detail=f"question must be at most {_MAX_QUESTION_LEN} characters"
-        )
+    question, answer = _validate_entry_body(body.question, body.answer)
 
-    dash_dir = _dashboard_dir(tenant_id)
-    dash_dir.mkdir(parents=True, exist_ok=True)
-    existing = list(dash_dir.glob("*.md"))
-    if len(existing) >= _MAX_ENTRIES:
-        raise HTTPException(
-            status_code=400,
-            detail=f"This tenant already has {_MAX_ENTRIES} knowledge entries — "
-            "the self-serve limit. Delete one before adding another.",
-        )
+    from sqlalchemy import text
 
+    engine = _db()
     entry_id = uuid.uuid4().hex
-    path = _entry_path(tenant_id, entry_id)
-    path.write_text(_render_entry(question, answer), encoding="utf-8")
+    with engine.begin() as conn:
+        if _count_kind(conn, tenant_id, "faq") >= _MAX_ENTRIES:
+            raise HTTPException(
+                status_code=400,
+                detail=f"This tenant already has {_MAX_ENTRIES} knowledge entries — "
+                "the self-serve limit. Delete one before adding another.",
+            )
+        row = conn.execute(
+            text(
+                "INSERT INTO kb_entries (id, tenant_id, kind, question, answer) "
+                "VALUES (:id, :tid, 'faq', :q, :a) "
+                "RETURNING id, question, answer, created_at"
+            ),
+            {"id": entry_id, "tid": tenant_id, "q": question, "a": answer},
+        ).mappings().one()
+        entry = _entry_out(row)
 
-    from tools import invalidate_kb_index
-
-    invalidate_kb_index(tenant_id)
+    _publish(tenant_id)
     log.info("Tenant '%s': knowledge entry %s added.", tenant_id, entry_id)
 
-    return {"tenant_id": tenant_id, "entry": _parse_entry(path)}
+    return {"tenant_id": tenant_id, "entry": entry}
+
+
+@router.put("/platform/knowledge/{entry_id}")
+def platform_update_knowledge(
+    entry_id: str, body: KnowledgeEntryCreate, request: Request
+) -> dict:
+    """Edit one FAQ/text entry in place.
+
+    Scoped by tenant_id as well as id: the id alone is a uuid and unguessable,
+    but isolation must not rest on that. PDF rows are not editable — their text
+    comes from the uploaded file, so changing it here would make the entry
+    disagree with the original archived in R2.
+    """
+    verify_platform_secret(request)
+    tenant_id = require_tenant(request)
+    _reject_default(tenant_id)
+
+    if not _ENTRY_ID_RE.match(entry_id):
+        raise HTTPException(status_code=400, detail="Invalid entry id")
+
+    question, answer = _validate_entry_body(body.question, body.answer)
+
+    from sqlalchemy import text
+
+    engine = _db()
+    with engine.begin() as conn:
+        row = conn.execute(
+            text(
+                "UPDATE kb_entries SET question = :q, answer = :a, updated_at = now() "
+                "WHERE id = :id AND tenant_id = :tid AND kind = 'faq' "
+                "RETURNING id, question, answer, created_at"
+            ),
+            {"id": entry_id, "tid": tenant_id, "q": question, "a": answer},
+        ).mappings().first()
+        if row is None:
+            raise HTTPException(status_code=404, detail="Entry not found")
+        entry = _entry_out(row)
+
+    _publish(tenant_id)
+    log.info("Tenant '%s': knowledge entry %s edited.", tenant_id, entry_id)
+
+    return {"tenant_id": tenant_id, "entry": entry}
 
 
 @router.post("/platform/knowledge/pdf")
@@ -285,14 +363,14 @@ def platform_upload_pdf(request: Request, file: UploadFile = File(...)) -> dict:
             detail=f"PDF must be at most {_MAX_PDF_BYTES // (1024 * 1024)} MB",
         )
 
-    pdf_dir = _pdf_dir(tenant_id)
-    pdf_dir.mkdir(parents=True, exist_ok=True)
-    if len(list(pdf_dir.glob("*.md"))) >= _MAX_PDFS:
-        raise HTTPException(
-            status_code=400,
-            detail=f"This tenant already has {_MAX_PDFS} uploaded PDFs — the self-serve "
-            "limit. Delete one before adding another.",
-        )
+    engine = _db()
+    with engine.connect() as conn:
+        if _count_kind(conn, tenant_id, "pdf") >= _MAX_PDFS:
+            raise HTTPException(
+                status_code=400,
+                detail=f"This tenant already has {_MAX_PDFS} uploaded PDFs — the self-serve "
+                "limit. Delete one before adding another.",
+            )
 
     # PyPDFLoader (pypdf-backed) needs a real file path, not raw bytes.
     from langchain_community.document_loaders import PyPDFLoader
@@ -319,9 +397,6 @@ def platform_upload_pdf(request: Request, file: UploadFile = File(...)) -> dict:
         text = text[:_MAX_PDF_TEXT_CHARS]
 
     entry_id = uuid.uuid4().hex
-    md_path = _pdf_md_path(tenant_id, entry_id)
-    md_path.write_text(text, encoding="utf-8")
-
     r2_key = None
     try:
         from platform_api.recordings import _bucket, _get_client, r2_configured
@@ -340,36 +415,51 @@ def platform_upload_pdf(request: Request, file: UploadFile = File(...)) -> dict:
             entry_id, type(e).__name__, e,
         )
 
-    _pdf_meta_path(tenant_id, entry_id).write_text(
-        json.dumps(
+    # The extracted text is the thing retrieval actually reads, so it goes in
+    # Postgres alongside FAQ entries. `source` is the R2 key for the original
+    # (null when the archive failed or R2 is unconfigured — fail-soft, the
+    # entry is still useful); `meta` carries the display-only fields.
+    from sqlalchemy import text as _sql
+
+    with engine.begin() as conn:
+        row = conn.execute(
+            _sql(
+                "INSERT INTO kb_entries (id, tenant_id, kind, answer, source, meta) "
+                "VALUES (:id, :tid, 'pdf', :a, :src, CAST(:meta AS jsonb)) "
+                "RETURNING id, source, meta, created_at"
+            ),
             {
-                "filename": filename,
-                "size_bytes": len(content),
-                "pages": len(pages),
-                "truncated": truncated,
-                "r2_key": r2_key,
-            }
-        ),
-        encoding="utf-8",
-    )
+                "id": entry_id,
+                "tid": tenant_id,
+                "a": text,
+                "src": r2_key,
+                "meta": json.dumps(
+                    {
+                        "filename": filename,
+                        "size_bytes": len(content),
+                        "pages": len(pages),
+                        "truncated": truncated,
+                    }
+                ),
+            },
+        ).mappings().one()
+        entry = _pdf_out(row)
 
-    from tools import invalidate_kb_index
-
-    invalidate_kb_index(tenant_id)
+    _publish(tenant_id)
     log.info(
         "Tenant '%s': PDF %s uploaded (%s, %d pages, %d chars%s).",
         tenant_id, entry_id, filename, len(pages), len(text), " truncated" if truncated else "",
     )
 
-    return {"tenant_id": tenant_id, "entry": _parse_pdf_entry(md_path)}
+    return {"tenant_id": tenant_id, "entry": entry}
 
 
 @router.delete("/platform/knowledge/{entry_id}")
 def platform_delete_knowledge(entry_id: str, request: Request) -> dict:
-    """Delete one dashboard-managed entry — text/FAQ or PDF-derived, ids never
-    collide between the two — then invalidate the KB cache. A PDF entry also
-    best-effort deletes its R2-archived original; a failure there still
-    removes the local KB entry (R2 is reference-only, never load-bearing)."""
+    """Delete one dashboard-managed entry — FAQ or PDF-derived — then
+    invalidate the KB cache. A PDF entry also best-effort deletes its
+    R2-archived original; a failure there still removes the row (R2 is
+    reference-only and never read by retrieval)."""
     verify_platform_secret(request)
     tenant_id = require_tenant(request)
     _reject_default(tenant_id)
@@ -377,38 +467,35 @@ def platform_delete_knowledge(entry_id: str, request: Request) -> dict:
     if not _ENTRY_ID_RE.match(entry_id):
         raise HTTPException(status_code=400, detail="Invalid entry id")
 
-    text_path = _entry_path(tenant_id, entry_id)
-    pdf_path = _pdf_md_path(tenant_id, entry_id)
+    from sqlalchemy import text
 
-    if text_path.exists():
-        text_path.unlink()
-    elif pdf_path.exists():
-        meta_path = _pdf_meta_path(tenant_id, entry_id)
-        r2_key = None
-        if meta_path.exists():
-            try:
-                r2_key = json.loads(meta_path.read_text(encoding="utf-8")).get("r2_key")
-            except Exception:
-                pass
-            meta_path.unlink(missing_ok=True)
-        pdf_path.unlink()
-        if r2_key:
-            try:
-                from platform_api.recordings import _bucket, _get_client, r2_configured
-
-                if r2_configured():
-                    _get_client().delete_object(Bucket=_bucket(), Key=r2_key)
-            except Exception as e:
-                log.warning(
-                    "PDF %s: R2 delete failed (%s: %s) — local entry removed anyway.",
-                    entry_id, type(e).__name__, e,
-                )
-    else:
+    engine = _db()
+    with engine.begin() as conn:
+        # DELETE ... RETURNING: one statement, and scoping by tenant_id means a
+        # valid id from another tenant deletes nothing and 404s.
+        row = conn.execute(
+            text(
+                "DELETE FROM kb_entries WHERE id = :id AND tenant_id = :tid "
+                "RETURNING kind, source"
+            ),
+            {"id": entry_id, "tid": tenant_id},
+        ).mappings().first()
+    if row is None:
         raise HTTPException(status_code=404, detail="Entry not found")
 
-    from tools import invalidate_kb_index
+    if row["kind"] == "pdf" and row["source"]:
+        try:
+            from platform_api.recordings import _bucket, _get_client, r2_configured
 
-    invalidate_kb_index(tenant_id)
+            if r2_configured():
+                _get_client().delete_object(Bucket=_bucket(), Key=row["source"])
+        except Exception as e:
+            log.warning(
+                "PDF %s: R2 delete failed (%s: %s) — entry removed anyway.",
+                entry_id, type(e).__name__, e,
+            )
+
+    _publish(tenant_id)
     log.info("Tenant '%s': knowledge entry %s deleted.", tenant_id, entry_id)
 
     return {"tenant_id": tenant_id, "deleted": entry_id}

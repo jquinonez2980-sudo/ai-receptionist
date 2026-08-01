@@ -44,6 +44,7 @@ from typing import Optional
 from dotenv import load_dotenv
 from langchain_community.document_loaders import DirectoryLoader, TextLoader
 from langchain_community.vectorstores import FAISS
+from langchain_core.documents import Document
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import tool
 from langchain_openai import OpenAIEmbeddings
@@ -570,73 +571,190 @@ def _kb_index_dir(tenant_id: str = "default") -> Path:
     return base / normalize_tenant_id(tenant_id)
 
 
-def _kb_content_hash(src_dir: Path) -> str:
-    """SHA256 over (path, size, mtime) for every .md file. Cheap, correct enough."""
+class _KBUnavailable(Exception):
+    """The kb_entries read failed. Distinct from "this tenant has no rows":
+    the first must not be cached as a knowledge-less index, the second is a
+    perfectly good answer."""
+
+
+def _kb_db_entries(tenant_id: str) -> list[tuple[str, str]]:
+    """Dashboard-managed KB rows as (entry_id, markdown), oldest first.
+
+    Returns [] for the default tenant (Orchelix's KB is git-managed) and for a
+    tenant with no rows. Raises _KBUnavailable if the DB could not answer —
+    callers must NOT treat that as an empty knowledge base.
+
+    Kept here rather than in platform_api so the agent runtime never imports
+    the control plane; this issues its own small query through platform_db.
+    """
+    if tenant_id == "default":
+        return []
+    try:
+        from platform_db import get_engine
+
+        engine = get_engine()
+        if engine is None:
+            # No DATABASE_URL at all — local dev / tests. Git docs only is the
+            # correct, complete answer here, not a degraded one.
+            return []
+        from sqlalchemy import text as _sql
+
+        with engine.connect() as conn:
+            rows = conn.execute(
+                _sql(
+                    "SELECT id, question, answer FROM kb_entries "
+                    "WHERE tenant_id = :tid ORDER BY created_at"
+                ),
+                {"tid": tenant_id},
+            ).all()
+    except Exception as e:
+        raise _KBUnavailable(f"{type(e).__name__}: {e}") from e
+
+    out: list[tuple[str, str]] = []
+    for entry_id, question, answer in rows:
+        # Same shape platform_api/knowledge.py rendered to disk, and the same
+        # shape the hand-authored *_faq.md files use, so a dashboard entry
+        # reads identically to a git-tracked one once retrieved.
+        body = f"**Q: {question}**\nA: {answer}\n" if question else f"{answer}\n"
+        out.append((entry_id, body))
+    return out
+
+
+def _kb_content_hash(src_dir: Path, db_entries: list[tuple[str, str]]) -> str:
+    """SHA256 over the whole corpus — git-tracked files AND DB rows.
+
+    The DB half is essential: without it, adding or editing a dashboard entry
+    wouldn't change the hash, so a process that already had a persisted index
+    would load the stale one and never see the new content.
+
+    Files hash on (path, size, mtime) — cheap, correct enough. DB rows hash on
+    their actual text, since there is no mtime to lean on and an edit can leave
+    the length unchanged.
+    """
     h = hashlib.sha256()
     if not src_dir.exists():
-        return "missing"
-    for p in sorted(src_dir.rglob("*.md")):
-        try:
-            st = p.stat()
-            h.update(str(p.relative_to(src_dir)).encode())
-            h.update(str(st.st_size).encode())
-            h.update(str(int(st.st_mtime)).encode())
-        except Exception:
-            continue
+        h.update(b"missing-src")
+    else:
+        for p in sorted(src_dir.rglob("*.md")):
+            try:
+                st = p.stat()
+                h.update(str(p.relative_to(src_dir)).encode())
+                h.update(str(st.st_size).encode())
+                h.update(str(int(st.st_mtime)).encode())
+            except Exception:
+                continue
+    h.update(b"|db|")
+    for entry_id, body in db_entries:
+        h.update(entry_id.encode())
+        h.update(hashlib.sha256(body.encode("utf-8")).digest())
     return h.hexdigest()
 
 
-def _build_kb_index(tenant_id: str = "default") -> Optional[FAISS]:
+def _build_kb_index(tenant_id: str = "default") -> tuple[Optional[FAISS], bool]:
     """Build (or load from disk) the FAISS index for `tenant_id`.
 
+    Returns (index, degraded). `degraded` is True when the dashboard entries in
+    kb_entries could not be read, so the index covers only the git-tracked
+    docs — the caller must not cache it.
+
+    Corpus is tenants/<id>/kb/**/*.md (ships with the image, survives deploys)
+    UNION the tenant's kb_entries rows (durable in Postgres — they used to live
+    on the container's ephemeral disk and vanished on every deploy).
+
     Strategy:
-      * If `<index_dir>/hash.txt` matches the source folder's content hash,
-        load the existing FAISS index from disk.
-      * Otherwise, re-embed everything, save the index + hash sidecar.
+      * If `<index_dir>/hash.txt` matches the current corpus hash, load the
+        persisted index from disk.
+      * Otherwise re-embed everything and save the index + hash sidecar.
     """
     src = _kb_dir(tenant_id)
-    if not src.exists():
-        log.error(f"KB source dir does not exist: {src}")
-        return None
 
-    cur_hash = _kb_content_hash(src)
+    # Degrade, don't fail: if kb_entries can't be read we still build from the
+    # git-tracked docs so KB search keeps working, but the result is marked
+    # incomplete and is never persisted (see `degraded` below). Losing the
+    # dashboard tier for one request beats taking KB search down entirely.
+    degraded = False
+    try:
+        db_entries = _kb_db_entries(tenant_id)
+    except _KBUnavailable as e:
+        log.error(
+            "KB[%s]: kb_entries unavailable (%s) — building from git-tracked "
+            "docs only. This index will NOT be cached or persisted.",
+            tenant_id, e,
+        )
+        db_entries = []
+        degraded = True
+
+    if not src.exists() and not db_entries:
+        log.error(f"KB source dir does not exist and no DB entries: {src}")
+        return None, degraded
+
+    cur_hash = _kb_content_hash(src, db_entries)
     idx_dir = _kb_index_dir(tenant_id)
     hash_path = idx_dir / "hash.txt"
 
     embeddings = OpenAIEmbeddings()
 
-    # Try load from disk
-    if hash_path.exists() and hash_path.read_text().strip() == cur_hash:
+    # Try load from disk. Skipped when degraded: cur_hash was computed with an
+    # empty DB half, so it could collide with a legitimately-empty-DB hash and
+    # load an index that silently omits the tenant's entries.
+    if not degraded and hash_path.exists() and hash_path.read_text().strip() == cur_hash:
         try:
             log.info(f"KB[{tenant_id}]: loading persisted FAISS index from {idx_dir}.")
             return FAISS.load_local(
                 str(idx_dir), embeddings, allow_dangerous_deserialization=True
-            )
+            ), False
         except Exception as e:
             log.warning(f"KB[{tenant_id}]: failed to load persisted index ({e}); rebuilding.")
 
-    # Rebuild
-    log.info(f"KB[{tenant_id}]: building FAISS index from {src} (this calls OpenAI embeddings).")
-    loader = DirectoryLoader(
-        str(src),
-        glob="**/*.md",
-        loader_cls=TextLoader,
-        loader_kwargs={"encoding": "utf-8"},
+    # Rebuild from git-tracked docs ∪ dashboard entries.
+    log.info(
+        "KB[%s]: building FAISS index from %s (%d db entries) — this calls "
+        "OpenAI embeddings.", tenant_id, src, len(db_entries),
     )
-    docs = loader.load()
+    docs = []
+    if src.exists():
+        loader = DirectoryLoader(
+            str(src),
+            glob="**/*.md",
+            loader_cls=TextLoader,
+            loader_kwargs={"encoding": "utf-8"},
+        )
+        docs = loader.load()
+
+    for entry_id, body in db_entries:
+        docs.append(
+            Document(
+                page_content=body,
+                # Mirrors the file docs' metadata so anything downstream that
+                # reads `source` gets a usable identifier either way.
+                metadata={"source": f"kb_entries/{entry_id}", "entry_id": entry_id},
+            )
+        )
+
     if not docs:
-        log.error(f"KB[{tenant_id}]: no .md docs found in {src}.")
-        return None
+        log.error(f"KB[{tenant_id}]: no .md docs found in {src} and no DB entries.")
+        return None, degraded
 
     splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
     splits = splitter.split_documents(docs)
     vs = FAISS.from_documents(splits, embeddings)
 
+    if degraded:
+        # Serve this request, but leave no trace: no sidecar to match against
+        # later, and _get_kb_index won't cache it either, so the next call
+        # retries the DB instead of running knowledge-less for the life of the
+        # process.
+        log.warning(
+            "KB[%s]: built a DEGRADED index (%d chunks, git docs only) — not persisted.",
+            tenant_id, len(splits),
+        )
+        return vs, True
+
     idx_dir.mkdir(parents=True, exist_ok=True)
     vs.save_local(str(idx_dir))
     hash_path.write_text(cur_hash)
     log.info(f"KB[{tenant_id}]: index built ({len(splits)} chunks) and saved to {idx_dir}.")
-    return vs
+    return vs, False
 
 
 def _get_kb_index(tenant_id: str = "default") -> Optional[FAISS]:
@@ -646,8 +764,12 @@ def _get_kb_index(tenant_id: str = "default") -> Optional[FAISS]:
     with _KB_LOCK:
         if tenant_id in _KB_CACHE:
             return _KB_CACHE[tenant_id]
-        vs = _build_kb_index(tenant_id)
-        if vs is not None:
+        vs, degraded = _build_kb_index(tenant_id)
+        # A degraded index is missing the tenant's dashboard entries. Serve it
+        # for this request, but never cache it — caching would leave the agent
+        # answering without that knowledge for the life of the process, long
+        # after the DB recovered.
+        if vs is not None and not degraded:
             _KB_CACHE[tenant_id] = vs
         return vs
 
