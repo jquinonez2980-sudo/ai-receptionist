@@ -26,6 +26,18 @@
 # because a new location has no calendar_id and calendar wiring is not
 # self-serve. Services have no such wiring dependency, so a PUT may freely
 # add, edit, or remove services.
+#
+# business_tz IS editable, but it is the highest-consequence field here and the
+# UI treats it as such. It is not a display string: tools.py reads it to
+# compute availability (1163), to guard against double-booking (1425) and as
+# the timeZone written onto every Google Calendar event (1482); api.py:938 uses
+# it for booking end-time math and overview.py:117 for after-hours bucketing.
+# Because business_hours are stored as CLOCK TIMES, changing the zone
+# reinterprets them — 9-17 means something different afterwards. Already-booked
+# calendar events keep their absolute times and do not move, so a mid-week
+# change leaves old and new appointments following different rules. The
+# dashboard requires an explicit confirmation before saving one; see the amber
+# panel in app/dashboard/settings/SettingsForm.tsx.
 
 from __future__ import annotations
 
@@ -52,6 +64,7 @@ _MAX_VERSIONS = 100
 # used to build the one-line "what changed" summary.
 _DIFF_LABELS = {
     "company_name": "business name",
+    "business_tz": "timezone",
     "greeting": "greeting",
     "transfer_phone": "transfer number",
     "business_hours": "hours",
@@ -90,6 +103,7 @@ class EmailsUpdate(BaseModel):
 
 class ConfigUpdate(BaseModel):
     company_name: Optional[str] = None
+    business_tz: Optional[str] = None
     greeting: Optional[str] = None
     transfer_phone: Optional[str] = None
     business_hours: Optional[list[int]] = None
@@ -131,6 +145,7 @@ def _service_out(svc: ServiceConfig) -> dict:
 def _safe_config_out(cfg: TenantConfig) -> dict:
     return {
         "company_name": cfg.company_name,
+        "business_tz": cfg.business_tz,
         "greeting": cfg.greeting,
         "transfer_phone": cfg.transfer_phone,
         "business_hours": list(cfg.business_hours),
@@ -210,6 +225,23 @@ def _apply_update(raw: dict, body: ConfigUpdate) -> dict:
         if not name or len(name) > _MAX_NAME_LEN:
             raise HTTPException(status_code=400, detail="company_name must be 1-200 characters")
         out["company_name"] = name
+
+    if body.business_tz is not None:
+        # Same validation and message as signup.py's _validate_signup: a bad
+        # zone must fail here as a clear 400 on the field that caused it, not
+        # later as an opaque pytz error on the tenant's next booking.
+        tz = body.business_tz.strip()
+        from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+        try:
+            ZoneInfo(tz)
+        except (ZoneInfoNotFoundError, ValueError, KeyError):
+            raise HTTPException(
+                status_code=400,
+                detail=f"business_tz '{body.business_tz}' is not a known IANA timezone "
+                "(e.g. America/Toronto).",
+            )
+        out["business_tz"] = tz
 
     if body.greeting is not None:
         greeting = body.greeting.strip()
