@@ -19,6 +19,7 @@ from platform_api.leads import router as leads_router
 from platform_api.onboarding import router as onboarding_router
 from platform_api.overview import router as overview_router
 from platform_api.signup import router as signup_router
+from platform_api.tenant_status import router as tenant_status_router
 from platform_api.usage import router as usage_router
 from platform_api.vapi_webhook import router as vapi_webhook_router
 
@@ -33,6 +34,7 @@ __all__ = [
     "onboarding_router",
     "overview_router",
     "signup_router",
+    "tenant_status_router",
     "usage_router",
     "vapi_webhook_router",
 ]

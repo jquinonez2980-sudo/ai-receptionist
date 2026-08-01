@@ -281,13 +281,19 @@ def seed_config(body: SignupRequest, tenant_id: str) -> dict:
     }
 
 
-def _assert_no_pending_signup(conn, user_id: str) -> None:
-    """One in-flight signup per Clerk user.
+# Onboarding states that count as "this user already has an application in
+# flight". Rejected and active are excluded: someone who was declined can try
+# again, and an existing customer can legitimately onboard a second business.
+PENDING_SIGNUP_STATUSES = ("draft", "submitted", "provisioning", "review")
 
-    The durable half of the abuse controls (the in-process throttle above
-    doesn't survive a restart or span replicas). Rejected and active tenants
-    don't count — someone who was declined can try again, and an existing
-    customer can legitimately onboard a second business.
+
+def pending_signup_tenant_id(conn, user_id: str) -> Optional[str]:
+    """The tenant id of this user's in-flight application, or None.
+
+    Shared by _assert_no_pending_signup (the write guard) and GET
+    /platform/signup/mine (the resume lookup) so the two can never disagree
+    about what "already applied" means — a drift there would show the wizard a
+    "start fresh" screen that then 409s on submit.
     """
     from sqlalchemy import text
 
@@ -297,16 +303,27 @@ def _assert_no_pending_signup(conn, user_id: str) -> None:
             SELECT t.id FROM tenants t
             JOIN provisioning_jobs j ON j.tenant_id = t.id
             WHERE j.created_by = :uid
-              AND t.onboarding_status IN ('draft', 'submitted', 'provisioning', 'review')
+              AND t.onboarding_status = ANY(:statuses)
+            ORDER BY j.created_at DESC
             LIMIT 1
             """
         ),
-        {"uid": user_id},
+        {"uid": user_id, "statuses": list(PENDING_SIGNUP_STATUSES)},
     ).first()
-    if row is not None:
+    return row[0] if row is not None else None
+
+
+def _assert_no_pending_signup(conn, user_id: str) -> None:
+    """One in-flight signup per Clerk user.
+
+    The durable half of the abuse controls (the in-process throttle above
+    doesn't survive a restart or span replicas).
+    """
+    existing = pending_signup_tenant_id(conn, user_id)
+    if existing is not None:
         raise HTTPException(
             status_code=409,
-            detail=f"You already have a business ('{row[0]}') waiting for approval. "
+            detail=f"You already have a business ('{existing}') waiting for approval. "
             "Contact Orchelix if you need to add another.",
         )
 
@@ -321,6 +338,81 @@ def _engine_or_503():
 
 
 # ── routes ────────────────────────────────────────────────────────────────────
+
+
+@router.get("/platform/signup/mine")
+def signup_mine(request: Request) -> dict:
+    """This user's in-flight application, for resume + the pending screen.
+
+    Why this exists: the signup sequence is three calls (reserve tenant ->
+    create Clerk org -> record it), and a failure at step 2 or 3 leaves a real
+    tenant row behind. Retrying the wizard would then hit
+    _assert_no_pending_signup's 409 with no way forward. This is the recovery
+    path — it tells the wizard "you already applied, here's where it stopped".
+
+    DELIBERATELY NOT the admin shape (platform_api/onboarding.py's
+    _tenant_out): the per-step `detail` blobs carry internal operator notes
+    ("buy a local number... it costs money") and `error` carries raw upstream
+    messages. Neither belongs in front of the customer. This returns a coarse
+    resolved/total count plus the one flag the wizard actually acts on.
+    """
+    verify_platform_secret(request)
+    user_id = require_signup_user(request)
+
+    engine = _engine_or_503()
+
+    from sqlalchemy import text
+
+    with engine.connect() as conn:
+        tenant_id = pending_signup_tenant_id(conn, user_id)
+        if tenant_id is None:
+            return {"tenant": None, "can_start_new": True, "needs_clerk_org": False}
+
+        row = conn.execute(
+            text(
+                """
+                SELECT id, company_name, business_tz, onboarding_status,
+                       requested_plan, clerk_org_id, contact_name, contact_email,
+                       contact_phone, submitted_at, rejected_reason
+                FROM tenants WHERE id = :tid
+                """
+            ),
+            {"tid": tenant_id},
+        ).mappings().first()
+        if row is None:  # raced with a delete; treat as "no application"
+            return {"tenant": None, "can_start_new": True, "needs_clerk_org": False}
+
+        job = prov.latest_job(conn, tenant_id)
+
+    steps = (job or {}).get("steps") or []
+    unresolved = set(prov.unresolved_steps(steps))
+    # The resume trigger: the org was never created (or creation failed), so
+    # the wizard should re-run steps 2-3 rather than starting over.
+    needs_clerk_org = not row["clerk_org_id"] and prov.STEP_CLERK_ORG in unresolved
+
+    return {
+        "tenant": {
+            "tenant_id": row["id"],
+            "company_name": row["company_name"],
+            "business_tz": row["business_tz"],
+            "onboarding_status": row["onboarding_status"],
+            "requested_plan": row["requested_plan"],
+            "clerk_org_id": row["clerk_org_id"],
+            "contact_name": row["contact_name"],
+            "contact_email": row["contact_email"],
+            "contact_phone": row["contact_phone"],
+            "submitted_at": row["submitted_at"].isoformat() if row["submitted_at"] else None,
+            "rejected_reason": row["rejected_reason"],
+        },
+        "job_status": (job or {}).get("status"),
+        "steps_total": len(steps),
+        "steps_resolved": len(steps) - len(unresolved),
+        # Mirrors _assert_no_pending_signup exactly (same helper) — if this
+        # said True while the write guard disagreed, the wizard would offer a
+        # fresh start that 409s on submit.
+        "can_start_new": False,
+        "needs_clerk_org": needs_clerk_org,
+    }
 
 
 @router.get("/platform/signup/slug-check")

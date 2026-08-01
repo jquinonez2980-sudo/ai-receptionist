@@ -151,6 +151,7 @@ from platform_api import (  # noqa: E402
     onboarding_router,
     overview_router,
     signup_router,
+    tenant_status_router,
     usage_router,
     vapi_webhook_router,
 )
@@ -167,6 +168,7 @@ app.include_router(config_router)
 app.include_router(knowledge_router)
 app.include_router(signup_router)
 app.include_router(onboarding_router)
+app.include_router(tenant_status_router)
 
 
 # ── Auth helpers ──────────────────────────────────────────────────────────────
