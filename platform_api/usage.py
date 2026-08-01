@@ -16,11 +16,12 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, HTTPException, Request
 
+from platform_api.call_log import OUTCOMES
 from platform_api.plans import get_plan, usage_status
 from platform_api.security import require_tenant, verify_platform_secret
 from tenants import load_tenant
@@ -28,6 +29,8 @@ from tenants import load_tenant
 log = logging.getLogger(__name__)
 
 router = APIRouter()
+
+WEEKLY_WINDOW_DAYS = 7
 
 
 def compute_tenant_usage(tenant_id: str) -> dict:
@@ -111,10 +114,72 @@ def compute_tenant_usage(tenant_id: str) -> dict:
     }
 
 
+def _weekly_bucket_stats(rows: list, start: datetime, end: datetime) -> dict:
+    """Calls/minutes/outcome-mix for one rolling window, from the same
+    (started_at, duration_sec, outcome) rows overview.py already fetches for
+    its own KPI bucket — kept separate here (not shared) so this endpoint's
+    contract never depends on overview.py's, and vice versa.
+    """
+    calls = 0
+    seconds = 0
+    by_outcome = {o: 0 for o in OUTCOMES}
+    by_outcome["unclassified"] = 0
+    for started_at, duration_sec, outcome in rows:
+        if started_at is None or not (start <= started_at < end):
+            continue
+        calls += 1
+        seconds += duration_sec or 0
+        by_outcome[outcome if outcome in by_outcome else "unclassified"] += 1
+    return {
+        "from": start.isoformat(),
+        "to": end.isoformat(),
+        "calls_answered": calls,
+        "minutes_used": round(seconds / 60.0, 1),
+        "by_outcome": by_outcome,
+    }
+
+
+def compute_tenant_usage_weekly(tenant_id: str, tz: ZoneInfo) -> dict:
+    """Last WEEKLY_WINDOW_DAYS vs the same number of days before that, for
+    the usage page's "this week vs last week" + outcome-mix sections.
+
+    Deliberately separate from compute_tenant_usage() (month-to-date, shared
+    with billing.py/admin.py) — this is its own query so that function's
+    contract never has to change for this addition.
+    """
+    from sqlalchemy import text
+
+    from platform_db import get_engine
+
+    engine = get_engine()
+    if engine is None:
+        raise HTTPException(status_code=503, detail="Platform DB not configured.")
+
+    now = datetime.now(tz)
+    cur_start = now - timedelta(days=WEEKLY_WINDOW_DAYS)
+    prev_start = now - timedelta(days=2 * WEEKLY_WINDOW_DAYS)
+
+    with engine.connect() as conn:
+        rows = conn.execute(
+            text(
+                "SELECT started_at, duration_sec, outcome FROM calls "
+                "WHERE tenant_id = :tid AND started_at >= :prev_start"
+            ),
+            {"tid": tenant_id, "prev_start": prev_start},
+        ).all()
+
+    return {
+        "window_days": WEEKLY_WINDOW_DAYS,
+        "current": _weekly_bucket_stats(rows, cur_start, now),
+        "previous": _weekly_bucket_stats(rows, prev_start, cur_start),
+    }
+
+
 @router.get("/platform/usage")
 def platform_usage(request: Request) -> dict:
     """Tenant usage for the current calendar month: call count, voice
-    minutes, VAPI cost, LLM cost, plan + soft-limit status.
+    minutes, VAPI cost, LLM cost, plan + soft-limit status. Plus a rolling
+    last-7-days-vs-prior-7-days breakdown (calls, minutes, outcome mix).
 
     Sync `def` on purpose (FastAPI threadpool) — blocking SQLAlchemy query,
     same convention as overview.py / calls.py.
@@ -122,6 +187,10 @@ def platform_usage(request: Request) -> dict:
     verify_platform_secret(request)
     tenant_id = require_tenant(request)
     data = compute_tenant_usage(tenant_id)
+    try:
+        tz = ZoneInfo(data["business_tz"])
+    except Exception:
+        tz = ZoneInfo("UTC")
     return {
         "tenant_id": tenant_id,
         "business_tz": data["business_tz"],
@@ -132,4 +201,5 @@ def platform_usage(request: Request) -> dict:
         "cost_vapi": data["cost_vapi"],
         "cost_llm": data["cost_llm"],
         "plan": data["plan"],
+        "weekly": compute_tenant_usage_weekly(tenant_id, tz),
     }
