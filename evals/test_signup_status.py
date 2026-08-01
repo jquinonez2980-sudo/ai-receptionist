@@ -235,10 +235,14 @@ def test_tenant_status_live_tenant(client, monkeypatch):
 
 
 def test_tenant_status_pending_tenant_cannot_serve(client, monkeypatch):
-    monkeypatch.setattr(ts, "tenant_onboarding_status", lambda tid: "review")
+    monkeypatch.setattr(
+        ts, "tenant_state",
+        lambda tid: ts.TenantState(
+            onboarding_status="review", account_status="trial", plan="managed"
+        ),
+    )
     monkeypatch.setattr(ts, "tenant_is_active", lambda tid: False)
     monkeypatch.setattr("platform_db.get_engine", lambda: None)
-    monkeypatch.setattr("tenants.tenant_exists", lambda tid: True)
     body = client.get("/platform/tenant-status", headers=status_headers("acme")).json()
     assert body["onboarding_status"] == "review"
     assert body["can_serve_traffic"] is False
@@ -256,9 +260,14 @@ def test_can_serve_traffic_comes_from_the_runtime_gate(client, monkeypatch):
     assert called == ["acme"]
 
 
-def test_tenant_status_survives_a_plan_lookup_failure(client, monkeypatch):
-    """The banner only needs the cached values; a DB blip must not 500 the
-    dashboard shell."""
+def test_tenant_status_survives_a_db_failure(client, monkeypatch):
+    """A DB blip must not 500 the dashboard shell.
+
+    An on-disk tenant falls back to active/live — deliberately NOT null. A null
+    account_status alongside can_serve_traffic:true would be incoherent, and
+    the banner keys off these fields. `plan` stays null because a tenant with
+    no readable row genuinely has no assigned plan to report.
+    """
     class Boom:
         def connect(self):
             raise RuntimeError("connection reset")
@@ -268,10 +277,41 @@ def test_tenant_status_survives_a_plan_lookup_failure(client, monkeypatch):
     assert r.status_code == 200
     body = r.json()
     assert body["can_serve_traffic"] is True
-    assert body["account_status"] is None and body["plan"] is None
+    assert body["onboarding_status"] == "active"
+    assert body["account_status"] == "live"
+    assert body["plan"] is None
 
 
 def test_tenant_status_unknown_tenant_is_400(client, monkeypatch):
     monkeypatch.setattr("platform_db.get_engine", lambda: None)
     r = client.get("/platform/tenant-status", headers=status_headers("ghost-co"))
     assert r.status_code == 400
+
+
+def test_tenant_status_reports_a_suspended_tenant_as_off_air(client, monkeypatch):
+    """The banner's whole job in the billing case: onboarding says active, but
+    can_serve_traffic must be false so the tenant is told the truth."""
+    monkeypatch.setattr(
+        ts, "tenant_state",
+        lambda tid: ts.TenantState(
+            onboarding_status="active", account_status="suspended", plan="pro"
+        ),
+    )
+    monkeypatch.setattr(ts, "tenant_is_active", lambda tid: False)
+    body = client.get("/platform/tenant-status", headers=status_headers("acme")).json()
+    assert body["onboarding_status"] == "active"
+    assert body["account_status"] == "suspended"
+    assert body["can_serve_traffic"] is False
+    assert body["plan"] == "pro"
+
+
+def test_tenant_status_makes_at_most_two_lookups(client, monkeypatch):
+    """_UNAVAILABLE is never cached, so during an outage each lookup is a real
+    connection attempt against a 5s timeout. Reading every field through its
+    own accessor would turn one page load into four serial timeouts."""
+    calls = []
+    monkeypatch.setattr(
+        "tenants._db_tenant_status", lambda tid: (calls.append(tid), None)[1]
+    )
+    client.get("/platform/tenant-status", headers=status_headers("acme"))
+    assert len(calls) <= 2, f"expected <=2 lifecycle lookups, got {len(calls)}"

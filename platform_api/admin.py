@@ -27,7 +27,7 @@ from pydantic import BaseModel
 from platform_api.plans import PLANS
 from platform_api.security import verify_platform_admin_secret
 from platform_api.usage import compute_tenant_usage
-from tenants import tenant_exists
+from tenants import clear_tenant_cache, tenant_exists
 
 log = logging.getLogger(__name__)
 
@@ -160,6 +160,13 @@ def update_tenant_plan(tenant_id: str, body: PlanUpdate, request: Request) -> di
                 "changed_by": changed_by,
             },
         )
+
+    # account_status is half the traffic gate (tenants.BLOCKING_ACCOUNT_STATUSES),
+    # so this write can take a tenant off the air — it has to land NOW, not at
+    # the next 60s TTL expiry. Without this, suspending a tenant would leave it
+    # answering calls for up to a minute while the dashboard already said
+    # "suspended". Mirrors the same clear in onboarding.py's approve path.
+    clear_tenant_cache(tenant_id)
 
     log.info(
         "Tenant plan changed: tenant=%s %s->%s status=%s->%s by=%s",

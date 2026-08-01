@@ -383,3 +383,49 @@ def test_cannot_reject_an_active_tenant(client, monkeypatch):
                     json={"reason": "changed my mind"}, headers=HEADERS)
     assert r.status_code == 409
     assert conn.sql_containing("UPDATE tenants SET") == []
+
+
+# ── billing status is half the traffic gate ──────────────────────────────────
+
+
+def test_status_write_clears_the_tenant_cache(monkeypatch):
+    """account_status now gates traffic (tenants.BLOCKING_ACCOUNT_STATUSES), so
+    suspending must bite immediately. Without this clear the tenant keeps
+    answering calls for up to the full 60s TTL while the dashboard already
+    shows 'suspended'.
+
+    Builds its own app — this route lives on admin_router, not the onboarding
+    router the shared `client` fixture mounts.
+    """
+    import platform_api.admin as admin
+
+    monkeypatch.setenv("PLATFORM_ADMIN_SECRET", ADMIN_SECRET)
+    cleared = []
+    monkeypatch.setattr(admin, "clear_tenant_cache", lambda tid: cleared.append(tid))
+    monkeypatch.setattr(admin, "compute_tenant_usage", lambda tid: _usage_row())
+    # admin.py reads this row positionally, so it needs tuples — make_conn()
+    # hands back mappings for the onboarding handlers.
+    conn = FakeConn(rules=[("SELECT plan, status FROM tenants", [("managed", "live")])])
+    monkeypatch.setattr("platform_db.get_engine", lambda: FakeEngine(conn))
+    monkeypatch.setattr(admin, "tenant_exists", lambda tid: True)
+
+    app = FastAPI()
+    app.include_router(admin.router)
+    r = TestClient(app).patch(
+        f"/platform/admin/tenants/{TID}/plan",
+        json={"plan": "pro", "status": "suspended"},
+        headers=HEADERS,
+    )
+    assert r.status_code == 200, r.text
+    assert cleared == [TID]
+
+
+def _usage_row():
+    return {
+        "account_status": "suspended", "calls": 0, "minutes": 0.0,
+        "period_start": "2026-07-01", "period_end": "2026-07-31",
+        "plan": {"key": "pro", "label": "Esmi Pro", "included_minutes": 750,
+                 "percent_used": 0, "status": "ok"},
+        "stripe_customer_id": None, "stripe_subscription_id": None,
+        "billing_mode": "managed",
+    }

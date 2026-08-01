@@ -22,11 +22,14 @@ import logging
 from fastapi import APIRouter, Request
 
 from platform_api.security import require_tenant, verify_platform_secret
-from tenants import tenant_is_active, tenant_onboarding_status
+from tenants import TenantState, tenant_is_active, tenant_state
 
 log = logging.getLogger(__name__)
 
 router = APIRouter()
+
+# Stand-in so the plan lookup below doesn't need its own None branch.
+_NO_STATE = TenantState(onboarding_status="", account_status="", plan=None)
 
 
 @router.get("/platform/tenant-status")
@@ -41,38 +44,24 @@ def platform_tenant_status(request: Request) -> dict:
     verify_platform_secret(request)
     tenant_id = require_tenant(request)
 
-    onboarding_status = tenant_onboarding_status(tenant_id)
-    can_serve = tenant_is_active(tenant_id)
-
-    account_status = None
-    plan = None
-    from platform_db import get_engine
-
-    engine = get_engine()
-    if engine is not None:
-        try:
-            from sqlalchemy import text
-
-            with engine.connect() as conn:
-                row = conn.execute(
-                    text("SELECT status, plan FROM tenants WHERE id = :tid"),
-                    {"tid": tenant_id},
-                ).first()
-            if row is not None:
-                account_status, plan = row[0], row[1]
-        except Exception as e:
-            # Non-fatal: the banner only needs onboarding_status /
-            # can_serve_traffic, and those came from the cached tenant lookup
-            # above. A DB blip must not break the dashboard shell.
-            log.warning(
-                "tenant-status: plan/status lookup failed for %s (%s: %s).",
-                tenant_id, type(e).__name__, e,
-            )
+    # Exactly two lookups, both normally served from the 60s cache. This used
+    # to fire a SECOND SELECT for status/plan on every dashboard page load;
+    # those columns now travel with onboarding_status in one cached row.
+    #
+    # Kept to two on purpose: _UNAVAILABLE is deliberately never cached, so
+    # during a DB outage every lookup is a real connection attempt against a
+    # 5s connect_timeout. Reading each field through its own accessor would
+    # turn one page load into four serial timeouts.
+    state = tenant_state(tenant_id) or _NO_STATE
 
     return {
         "tenant_id": tenant_id,
-        "onboarding_status": onboarding_status,
-        "can_serve_traffic": can_serve,
-        "account_status": account_status,
-        "plan": plan,
+        "onboarding_status": state.onboarding_status or None,
+        "account_status": state.account_status or None,
+        # Always from tenant_is_active() — the same function the voice, chat
+        # and booking gates call. Never re-derived from the two fields above,
+        # or the banner could disagree with what the phone actually does.
+        "can_serve_traffic": tenant_is_active(tenant_id),
+        # No fallback: a tenant with no row genuinely has no assigned plan.
+        "plan": state.plan,
     }

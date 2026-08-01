@@ -48,11 +48,27 @@ def _clean_cache():
     clear_tenant_cache()
 
 
+def _state(value):
+    """Normalize a test fixture into a TenantState.
+
+    Accepts a bare onboarding string (billing defaults to 'live' — the common
+    case, and what every pre-billing-gate test meant), or an explicit
+    (onboarding, account) pair for the two-axis tests.
+    """
+    if value is None or value is T._UNAVAILABLE:
+        return value
+    if isinstance(value, T.TenantState):
+        return value
+    if isinstance(value, tuple):
+        return T.TenantState(onboarding_status=value[0], account_status=value[1])
+    return T.TenantState(onboarding_status=value, account_status="live")
+
+
 def _stub_status(monkeypatch, mapping: dict):
     """Point _db_tenant_status at a dict. A missing key means "queried, no row";
     the _UNAVAILABLE sentinel means the DB could not answer."""
     monkeypatch.setattr(
-        T, "_db_tenant_status", lambda tid: mapping.get(tid, None)
+        T, "_db_tenant_status", lambda tid: _state(mapping.get(tid, None))
     )
 
 
@@ -135,7 +151,7 @@ def test_status_is_cached_between_calls(monkeypatch):
 
     def counting(tid):
         calls.append(tid)
-        return ACTIVE_ONBOARDING_STATUS
+        return _state(ACTIVE_ONBOARDING_STATUS)
 
     monkeypatch.setattr(T, "_db_tenant_status", counting)
     tenant_is_active(DB_ONLY)
@@ -228,3 +244,110 @@ def test_vapi_refuses_a_pending_tenant(monkeypatch):
     _stub_status(monkeypatch, {DB_ONLY: "review"})
     _stub_configs(monkeypatch, DB_ONLY)
     assert resolve_vapi_tenant(_vapi_payload("asst_123")) == "default"
+
+
+# ── billing-status half of the traffic gate ──────────────────────────────────
+#
+# The gap this closes: onboarding_status='active' alone used to mean "serves
+# traffic", so an admin could set a tenant to suspended/archived on the
+# Tenants page and it would keep answering the phone.
+
+
+@pytest.mark.parametrize("account_status", ["suspended", "archived"])
+def test_blocking_billing_status_stops_traffic(monkeypatch, account_status):
+    """The whole point of this change."""
+    _stub_status(monkeypatch, {DB_ONLY: (ACTIVE_ONBOARDING_STATUS, account_status)})
+    assert tenant_exists(DB_ONLY), "still exists — dashboard access is preserved"
+    assert not tenant_is_active(DB_ONLY)
+
+
+@pytest.mark.parametrize("account_status", ["trial", "live", "past_due"])
+def test_non_blocking_billing_statuses_keep_serving(monkeypatch, account_status):
+    """Explicitly pinned: past_due must NOT cut a paying business off the air
+    mid-dunning, and a trial is supposed to work."""
+    _stub_status(monkeypatch, {DB_ONLY: (ACTIVE_ONBOARDING_STATUS, account_status)})
+    assert tenant_is_active(DB_ONLY), account_status
+
+
+def test_blocking_status_applies_to_filesystem_tenants_too(monkeypatch):
+    """A row that says suspended beats the mere presence of a directory —
+    otherwise the oldest, most important tenants would be the un-suspendable
+    ones."""
+    _stub_status(monkeypatch, {ON_DISK: (ACTIVE_ONBOARDING_STATUS, "suspended")})
+    assert tenant_exists(ON_DISK)
+    assert not tenant_is_active(ON_DISK)
+
+
+def test_both_axes_must_pass(monkeypatch):
+    """Neither axis alone is sufficient."""
+    cases = {
+        ("active", "live"): True,
+        ("active", "suspended"): False,
+        ("review", "live"): False,
+        ("review", "suspended"): False,
+    }
+    for (onboarding, account), expected in cases.items():
+        clear_tenant_cache()
+        _stub_status(monkeypatch, {DB_ONLY: (onboarding, account)})
+        assert tenant_is_active(DB_ONLY) is expected, (onboarding, account)
+
+
+def test_account_status_accessor(monkeypatch):
+    _stub_status(monkeypatch, {DB_ONLY: (ACTIVE_ONBOARDING_STATUS, "suspended")})
+    assert T.tenant_account_status(DB_ONLY) == "suspended"
+    assert T.tenant_onboarding_status(DB_ONLY) == ACTIVE_ONBOARDING_STATUS
+
+
+def test_missing_row_reports_live_not_blocked(monkeypatch):
+    """Fail-open: a filesystem tenant with no row must not read as suspended."""
+    _stub_status(monkeypatch, {})
+    assert T.tenant_account_status(ON_DISK) == "live"
+    assert tenant_is_active(ON_DISK)
+
+
+def test_db_outage_never_suspends_anyone(monkeypatch):
+    monkeypatch.setattr(T, "_db_tenant_status", lambda tid: T._UNAVAILABLE)
+    assert T.tenant_account_status(ON_DISK) == "live"
+    assert tenant_is_active(ON_DISK)
+    assert tenant_is_active("default")
+
+
+def test_null_columns_do_not_block(monkeypatch):
+    """Defensive: a NULL status must coalesce to live, never to a blocking
+    value that would silently take a tenant off the air."""
+    monkeypatch.setattr(
+        T, "_db_tenant_status",
+        lambda tid: T.TenantState(onboarding_status=ACTIVE_ONBOARDING_STATUS,
+                                  account_status="live"),
+    )
+    assert tenant_is_active(DB_ONLY)
+
+
+def test_default_tenant_is_never_blocked(monkeypatch):
+    """Orchelix's own tenant has no billing row to suspend."""
+    _stub_status(monkeypatch, {"default": (ACTIVE_ONBOARDING_STATUS, "archived")})
+    assert tenant_is_active("default")
+
+
+def test_vapi_refuses_a_suspended_tenant(monkeypatch):
+    monkeypatch.setattr(T, "_db_tenant_ids", lambda: [DB_ONLY])
+    _stub_status(monkeypatch, {DB_ONLY: (ACTIVE_ONBOARDING_STATUS, "suspended")})
+    _stub_configs(monkeypatch, DB_ONLY)
+    assert resolve_vapi_tenant(_vapi_payload("asst_123")) == "default"
+
+
+def test_suspension_takes_effect_after_cache_clear(monkeypatch):
+    """admin.py must clear the cache on a status write — otherwise a suspended
+    tenant keeps answering for up to the full 60s TTL."""
+    _stub_status(monkeypatch, {DB_ONLY: (ACTIVE_ONBOARDING_STATUS, "live")})
+    assert tenant_is_active(DB_ONLY)
+    _stub_status(monkeypatch, {DB_ONLY: (ACTIVE_ONBOARDING_STATUS, "suspended")})
+    assert tenant_is_active(DB_ONLY), "still serving the cached value"
+    clear_tenant_cache(DB_ONLY)
+    assert not tenant_is_active(DB_ONLY), "suspension must bite once cleared"
+
+
+def test_blocking_set_is_exactly_suspended_and_archived():
+    assert T.BLOCKING_ACCOUNT_STATUSES == frozenset({"suspended", "archived"})
+    for keeps_serving in ("trial", "live", "past_due"):
+        assert keeps_serving not in T.BLOCKING_ACCOUNT_STATUSES

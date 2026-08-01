@@ -50,8 +50,8 @@ _REGISTRY_DIR = Path(__file__).parent / "tenants"
 _TENANT_ID_RE = re.compile(r"^[a-z0-9-]{1,64}$")
 
 # Onboarding lifecycle (alembic 0006 — keep in sync with that migration's
-# CHECK constraint). Only ACTIVE_ONBOARDING_STATUS may serve production
-# traffic; the rest are pre-approval states or the terminal 'rejected'.
+# CHECK constraint). Reaching ACTIVE_ONBOARDING_STATUS is NECESSARY but no
+# longer SUFFICIENT to serve traffic — see BLOCKING_ACCOUNT_STATUSES below.
 ONBOARDING_STATUSES = (
     "draft",
     "submitted",
@@ -61,6 +61,21 @@ ONBOARDING_STATUSES = (
     "rejected",
 )
 ACTIVE_ONBOARDING_STATUS = "active"
+
+# Billing lifecycle (tenants.status, alembic 0001) values that take a tenant
+# OFF THE AIR even when onboarding_status is 'active'.
+#
+# This is the second half of the traffic gate. Before it existed, an admin
+# could set a tenant to suspended/archived on the Tenants admin page and it
+# would keep answering calls — the dashboard said one thing and the phone did
+# another.
+#
+# 'past_due' is deliberately NOT here: it usually means a card retry failed,
+# and cutting a paying business's phone line mid-dunning is a business
+# decision with real customer damage, not a sensible technical default.
+# 'trial' obviously keeps serving — that is what a trial is.
+BLOCKING_ACCOUNT_STATUSES = frozenset({"suspended", "archived"})
+DEFAULT_ACCOUNT_STATUS = "live"
 
 # ── Default-tenant (Orchelix) non-secret constants that are NOT already in
 #    tools.py. Pricing / tz / hours / slot come from tools.py at load time.
@@ -243,11 +258,27 @@ _TTL_SECONDS = 60.0
 _cache: dict[str, tuple[TenantConfig, float]] = {}
 _lock = threading.Lock()
 
-# tid → (onboarding_status | None, expiry). None means "queried the DB, this
-# tenant has no row" — a real answer worth caching, distinct from _UNAVAILABLE
-# (below) which is never cached. Same 60s TTL as the config cache so an admin
-# approval goes live within a minute without a redeploy.
-_status_cache: dict[str, tuple[Optional[str], float]] = {}
+@dataclass(frozen=True)
+class TenantState:
+    """The control-plane row fields that decide whether a tenant serves traffic.
+
+    Both lifecycle columns are fetched in ONE query and cached together. They
+    are always read as a pair (the gate needs both), so splitting them would
+    mean two round trips to answer one question — which is what the code did
+    before: platform_api/tenant_status.py fired a second SELECT for exactly
+    these columns on every dashboard page load.
+    """
+
+    onboarding_status: str
+    account_status: str
+    plan: Optional[str] = None
+
+
+# tid → (TenantState | None, expiry). None means "queried the DB, this tenant
+# has no row" — a real answer worth caching, distinct from _UNAVAILABLE (below)
+# which is never cached. Same 60s TTL as the config cache so an admin approval
+# or suspension goes live within a minute without a redeploy.
+_status_cache: dict[str, tuple[Optional[TenantState], float]] = {}
 
 # Sentinel: the DB could not answer (kill switch off, DATABASE_URL unset, table
 # or column not migrated yet, connection failure). Callers must fall back to
@@ -489,9 +520,9 @@ def _config_from_db(tenant_id: str) -> Optional[TenantConfig]:
 
 
 def _db_tenant_status(tenant_id: str):
-    """Read tenants.onboarding_status for tenant_id.
+    """Read the tenant's lifecycle columns as a TenantState.
 
-    Returns the status string, None (queried successfully, no such row), or
+    Returns a TenantState, None (queried successfully, no such row), or
     _UNAVAILABLE (DB off / unreachable / not migrated). Never raises.
 
     The UndefinedColumn case matters operationally: migrations are applied
@@ -511,13 +542,24 @@ def _db_tenant_status(tenant_id: str):
 
         with engine.connect() as conn:
             row = conn.execute(
-                _sql("SELECT onboarding_status FROM tenants WHERE id = :tid"),
+                _sql(
+                    "SELECT onboarding_status, status, plan FROM tenants WHERE id = :tid"
+                ),
                 {"tid": tenant_id},
             ).first()
-        return row[0] if row is not None else None
+        if row is None:
+            return None
+        # Both columns are NOT NULL with server defaults, but coalesce anyway:
+        # a NULL here must not read as "blocked" and silently take a live
+        # tenant off the air.
+        return TenantState(
+            onboarding_status=row[0] or ACTIVE_ONBOARDING_STATUS,
+            account_status=row[1] or DEFAULT_ACCOUNT_STATUS,
+            plan=row[2],
+        )
     except Exception as e:
         log.warning(
-            "Tenant '%s': onboarding_status lookup failed (%s: %s) — "
+            "Tenant '%s': lifecycle lookup failed (%s: %s) — "
             "falling back to the filesystem registry.",
             tenant_id, type(e).__name__, e,
         )
@@ -529,11 +571,23 @@ def _cached_tenant_status(tenant_id: str):
     hit = _status_cache.get(tenant_id)
     if hit is not None and monotonic() < hit[1]:
         return hit[0]
-    status = _db_tenant_status(tenant_id)
-    if status is not _UNAVAILABLE:
+    state = _db_tenant_status(tenant_id)
+    if state is not _UNAVAILABLE:
         with _lock:
-            _status_cache[tenant_id] = (status, monotonic() + _TTL_SECONDS)
-    return status
+            _status_cache[tenant_id] = (state, monotonic() + _TTL_SECONDS)
+    return state
+
+
+def tenant_state(tenant_id: str) -> Optional[TenantState]:
+    """Resolved lifecycle state for tenant_id, or None if it's unknown.
+
+    Public accessor so the platform API can render onboarding_status /
+    account_status / plan from ONE cached lookup instead of issuing its own
+    query. Applies the same legacy/outage fallbacks as the gate, so callers
+    never have to reimplement them — but the traffic DECISION must still come
+    from tenant_is_active(), which is the single place that rule lives.
+    """
+    return _resolved_state(tenant_id)
 
 
 def _db_tenant_ids() -> Optional[list[str]]:
@@ -637,6 +691,30 @@ def tenant_exists(tenant_id: str) -> bool:
     return _cached_tenant_status(tid) not in (None, _UNAVAILABLE)
 
 
+def _fallback_state(tid: str) -> Optional[TenantState]:
+    """State for a tenant the DB can't describe.
+
+    A filesystem tenant with no readable row is treated as fully live: it went
+    live before these columns existed, and neither a missing row nor a DB
+    outage may take a paying customer off the air. Anything else is unknown.
+    """
+    if (_REGISTRY_DIR / tid).is_dir():
+        return TenantState(ACTIVE_ONBOARDING_STATUS, DEFAULT_ACCOUNT_STATUS)
+    return None
+
+
+def _resolved_state(tenant_id: str) -> Optional[TenantState]:
+    """The state the gate and the dashboard should both reason about."""
+    tid = _norm(tenant_id)
+    if tid == "default":
+        # Orchelix itself is code-canonical and was never onboarded or billed.
+        return TenantState(ACTIVE_ONBOARDING_STATUS, DEFAULT_ACCOUNT_STATUS)
+    state = _cached_tenant_status(tid)
+    if state is _UNAVAILABLE or state is None:
+        return _fallback_state(tid)
+    return state
+
+
 def tenant_onboarding_status(tenant_id: str) -> Optional[str]:
     """Onboarding lifecycle value for tenant_id, or None if it has no DB row.
 
@@ -645,30 +723,55 @@ def tenant_onboarding_status(tenant_id: str) -> Optional[str]:
     it went live before this column existed, and a missing row must never take
     a paying customer off the air.
     """
-    tid = _norm(tenant_id)
-    if tid == "default":
-        return ACTIVE_ONBOARDING_STATUS
-    status = _cached_tenant_status(tid)
-    if status is _UNAVAILABLE or status is None:
-        return ACTIVE_ONBOARDING_STATUS if (_REGISTRY_DIR / tid).is_dir() else None
-    return status
+    state = _resolved_state(tenant_id)
+    return state.onboarding_status if state is not None else None
+
+
+def tenant_account_status(tenant_id: str) -> Optional[str]:
+    """Billing lifecycle value (trial | live | past_due | suspended | archived),
+    or None if the tenant has no DB row. Same fallbacks as
+    tenant_onboarding_status — an unreadable row reports 'live', never a
+    blocking value."""
+    state = _resolved_state(tenant_id)
+    return state.account_status if state is not None else None
 
 
 def tenant_is_active(tenant_id: str) -> bool:
     """True if tenant_id may serve PRODUCTION traffic (voice + web chat).
 
-    This is the approve-to-activate gate (Phase 4 ticket 4.1). A tenant in
-    draft / submitted / provisioning / review / rejected exists, can sign in,
-    and can configure itself through the dashboard — but must not answer a
-    single customer call or chat until Orchelix approves it.
+    THE single traffic gate. api._resolve_tenant (chat), api._resolve_tenant_strict
+    (booking), tenants._vapi_tenant_allowed (voice) and the dashboard's
+    can_serve_traffic all route through here, so this function is the only
+    place the rule is written down.
+
+    Two independent axes, both of which must pass:
+
+      1. onboarding_status == 'active' — the approve-to-activate gate. A tenant
+         in draft / submitted / provisioning / review / rejected exists, can
+         sign in, and can configure itself, but must not answer a single
+         customer call until Orchelix approves it.
+
+      2. account_status not in BLOCKING_ACCOUNT_STATUSES — the billing gate.
+         Added because axis 1 alone meant an admin could set a tenant to
+         suspended or archived on the Tenants page and it would keep answering
+         the phone: the dashboard said one thing, the phone did another.
 
     Legacy and outage behavior are both fail-OPEN by design, because the only
     tenants that can reach those branches are ones that were already live
-    before this gate existed: a filesystem tenant with no DB row, and any
+    before either gate existed: a filesystem tenant with no DB row, and any
     tenant when the DB is unreachable. A self-serve tenant has neither a
     directory nor a pre-approval path to 'active', so it stays gated.
+
+    Note this is NOT the same question as tenant_exists() — a suspended tenant
+    still exists and still reaches its dashboard, so it can be told why.
     """
-    return tenant_onboarding_status(tenant_id) == ACTIVE_ONBOARDING_STATUS
+    state = _resolved_state(tenant_id)
+    if state is None:
+        return False
+    return (
+        state.onboarding_status == ACTIVE_ONBOARDING_STATUS
+        and state.account_status not in BLOCKING_ACCOUNT_STATUSES
+    )
 
 
 def namespaced_thread(tenant_id: str, thread_id: str) -> str:
@@ -757,8 +860,11 @@ def _vapi_tenant_allowed(tenant_id: str) -> bool:
     if tenant_is_active(tenant_id):
         return True
     log.warning(
-        "VAPI call matched tenant '%s' but it is not active (onboarding_status=%s) "
-        "— refusing to serve it and falling back to default.",
-        tenant_id, tenant_onboarding_status(tenant_id),
+        "VAPI call matched tenant '%s' but it cannot serve traffic "
+        "(onboarding_status=%s, account_status=%s) — refusing to serve it and "
+        "falling back to default.",
+        tenant_id,
+        tenant_onboarding_status(tenant_id),
+        tenant_account_status(tenant_id),
     )
     return False
