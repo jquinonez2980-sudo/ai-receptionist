@@ -145,6 +145,7 @@ from platform_api import (  # noqa: E402
     appointments_router,
     billing_router,
     calls_router,
+    chats_router,
     config_router,
     knowledge_router,
     leads_router,
@@ -158,6 +159,7 @@ from platform_api import (  # noqa: E402
 
 app.include_router(vapi_webhook_router)
 app.include_router(calls_router)
+app.include_router(chats_router)
 app.include_router(overview_router)
 app.include_router(usage_router)
 app.include_router(billing_router)
@@ -387,6 +389,7 @@ async def _stream_chat(
     config = {"configurable": {"thread_id": ns_thread, "tenant_id": tenant_id}}
     full_text = ""
     chain_end_text = ""  # fallback if streaming tokens are empty
+    tools_called: set[str] = set()
 
     try:
         async for event in _graph_module.graph.astream_events(
@@ -401,6 +404,7 @@ async def _stream_chat(
 
             if kind == "on_tool_start":
                 tool_name = event.get("name", "tool")
+                tools_called.add(str(tool_name).lower())
                 yield f"data: {json.dumps({'type': 'tool_start', 'tool': tool_name})}\n\n"
 
             elif kind == "on_tool_end":
@@ -452,6 +456,16 @@ async def _stream_chat(
                 done["date_label"] = date_label
 
         yield f"data: {json.dumps(done)}\n\n"
+
+        # Log the turn after the SSE response is already complete — never lets
+        # a DB hiccup delay or break the chat stream. to_thread keeps the
+        # blocking SQLAlchemy call off the event loop.
+        try:
+            from platform_api.chat_log import record_chat_turn
+
+            await asyncio.to_thread(record_chat_turn, tenant_id, ns_thread, tools_called)
+        except Exception:
+            log.exception("chat_sessions logging failed for thread %s", thread_id)
 
     except Exception:
         log.exception("Stream error for thread %s", thread_id)
