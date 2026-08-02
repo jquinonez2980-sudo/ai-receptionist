@@ -5,9 +5,9 @@
 # like-for-like — a Tuesday-morning "this week" vs a full "last week" would
 # make every % change meaningless.
 #
-# Data source: the `calls` table only (voice). Chat sessions and website
-# bookings join these numbers in a later phase when chat logging lands —
-# labels in the dashboard say "calls" on purpose.
+# Data source: the `calls` table (voice) plus `chat_sessions` (web chat,
+# volume-only for v1 — see _chat_bucket_stats). Website bookings join these
+# numbers in a later phase.
 
 from __future__ import annotations
 
@@ -95,6 +95,49 @@ def _bucket_stats(
     }
 
 
+def _chat_bucket_stats(rows: list, start, end) -> dict:
+    """Volume-only web-chat count for one window (v1 — see module docstring).
+
+    Buckets by last_at when present, else started_at, per spec: a session
+    that got a new message today should count as "current" activity even if
+    it started last week, matching what a tenant would call "chats this week."
+    """
+    web_chats = 0
+    for started_at, last_at, _outcome in rows:
+        effective = last_at or started_at
+        if effective is None or not (start <= effective < end):
+            continue
+        web_chats += 1
+    return {"web_chats": web_chats}
+
+
+def _chat_rows(conn, tenant_id: str, prev_start) -> list:
+    """Fail-soft: any error (including a not-yet-migrated/missing table)
+    degrades to zero chat rows rather than 500ing the whole Overview —
+    chat_sessions is additive and must never be able to break the calls-based
+    KPIs that already work."""
+    from sqlalchemy import text
+
+    try:
+        return conn.execute(
+            text(
+                "SELECT started_at, last_at, outcome FROM chat_sessions "
+                "WHERE tenant_id = :tid "
+                "AND COALESCE(last_at, started_at) >= :prev_start"
+            ),
+            {"tid": tenant_id, "prev_start": prev_start},
+        ).all()
+    except Exception:
+        log.exception(
+            "chat_sessions read failed for tenant=%s overview — reporting 0 web chats.",
+            tenant_id,
+        )
+        # Reset the connection's transaction state — a failed statement
+        # otherwise leaves it unusable for the rest of this request.
+        conn.rollback()
+        return []
+
+
 @router.get("/platform/overview")
 def platform_overview(request: Request) -> dict:
     """Tenant KPIs: rolling last-7-days vs the 7 days before that.
@@ -130,12 +173,17 @@ def platform_overview(request: Request) -> dict:
             ),
             {"tid": tenant_id, "prev_start": prev_start},
         ).all()
+        chat_rows = _chat_rows(conn, tenant_id, prev_start)
 
     avg_price = _avg_service_price(cfg)
+    current = _bucket_stats(rows, cur_start, now, cfg, tz, avg_price)
+    previous = _bucket_stats(rows, prev_start, cur_start, cfg, tz, avg_price)
+    current.update(_chat_bucket_stats(chat_rows, cur_start, now))
+    previous.update(_chat_bucket_stats(chat_rows, prev_start, cur_start))
     return {
         "tenant_id": tenant_id,
         "business_tz": cfg.business_tz,
         "window_days": WINDOW_DAYS,
-        "current": _bucket_stats(rows, cur_start, now, cfg, tz, avg_price),
-        "previous": _bucket_stats(rows, prev_start, cur_start, cfg, tz, avg_price),
+        "current": current,
+        "previous": previous,
     }
