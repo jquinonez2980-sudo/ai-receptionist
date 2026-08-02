@@ -26,6 +26,7 @@
 
 from __future__ import annotations
 
+import html
 import logging
 from typing import Optional
 
@@ -36,7 +37,7 @@ from platform_api import provisioning as prov
 from platform_api.admin import ACCOUNT_STATUSES
 from platform_api.plans import PLANS
 from platform_api.security import verify_platform_admin_secret
-from tenants import clear_tenant_cache, normalize_tenant_id
+from tenants import clear_tenant_cache, normalize_tenant_id, tenant_secret
 
 log = logging.getLogger(__name__)
 
@@ -78,6 +79,70 @@ def _engine_or_503():
     if engine is None:
         raise HTTPException(status_code=503, detail="Platform DB not configured.")
     return engine
+
+
+def _sendgrid_key(tenant_id: str) -> Optional[str]:
+    """Duplicated from tools._get_sendgrid_key / usage_alerts._sendgrid_key /
+    signup._sendgrid_key (not imported): platform_api must never depend on
+    tools.py/agents.py/graph.py."""
+    key = tenant_secret(tenant_id, "SENDGRID_API_KEY")
+    if key:
+        return key
+    key_b64 = tenant_secret(tenant_id, "SENDGRID_API_KEY_B64")
+    if key_b64:
+        try:
+            import base64
+            return base64.b64decode(key_b64).decode("utf-8")
+        except Exception as e:
+            log.warning("SENDGRID_API_KEY_B64 decode failed: %s", e)
+    return None
+
+
+def _notify_customer_approved(tenant_id: str, company_name: Optional[str], contact_email: Optional[str]) -> None:
+    """Email the applicant once their business goes live.
+
+    The signup wizard's Submitted screen and the dashboard's DraftModeBanner
+    both tell a pending tenant "we'll email you when it's done" — without
+    this, neither promise is kept. Fail-soft: never raises, so a SendGrid
+    hiccup can never block an approval that already succeeded in the DB.
+    """
+    try:
+        to_addr = (contact_email or "").strip()
+        if not to_addr:
+            return
+        api_key = _sendgrid_key("default")
+        if not api_key:
+            log.info(
+                "Approval email NOT sent for %s — no SendGrid key configured.", tenant_id
+            )
+            return
+
+        from tenants import load_tenant
+
+        default_cfg = load_tenant("default")
+        company = company_name or tenant_id
+
+        from sendgrid import SendGridAPIClient
+        from sendgrid.helpers.mail import Mail
+
+        html_content = f"""
+        <p>Good news — <strong>{html.escape(company)}</strong> is live on Esmi.</p>
+        <p>Esmi is now answering calls and web chats for your business. Sign in to
+        your dashboard at <a href="https://www.orchelix.com/dashboard">orchelix.com/dashboard</a>
+        to review your settings, hours, and knowledge base.</p>
+        """
+        message = Mail(
+            from_email=default_cfg.email_from,
+            to_emails=to_addr,
+            subject=f"{company} is live on Esmi",
+            html_content=html_content,
+        )
+        SendGridAPIClient(api_key).send(message)
+        log.info("Approval email sent: tenant=%s to=%s", tenant_id, to_addr)
+    except Exception:
+        log.exception(
+            "Approval email failed for tenant=%s — approval still recorded.", tenant_id
+        )
 
 
 def _norm_or_404(tenant_id: str) -> str:
@@ -348,6 +413,7 @@ def approve_tenant(tenant_id: str, body: ApproveRequest, request: Request) -> di
         "Tenant APPROVED: tenant=%s plan=%s->%s status=%s->%s by=%s",
         tid, old_plan, body.plan, old_status, new_status, approved_by,
     )
+    _notify_customer_approved(tid, out["company_name"], out["contact_email"])
     return out
 
 

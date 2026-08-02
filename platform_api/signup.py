@@ -28,6 +28,7 @@
 
 from __future__ import annotations
 
+import html
 import json
 import logging
 import re
@@ -41,7 +42,7 @@ from pydantic import BaseModel, Field
 from platform_api import provisioning as prov
 from platform_api.plans import PLANS
 from platform_api.security import verify_platform_secret
-from tenants import _REGISTRY_DIR, clear_tenant_cache, normalize_tenant_id
+from tenants import _REGISTRY_DIR, clear_tenant_cache, normalize_tenant_id, tenant_secret
 
 log = logging.getLogger(__name__)
 
@@ -337,6 +338,76 @@ def _engine_or_503():
     return engine
 
 
+def _sendgrid_key(tenant_id: str) -> Optional[str]:
+    """Duplicated from tools._get_sendgrid_key / usage_alerts._sendgrid_key
+    (not imported): platform_api must never depend on tools.py/agents.py/
+    graph.py. Both read the same tenant_secret() env convention, so this stays
+    in sync by construction, not by copy-paste luck."""
+    key = tenant_secret(tenant_id, "SENDGRID_API_KEY")
+    if key:
+        return key
+    key_b64 = tenant_secret(tenant_id, "SENDGRID_API_KEY_B64")
+    if key_b64:
+        try:
+            import base64
+            return base64.b64decode(key_b64).decode("utf-8")
+        except Exception as e:
+            log.warning("SENDGRID_API_KEY_B64 decode failed: %s", e)
+    return None
+
+
+def _notify_ops_new_signup(tenant_id: str, body: SignupRequest, user_id: str) -> None:
+    """Email Orchelix ops when a new self-serve application arrives, so the
+    admin onboarding queue isn't the only way to find out one exists.
+
+    Fail-soft: never raises. The signup response the applicant is waiting on
+    must not depend on SendGrid being configured or reachable.
+    """
+    try:
+        from tenants import load_tenant
+
+        api_key = _sendgrid_key("default")
+        if not api_key:
+            log.info(
+                "New-signup email NOT sent for %s — no SendGrid key configured.",
+                tenant_id,
+            )
+            return
+        default_cfg = load_tenant("default")
+        to_addr = default_cfg.email_escalation_to
+        if not to_addr:
+            return
+
+        from sendgrid import SendGridAPIClient
+        from sendgrid.helpers.mail import Mail
+
+        html_content = f"""
+        <p>New Esmi self-serve application:</p>
+        <ul>
+          <li><strong>Business:</strong> {html.escape(body.company_name)}</li>
+          <li><strong>Tenant id:</strong> {html.escape(tenant_id)}</li>
+          <li><strong>Contact:</strong> {html.escape(body.contact_name or '—')}
+              &lt;{html.escape(body.contact_email)}&gt;</li>
+          <li><strong>Phone:</strong> {html.escape(body.contact_phone or '—')}</li>
+          <li><strong>Requested plan:</strong> {html.escape(body.requested_plan or 'not specified')}</li>
+          <li><strong>Clerk user:</strong> {html.escape(user_id)}</li>
+        </ul>
+        <p><a href="https://www.orchelix.com/dashboard/admin/onboarding">Review in the admin onboarding queue</a></p>
+        """
+        message = Mail(
+            from_email=default_cfg.email_from,
+            to_emails=to_addr,
+            subject=f"New Esmi signup: {body.company_name} ({tenant_id})",
+            html_content=html_content,
+        )
+        SendGridAPIClient(api_key).send(message)
+        log.info("New-signup email sent: tenant=%s to=%s", tenant_id, to_addr)
+    except Exception:
+        log.exception(
+            "New-signup email failed for tenant=%s — signup still recorded.", tenant_id
+        )
+
+
 # ── routes ────────────────────────────────────────────────────────────────────
 
 
@@ -566,6 +637,7 @@ def platform_signup(body: SignupRequest, request: Request) -> dict:
         "Signup: tenant=%s job=%s by=%s requested_plan=%s (plan=%s until approval)",
         tenant_id, job_id, user_id, body.requested_plan, INITIAL_PLAN,
     )
+    _notify_ops_new_signup(tenant_id, body, user_id)
 
     return {
         "tenant_id": tenant_id,
