@@ -1,80 +1,51 @@
 # Our Services — Orchelix AI Consulting
 
-## The Three Systems
+## Esmi — AI Receptionist
+**★ Flagship product**
+**"Answers, books, and proves it."**
 
-### System 01 — Esmi · AI Virtual Receptionist & Lead Qualification System
-**★ Most Popular**
-**"Never miss another lead — 24/7 bilingual qualification and booking."**
-
-Esmi is a custom LangGraph AI agent that answers inbound leads, qualifies them, books appointments, and escalates when needed — across voice, SMS, and email, in English and Spanish.
+Esmi is Orchelix's AI receptionist for voice and web chat. She answers calls and
+website chat 24/7, books and reschedules appointments directly on your real
+Google Calendars, escalates to a human with full context when needed, and
+gives you a client dashboard showing every call, recording, appointment, and
+lead.
 
 **What Esmi does:**
-- 24/7 coverage — nights, weekends, holidays
-- Advanced lead qualification with scoring and routing
-- FAQ answering trained on your specific business
-- Appointment booking + calendar sync (Google Calendar, Microsoft 365, Calendly, Acuity)
-- CRM or Google Workspace integration
-- Custom Streamlit dashboard with analytics
-- Monthly monitoring, optimization & updates
-- Human-in-the-loop design with escalation paths
+- 24/7 coverage on the phone and on your website chat — nights, weekends, holidays
+- Books and reschedules directly on your real Google Calendars
+- Human escalation with context — never a dead end
+- Recordings and transcripts for every call
+- Appointments and leads inbox, plus an after-hours summary, in one dashboard
+- White-glove setup — you don't build or configure anything yourself
 
-**Ideal For:** Any business that receives inbound leads or inquiries.
-
-**Setup: Starting at $8,500 · Monthly Managed Service: Starting at $1,099/month**
-
----
-
-### System 02 — AI Sales & Lead Management Assistant
-**"Scale your sales follow-up without burning out your team."**
-
-A focused AI sales co-pilot that enriches leads, scores them against your ICP, runs personalized follow-up sequences, prepares your team for meetings, and keeps your pipeline clean — all with human-in-the-loop approvals.
-
-**What the Sales Assistant does:**
-- Lead enrichment & research agent
-- Qualification scoring based on your ICP
-- Personalized follow-up sequence agent
-- Meeting preparation summaries
-- Pipeline hygiene & deal stage automation
-- CRM integration & automated logging
-- Custom sales dashboard
-- Monthly optimization and performance reporting
-- Human-in-the-loop approvals
-
-**Ideal For:** Sales teams and businesses with active lead flow.
-
-**Setup: Starting at $9,500 · Monthly Managed Service: Starting at $1,299/month**
+**Plans:** Starter $299/mo, Growth $599/mo (most popular), Scale $999/mo — each
+plus a one-time setup fee (waived on annual billing, which also gets 2 months
+free). Try it first with a 7-day pilot for $149, credited to your first month
+if you continue. Full current pricing: https://www.orchelix.com/pricing
 
 ---
 
-### System 03 — Custom Multi-Agent Operations System ("Firm OS")
-**"Multiple specialized agents working together as one coordinated team."**
+## Beyond the receptionist — custom multi-agent systems
 
-A coordinated team of 2–4 AI agents handling lead qualification, sales support, document processing, and financial operations — all sharing memory, reporting into one central Streamlit dashboard, and optimized monthly with your consultant.
-
-**What Firm OS does:**
-- 2–4 orchestrated AI agents (lead qualification + sales + document processing + financial operations)
-- Shared memory across agents
-- Central custom Streamlit oversight dashboard
-- Deep integrations with your existing tools
-- Bookkeeping automation module (categorization, invoice extraction, basic reconciliation)
-- Advanced guardrails and audit logs
-- Monthly strategy calls + continuous optimization
-- Full team training and documentation
-
-**Ideal For:** Growing businesses ready for coordinated AI operations.
-
-**Setup: Starting at $24,000 (phased) · Monthly Managed Service: Starting at $2,499/month**
+Orchelix also builds coordinated, custom multi-agent systems for operations
+teams that need more than a receptionist — sales/lead-management agents,
+document processing, and financial-operations automation, sharing memory and
+reporting into one dashboard. Scope and pricing for these are custom per
+engagement, not a published rate card. Ask if you'd like Jorge to follow up
+on what that would look like for your team.
 
 ---
 
-## How We Deliver
+## How We Deliver (Esmi)
 
-1. **Book a strategy call** — free 30-minute call with a senior consultant; no deck, no slides, just your workflow
-2. **Custom build** — we design and train agents specifically for your business and tools
-3. **Launch & train** — we deploy the system and train your team
-4. **Monthly optimization** — ongoing monitoring, improvements, updates, and support
+1. **We learn your business** — hours, services, FAQs, and calendars
+2. **We go live** — number, agent, booking, and dashboard login, white-glove
+3. **You see everything** — after-hours calls, bookings, leads, and recordings in the dashboard
 
 ## Who This Is For
-Operators, professional firms, clinics, field service companies, manufacturers, and scaling SMBs that want intelligent automation that is reliable, easy to manage, and delivers immediate business impact.
-
-Industries served: field service (HVAC, plumbing, custom homes), professional services (law, accounting, healthcare, real estate), manufacturing, design & stone, and any business with active inbound lead flow.
+Any business that takes inbound calls or web chat and doesn't want to miss
+one — local and multi-location service businesses, clinics, field service
+companies, and professional firms. Industries served include field service
+(HVAC, plumbing, custom homes), professional services (law, accounting,
+healthcare, real estate), design & stone, and any business with active
+inbound call or chat volume.

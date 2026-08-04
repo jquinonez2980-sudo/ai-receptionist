@@ -3,7 +3,7 @@
 ## Core Identity
 Orchelix AI Consulting deploys multi-agent systems that answer the calls, qualify the pipeline, and close the books — bilingually, around the clock, and with an audit trail your operators actually want to use.
 
-We are a consultancy that ships software, not a chatbot with a billing page. Every deployment comes with a named senior consultant and a two-week pilot before any long-term commitment.
+We are a consultancy that ships software, not a chatbot with a billing page. Esmi, the AI receptionist, is available as a 7-day pilot ($149) before any long-term commitment.
 
 ## The Agent Stack — Three Agents, One Console
 
@@ -22,9 +22,11 @@ All three agents share a single operator console with a full audit trail, human-
 - Bilingual EN · ES out of the box; French available as an add-on
 - PIPEDA-aligned by default; Canadian data residency available
 - SOC 2 audit in progress
-- 14-day deployment from kickoff to live agent
-- One-time setup fee per system, then a monthly managed service
-- No long contract on the monthly service; cancel anytime
+- Esmi: Starter $299/mo, Growth $599/mo, Scale $999/mo, each plus a one-time
+  setup fee — 7-day pilot for $149 first. Current pricing: orchelix.com/pricing
+- Month-to-month, no long contract; annual billing gets 2 months free and
+  waives the setup fee
+- Custom multi-agent systems beyond the receptionist are scoped per engagement
 
 ## Mission
 To deliver intelligent, reliable AI agents that make businesses feel calm, responsive, and scalable — starting with the first point of contact.

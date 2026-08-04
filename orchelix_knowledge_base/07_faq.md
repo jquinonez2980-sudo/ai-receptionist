@@ -3,13 +3,10 @@
 ## About Orchelix
 
 **Q: What is Orchelix?**
-A: Orchelix AI Consulting deploys multi-agent systems that answer calls, qualify the pipeline, and close the books — bilingually, around the clock, and with an audit trail your operators want to use. We are a consultancy that ships software, not a chatbot with a billing page. Every deployment includes a named senior consultant and a two-week pilot before any long-term commitment.
+A: Orchelix AI Consulting builds Esmi, an AI receptionist for voice and web chat — bilingual, around the clock, booking on your real calendar with a dashboard you can see everything in. Orchelix also builds custom multi-agent systems (sales/lead-management, document processing, financial operations) for operations teams that need more than a receptionist.
 
-**Q: What agents does Orchelix offer?**
-A: Three agents, one console:
-- **Esmi** (Agent 01) — Virtual receptionist. Answers, qualifies, and books bilingually 24/7.
-- **Revenue-Ops** (Agent 02) — Sales and marketing agents that qualify leads, run follow-up sequences, and hand off with full context.
-- **Finance OS** (Agent 03) — Automated bookkeeping, reconciliations, and a month-end close you can defend to an auditor.
+**Q: What does Orchelix offer?**
+A: The flagship product is Esmi — the AI receptionist, sold as Starter/Growth/Scale plans with a 7-day pilot (see Pricing below). Beyond that, Orchelix builds custom multi-agent systems scoped per engagement — ask to have Jorge follow up if that's what you need.
 
 **Q: Who is Orchelix for?**
 A: Operators, professional firms, clinics, field service companies, manufacturers, and scaling SMBs. Industries served: design & stone, HVAC/plumbing/custom homes, manufacturing, professional services (law, accounting, healthcare, real estate).
@@ -41,40 +38,34 @@ A: Yes. Esmi is fully stateful — she maintains context within a conversation a
 ## Deployment & Timeline
 
 **Q: How long does it take to go live?**
-A: 14 days from kickoff to live agent. Week 1: discovery and build. Week 2: shadow mode then go-live. You open Monday morning with your first scorecard.
-
-**Q: Is there a free trial or free audit?**
-A: No free audit. The two-week pilot is the starting point — it ends with a live agent in your tools, not a slide deck. The deployment is part of each system's one-time setup fee.
-
-**Q: What does the two-week pilot actually look like?**
-A: Days 1–3: Your consultant maps the workflow, integrations, and the goal you're measuring. Days 4–7: The agent is configured to your branding, knowledge base, scripts, and connected tools. Days 8–12: Shadow mode — agent runs alongside your real workflow while we tune. Days 13–14: Go-live. Monday morning: your first scorecard.
+A: Setup is white-glove — Orchelix configures your number, agent, knowledge base, and calendar for you, and you review it before it goes live.
 
 **Q: What if the agent doesn't perform?**
-A: If the agent doesn't move the number we set at kickoff, we don't move forward.
+A: The 7-day pilot (see Pricing below) ends with an honest review — if it's not the right fit, you're not locked into anything beyond the pilot.
 
 ---
 
 ## Pricing
 
-**Q: What does Orchelix cost?**
-A: Each system has a one-time setup fee plus a monthly managed service (monitoring, optimization, updates, and support). No long-term contract on the monthly service.
-- **Esmi — AI Virtual Receptionist & Lead Qualification** (★ Most Popular) — setup from $8,500, then from $1,099/month.
-- **Revenue Operations Agents (AI Sales & Lead Management)** — setup from $9,500, then from $1,299/month.
-- **Firm OS — Custom Multi-Agent Operations System** — setup from $24,000 (phased), then from $2,499/month.
+**Q: What does Esmi cost?**
+A: Three plans, each with a one-time setup fee:
+- **Starter** — $299/mo + $499 one-time setup: 300 minutes, 1 number, voice only, 1 calendar.
+- **Growth** (★ most popular) — $599/mo + $799 one-time setup: 800 minutes, up to 2 numbers, voice + web chat, multi-location calendars.
+- **Scale** — $999/mo + custom setup: 1,500 minutes, 3+ numbers, multi-org.
 
-Many clients start with Esmi and expand to the Revenue Operations Agents or Firm OS later. For exact, current numbers, confirm with pricing on orchelix.com/pricing.
+Month-to-month, no long-term contract. Paying annually gets 2 months free and waives the one-time setup fee. Current pricing: https://www.orchelix.com/pricing
 
-**Q: Are there setup fees?**
-A: Yes. Every system includes a one-time setup fee — custom build, integrations, testing, deployment, and team training — then the monthly managed service. Setup starts at $8,500 for Esmi, $9,500 for the Revenue Operations Agents, and $24,000 (phased) for the Firm OS.
+**Q: Is there a free trial?**
+A: A 7-day pilot for $149, which includes setup and is credited to your first month if you continue.
 
-**Q: What counts as an "agent action"?**
-A: A discrete piece of work the agent performs: a call answered, a lead qualified, a transaction reconciled, a follow-up sent. Read-only operations and internal syncs don't count. The live action count is visible in the operator console — no surprise overages.
-
-**Q: What happens if our volume grows beyond what we planned for?**
-A: Nothing breaks. Your consultant reviews usage with you and works out the right next step — adjusting the managed service or adding capacity. No service interruptions, no surprise charges.
+**Q: What happens if I go over my included minutes?**
+A: You're billed the plan's per-minute overage rate — Esmi never stops answering calls because you've hit a limit.
 
 **Q: Can we cancel?**
-A: The monthly managed service cancels anytime, effective end of cycle — no long-term contract. You keep export access to every agent action and audit log for 60 days after cancellation.
+A: Yes, any time — every plan is month-to-month.
+
+**Q: What about custom multi-agent systems beyond the receptionist?**
+A: Those are scoped and priced per engagement, not a published rate card — ask to have Jorge follow up on what that would look like.
 
 ---
 
@@ -90,20 +81,17 @@ A: Calendar: Google Calendar, Microsoft 365, Calendly, Acuity. CRM: HubSpot, Sal
 A: Yes. PIPEDA-aligned by default. Canadian data residency is available on request. SOC 2 audit is in progress.
 
 **Q: Can we see what the agent is doing?**
-A: Yes. All agents share a single operator console where you can see live agent activity, approve or override any agent action, review the full audit trail with attribution and timestamps, and track your action count.
+A: Yes. Your dashboard shows calls, recordings, appointments, and leads, plus an after-hours summary.
 
 **Q: Do I need technical staff to manage the agents?**
-A: No. Agents are coachable in plain English — update scripts and knowledge by editing a document. The operator console requires no technical training. Your consultant handles configuration and tuning.
+A: No. Setup is white-glove and the dashboard requires no technical training — Orchelix handles configuration and tuning.
 
 ---
 
 ## Getting Started
 
 **Q: How do I get started?**
-A: Book a 30-minute demo at orchelix.com/book. A senior consultant will map your workflow and recommend the right starting agent. No deck, no slides, no hard sell.
+A: Start a 7-day pilot ($149) or book a 15-minute walkthrough at orchelix.com/book. No deck, no slides, no hard sell.
 
-**Q: Which agent should I start with?**
-A: Start with the one that has the clearest payback. If you're losing leads to missed calls or after-hours gaps, start with Esmi. If your sales pipeline is leaking, start with Revenue-Ops. If reconciliations are eating your team's time, start with Finance OS. Your consultant will help you choose.
-
-**Q: Can I add more agents later?**
-A: Yes. Start with one agent, and when it has earned the room, add the next one. Same console, same consultant, no re-platforming required.
+**Q: What if I need more than a receptionist?**
+A: Ask to have Jorge follow up — Orchelix builds custom multi-agent systems (sales/lead-management, document processing, financial operations) for operations teams that need more, scoped per engagement.

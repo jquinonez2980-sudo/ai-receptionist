@@ -1,12 +1,17 @@
 # How We Work — Orchelix AI Consulting
 
-## From first call to your first agent in 14 days.
+This describes custom multi-agent engagements (beyond the receptionist). For
+Esmi, the AI receptionist itself, setup is white-glove and much faster — see
+the Pricing FAQ for the 7-day pilot and current plans.
 
-We make implementing a production-ready AI agent fast, transparent, and low-risk. Every system includes the full 14-day deployment as part of its one-time setup fee — no hidden costs.
+## Custom builds: fast, transparent, and low-risk.
+
+A custom multi-agent engagement is scoped and built for your team — no
+published timeline, since scope varies by engagement.
 
 ---
 
-## The 14-Day Deployment Process
+## The Custom Build Process
 
 ### Week 1 — Discovery & Design (Days 1–7)
 A senior consultant sits with your team and writes the workflow we'll automate.
@@ -45,14 +50,14 @@ Orchelix is a consultancy that ships software. Every client has a named senior c
 - A dedicated consultant and a monthly business review
 - Ongoing monitoring, optimization, and updates
 - Audit-trail access and human-override controls in the operator console
-- Escalation support, with custom SLAs available for Firm OS engagements
+- Escalation support, with custom SLAs available for larger engagements
 
 ---
 
 ## Adding More Agents
-Start with the agent that has the clearest payback. When it has earned the room, add the next one. Same console, same consultant, no re-platforming required.
-
-Order doesn't matter — you can start with Esmi, Revenue-Ops, or Finance OS depending on where your biggest bottleneck is.
+Most teams start with Esmi (the AI receptionist — see Pricing for the 7-day
+pilot and Starter/Growth/Scale plans). When it's earned the room, a custom
+multi-agent system can be added on top, scoped per engagement.
 
 ---
 

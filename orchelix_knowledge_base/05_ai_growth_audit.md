@@ -1,50 +1,36 @@
-# Getting Started — How We Work
+# Getting Started
 
-## The Entry Point: Book a Strategy Call
+## Esmi (the AI receptionist) — start here for most businesses
 
-The first step with Orchelix is a **free 30-minute strategy call** with a senior consultant. No deck, no slides — just your workflow. The consultant maps what you're trying to solve and recommends the right starting system (Esmi, Sales Assistant, or Firm OS).
-
-Book at orchelix.com/book.
+The fast path: start a 7-day pilot ($149, includes white-glove setup) or book
+a 15-minute walkthrough at orchelix.com/book. Plans are Starter $299/mo,
+Growth $599/mo, Scale $999/mo — see the Pricing FAQ or
+https://www.orchelix.com/pricing for current numbers. No weeks-long build —
+Orchelix configures your number, agent, knowledge base, and calendar, and you
+review it before it goes live.
 
 ---
 
-## The Build & Launch Process
+## Custom multi-agent systems (beyond the receptionist)
 
-Every engagement follows a clear, managed process:
+For operations teams that need more than a receptionist — sales/lead
+management, document processing, financial operations, coordinated across
+multiple agents — Orchelix scopes and builds these as custom engagements.
 
-**Step 1 — Discovery Call (Free)**
+**How that process works:**
+
+**Step 1 — Discovery call (free)**
 - 30-minute call to understand your workflows, goals, and the problem you're solving
-- Consultant recommends the right starting system
 
-**Step 2 — Custom Build (Weeks 1–2)**
-- We design and build AI agents specifically for your business
-- Configured to your branding, knowledge base, scripts, and connected tools (calendar, CRM, phone, email)
+**Step 2 — Custom build**
+- Agents designed and configured for your business — branding, knowledge base, scripts, and connected tools (calendar, CRM, phone, email)
 
-**Step 3 — Launch & Train (Week 3)**
-- System goes live in your tools
-- Your team is trained on how to work with and supervise the agents
+**Step 3 — Launch & train**
+- System goes live in your tools; your team is trained to work with and supervise it
 
-**Step 4 — Monthly Optimization (Ongoing)**
-- Monthly monitoring, performance reporting, updates, and strategy calls
-- Continuous improvement after launch
+**Step 4 — Ongoing optimization**
+- Monitoring, performance reporting, updates, and strategy calls
 
----
-
-## Why Start with One System?
-
-Start with the system that has the clearest payback:
-- **Esmi** — if you're losing leads to missed calls or after-hours gaps
-- **Sales Assistant** — if your sales follow-up is inconsistent or your pipeline needs cleaning
-- **Firm OS** — if you need multiple departments coordinated with AI and want one dashboard
-
-Once the first system is delivering results, you can add the next one. Systems are built to work together.
-
----
-
-## Pricing Summary
-
-- **Esmi AI Receptionist:** Setup from $8,500 · $1,099/mo managed service
-- **Sales Assistant:** Setup from $9,500 · $1,299/mo managed service
-- **Firm OS:** Setup from $24,000 (phased) · $2,499/mo managed service
-
-No long-term contracts required on the monthly service. The setup fee covers everything needed to go live.
+Pricing for custom multi-agent systems is scoped per engagement, not a
+published rate card — ask to have Jorge follow up on what that would look
+like for your team.

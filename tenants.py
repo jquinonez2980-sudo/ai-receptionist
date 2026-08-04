@@ -100,6 +100,21 @@ _DEFAULT_ESMI_PRICING_PITCH = (
     "Full details: https://www.orchelix.com/pricing"
 )
 
+# Short, tenant-scoped override for "what services do you offer / what is
+# Esmi / what can you do" (same injection mechanism as the pricing pitch
+# above). Leads with Esmi the receptionist product — never Firm OS or an
+# enterprise setup fee as the headline offer on this demo.
+_DEFAULT_ESMI_SERVICES_PITCH = (
+    "Esmi is Orchelix's AI receptionist: she answers phone and web chat 24/7, "
+    "books and reschedules on your real calendars, escalates to a human when "
+    "needed, and shows calls, recordings, appointments, and leads in a client "
+    "dashboard.\n"
+    "Plans: Starter $299/mo, Growth $599/mo, Scale $999/mo (setup fees apply; "
+    "7-day pilot $149). Details: https://www.orchelix.com/pricing\n"
+    "Orchelix also builds custom multi-agent systems for operations teams that "
+    "need more than a receptionist — ask if you'd like Jorge to follow up on that."
+)
+
 
 @dataclass(frozen=True)
 class LocationConfig:
@@ -195,6 +210,10 @@ class TenantConfig:
     # value leaves the base prompt (and its canned "I'll have Jorge reach
     # out" deflection) byte-identical to before for every client tenant.
     esmi_pricing_pitch: str = ""
+    # Same pattern, for "what services do you offer / what is Esmi / what can
+    # you do" (see _DEFAULT_ESMI_SERVICES_PITCH). Empty for every tenant
+    # except 'default'.
+    esmi_services_pitch: str = ""
 
     @property
     def hours_range(self) -> range:
@@ -346,6 +365,7 @@ def _default_config() -> TenantConfig:
         pricing=list(_PRICING),
         business_days=tuple(_BUSINESS_DAYS),
         esmi_pricing_pitch=_DEFAULT_ESMI_PRICING_PITCH,
+        esmi_services_pitch=_DEFAULT_ESMI_SERVICES_PITCH,
     )
 
 
@@ -477,6 +497,8 @@ def _config_from_file(tenant_id: str, data: dict) -> TenantConfig:
         # a config.json missing the key would silently inherit the default
         # tenant's Esmi-itself pricing pitch.
         esmi_pricing_pitch=str(data.get("esmi_pricing_pitch") or "").strip(),
+        # Same no-base-fallback rule as esmi_pricing_pitch above.
+        esmi_services_pitch=str(data.get("esmi_services_pitch") or "").strip(),
     )
 
 

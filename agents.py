@@ -138,6 +138,33 @@ def _make_middleware(prompt_name: str):
                 "call volume, locations) when it's helpful, after the numbers — "
                 "not instead of them."
             )
+
+        # Same mechanism, for "what services do you offer / what is Esmi /
+        # what can you do" (TenantConfig.esmi_services_pitch — set only for
+        # 'default'). The knowledge base (orchelix_knowledge_base/*.md) still
+        # has some older consulting-engagement content (Firm OS, enterprise
+        # setup fees) mixed in with facts that remain accurate (languages,
+        # integrations, compliance) — this block does not forbid
+        # search_knowledge_base, it just says which product is the headline
+        # answer on THIS demo when the two disagree.
+        services_pitch = load_tenant(tenant_id).esmi_services_pitch
+        if services_pitch and prompt_name in ("esmi_system.md", "informer.md"):
+            text += (
+                "\n\n## ESMI SERVICES OVERRIDE (tenant-provided, for THIS tenant "
+                "only)\n"
+                "When asked what services/products you offer, what Esmi is, or "
+                "what you can do, lead with the pitch below — Esmi the AI "
+                "receptionist is the headline answer on this demo, not Firm OS, "
+                "the Sales Assistant, or any enterprise/custom-build offer. If "
+                "search_knowledge_base returns older material describing a "
+                "different pricing structure (e.g. a setup fee above $999/mo or "
+                "in the thousands), ignore those numbers — they are stale; the "
+                "figures below are current. Write URLs as plain text, never a "
+                "markdown link:\n\n"
+                f"{services_pitch}\n\n"
+                "After the pitch, still qualify (business type, call volume, "
+                "locations) or offer a follow-up/walkthrough when it's helpful."
+            )
         return text
     return _prompt
 
