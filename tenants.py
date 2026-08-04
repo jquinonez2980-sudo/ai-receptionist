@@ -86,6 +86,20 @@ _DEFAULT_EMAIL_ESCALATION_TO = "jquinonez2980@gmail.com"
 _DEFAULT_SMS_SIGNATURE = "Orchelix AI Consulting"
 _DEFAULT_VOICE_SUMMARY = "Orchelix Intro Call"
 
+# Short, tenant-scoped override for "what does Esmi itself cost" (agents.py's
+# _make_middleware injects this — see TenantConfig.esmi_pricing_pitch below).
+# Kept in sync with orchelix.com/pricing by hand; update both together.
+_DEFAULT_ESMI_PRICING_PITCH = (
+    "Esmi has three plans:\n"
+    "- Starter — $299/mo + $499 one-time setup: 300 minutes, 1 number, voice only, 1 calendar\n"
+    "- Growth (most popular) — $599/mo + $799 one-time setup: 800 minutes, up to 2 numbers, "
+    "voice + web chat, multi-location calendars\n"
+    "- Scale — $999/mo + custom setup: 1,500 minutes, 3+ numbers, multi-org\n"
+    "7-day pilot: $149, includes setup, credited to your first month if you continue.\n"
+    "Paying annually gets 2 months free and waives the one-time setup fee.\n"
+    "Full details: https://www.orchelix.com/pricing"
+)
+
 
 @dataclass(frozen=True)
 class LocationConfig:
@@ -174,6 +188,13 @@ class TenantConfig:
     # later change compiles this into the prompt template. Stored now so the
     # settings UI has somewhere durable to write.
     greeting: str = ""
+    # Tenant-scoped override for "what does Esmi itself cost" (the
+    # PRICING — ESMI ITSELF case in prompts/esmi_system.md / informer.md).
+    # Empty for every tenant except 'default' (see _DEFAULT_ESMI_PRICING_PITCH)
+    # — agents.py only appends a prompt section when this is set, so an unset
+    # value leaves the base prompt (and its canned "I'll have Jorge reach
+    # out" deflection) byte-identical to before for every client tenant.
+    esmi_pricing_pitch: str = ""
 
     @property
     def hours_range(self) -> range:
@@ -324,6 +345,7 @@ def _default_config() -> TenantConfig:
         voice_default_summary=_DEFAULT_VOICE_SUMMARY,
         pricing=list(_PRICING),
         business_days=tuple(_BUSINESS_DAYS),
+        esmi_pricing_pitch=_DEFAULT_ESMI_PRICING_PITCH,
     )
 
 
@@ -450,6 +472,11 @@ def _config_from_file(tenant_id: str, data: dict) -> TenantConfig:
         sms_templates={str(k): str(v) for k, v in sms_templates.items()},
         transfer_phone=str(data.get("transfer_phone") or "").strip(),
         greeting=str(data.get("greeting") or "").strip(),
+        # No base.esmi_pricing_pitch fallback (unlike company_name etc. above) —
+        # this must stay "" for every tenant that doesn't explicitly set it, or
+        # a config.json missing the key would silently inherit the default
+        # tenant's Esmi-itself pricing pitch.
+        esmi_pricing_pitch=str(data.get("esmi_pricing_pitch") or "").strip(),
     )
 
 

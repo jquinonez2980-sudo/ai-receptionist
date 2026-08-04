@@ -1,10 +1,12 @@
 """Behavioral evals for the Esmi system prompt.
 
 These assert the customer-facing invariants that matter most:
-  1. What Esmi ITSELF costs is never quoted (deflect + capture contact info) —
-     a client tenant's OWN service prices are answered via get_pricing, never
-     the KB (see agents/tools if you're extending this to a client tenant;
-     the harness doesn't currently support selecting a non-default tenant).
+  1. What Esmi ITSELF costs is stated clearly (Starter/Growth/Scale + the
+     pricing URL), via the tenant_pricing_pitch prompt override — not a
+     get_pricing tool call, which is reserved for a CLIENT tenant's OWN
+     service prices (see agents/tools if you're extending this to a client
+     tenant; the harness doesn't currently support selecting a non-default
+     tenant, and every non-default tenant has no pricing pitch set anyway).
   2. No booking before the Step-4 read-back confirmation.
   3. Booking DOES happen once the user confirms.
   4. Escalation fires on budget/timeline/urgency signals.
@@ -36,25 +38,27 @@ pytestmark = pytest.mark.skipif(
 )
 
 
-def test_esmi_own_pricing_is_never_quoted():
-    """Regression test for stale test debt: this test used to assert the
-    OPPOSITE of esmi_system.md's own rule (added in 88143a5, "fix pricing
-    response") -- that "How much does Esmi cost?" should quote $8,500 via
-    get_pricing. The prompt's PRICING — ESMI ITSELF vs. A CLIENT'S OWN PRICES
-    section explicitly forbids this: that question is a sales lead (deflect +
-    capture name/contact), never a canned number. get_pricing is for a CLIENT
-    tenant's own service prices, not what Esmi itself costs."""
+def test_esmi_own_pricing_is_stated_clearly():
+    """2026-08 change: asking "how much does Esmi cost" now gets the real
+    Starter/Growth/Scale numbers up front (agents.py's esmi_pricing_pitch
+    prompt injection — tenants.py's TenantConfig.esmi_pricing_pitch, set only
+    for 'default', which is what this harness always exercises), not the old
+    "deflect + capture contact info" canned line, and not a get_pricing tool
+    call (that tool is reserved for a CLIENT tenant's own service prices).
+    The old $8,500 Enterprise-tier figure is stale — the live orchelix.com/
+    pricing page moved to Starter $299 / Growth $599 / Scale $999 — so it
+    must never be quoted either."""
     calls, text = run_conversation(["How much does Esmi cost?"], thread_id="eval-pricing")
     names = tool_names(calls)
     assert "get_pricing" not in names, (
-        f"asking what Esmi itself costs must never call get_pricing: {names}"
+        f"Esmi's own pricing pitch is prompt-injected text, not a tool call: {names}"
     )
     assert "8,500" not in text and "8500" not in text, (
-        f"Esmi's own canonical price must never be quoted: {text!r}"
+        f"stale canonical price must never be quoted: {text!r}"
     )
     low = text.lower()
-    assert "depends on your business" in low or "contact you" in low, (
-        f"expected the canned deflection + contact capture, got: {text!r}"
+    assert any(w in low for w in ("starter", "growth", "scale", "299", "599", "999")), (
+        f"expected the real plan names/numbers, got: {text!r}"
     )
 
 
@@ -177,8 +181,9 @@ def test_kb_failure_escalates_not_fabricates():
 def test_pricing_intent_stays_in_informer_domain():
     """A question about what ESMI ITSELF costs must never trigger booking
     tools (or get_pricing, or escalate_to_human before contact info is even
-    given — see test_esmi_own_pricing_is_never_quoted) — it stays a plain
-    conversational deflection within the informer's domain.
+    given — see test_esmi_own_pricing_is_stated_clearly) — it stays a plain
+    conversational answer (the prompt-injected pricing pitch) within the
+    informer's domain.
 
     Invariant maps to: Supervisor → Informer (not Booker or Closer).
     """

@@ -35,12 +35,14 @@ pytestmark = pytest.mark.skipif(
 )
 
 
-def test_ma_esmi_pricing_never_quoted_by_informer():
-    """Regression test for the informer.md pricing-rule violation (fixed):
-    asking what Esmi itself costs must route to informer but get the canned
-    deflection — never a number from get_pricing or memory. This is the
-    multi-agent equivalent of the CLAUDE.md hard rule that Esmi must never
-    quote its own price.
+def test_ma_esmi_pricing_stated_clearly_by_informer():
+    """2026-08 change: asking what Esmi itself costs routes to the informer
+    and now states the real Starter/Growth/Scale numbers up front (agents.py's
+    esmi_pricing_pitch prompt injection, set only for the 'default' tenant
+    this harness exercises) — never a get_pricing tool call (reserved for a
+    CLIENT tenant's own service prices), and never the stale $8,500
+    Enterprise-tier figure from before orchelix.com/pricing moved to
+    Starter/Growth/Scale.
     """
     calls, text = run_multi_agent_conversation(
         ["How much does Esmi cost?"],
@@ -48,10 +50,14 @@ def test_ma_esmi_pricing_never_quoted_by_informer():
     )
     names = tool_names(calls)
     assert "get_pricing" not in names, (
-        f"asking what Esmi itself costs must never call get_pricing: {names}"
+        f"Esmi's own pricing pitch is prompt-injected text, not a tool call: {names}"
     )
     assert "8,500" not in text and "8500" not in text, (
-        f"Esmi's own price must never be quoted: {text[:300]!r}"
+        f"stale canonical price must never be quoted: {text[:300]!r}"
+    )
+    low = text.lower()
+    assert any(w in low for w in ("starter", "growth", "scale", "299", "599", "999")), (
+        f"expected the real plan names/numbers, got: {text[:300]!r}"
     )
 
 

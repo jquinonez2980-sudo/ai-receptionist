@@ -53,6 +53,39 @@ def _collect_streamed_text(message: str, thread_id: str) -> str:
     return asyncio.run(go())
 
 
+def _collect_streamed_text_and_tools(message: str, thread_id: str) -> tuple[str, list[str]]:
+    """Like _collect_streamed_text, but also returns which tools fired —
+    needed when the triggering question's tool call isn't guaranteed by
+    fixed text content (e.g. slot availability, whose times vary by day)."""
+
+    async def go() -> tuple[str, list[str]]:
+        from graph import build_graph
+        graph = build_graph()
+
+        tokens: list[str] = []
+        tools: list[str] = []
+        async for event in graph.astream_events(
+            {"messages": [{"role": "user", "content": message}]},
+            config={"configurable": {"thread_id": thread_id}},
+            version="v2",
+            include_subgraphs=True,
+        ):
+            if event["event"] == "on_tool_start":
+                tools.append(event.get("name", ""))
+            elif event["event"] == "on_chat_model_stream":
+                if "esmi-router-internal" in (event.get("tags") or []):
+                    continue
+                chunk = event["data"].get("chunk")
+                if chunk is None:
+                    continue
+                content = getattr(chunk, "content", "")
+                if isinstance(content, str) and content:
+                    tokens.append(content)
+        return "".join(tokens), tools
+
+    return asyncio.run(go())
+
+
 def _collect_multi_agent_stream(message: str, thread_id: str) -> str:
     """Stream through the REAL multi-agent graph, applying api.py's router-tag
     filter. Used to prove the router classifier's one-word answer never leaks."""
@@ -100,19 +133,21 @@ def test_chat_model_tokens_surface_after_tool_call():
     tokens stop surfacing after a tool call, live chat degrades to a single dump
     at the end of the response (or worse, silence).
     """
-    # Pricing question always triggers get_pricing, so this is a real tool-call turn.
-    text = _collect_streamed_text(
-        "How much does Esmi cost?",
+    # A specific-day availability question always triggers list_available_slots
+    # (booking flow STEP 2), so this is a real tool-call turn. (Used to be a
+    # pricing question — that stopped being a tool call once "how much does
+    # Esmi cost" got a prompt-injected answer instead of a get_pricing call;
+    # see test_evals.test_esmi_own_pricing_is_stated_clearly.)
+    text, called = _collect_streamed_text_and_tools(
+        "What times are available this Thursday?",
         thread_id="eval-stream-tool-call",
+    )
+    assert "list_available_slots" in called, (
+        f"expected a real tool-calling turn to test SSE-after-tool-call, got: {called}"
     )
     assert text.strip(), (
         "no tokens surfaced after a tool call — the SSE fallback path may have "
         "regressed; check on_chain_end fallback in api.py _stream_chat()"
-    )
-    # Pricing numbers must appear in the streamed tokens (not swallowed by fallback).
-    assert "$8,500" in text or "8,500" in text, (
-        f"canonical pricing not present in streamed text — tokens may be arriving "
-        f"via fallback path rather than incremental stream. Got: {text[:300]!r}"
     )
 
 
