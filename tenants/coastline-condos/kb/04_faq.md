@@ -33,7 +33,7 @@ A: Yes. Book a private on-site visit or request a video tour. Collect preferred
 dates, name, and WhatsApp/email, then book a consultation slot or escalate to sales.
 
 ## Contact
-WhatsApp +593 96 994 3941 or +593 99 484 3667 · hello@coastlinecondos.ec · @coastline_condos
+Call Esmi 24/7 at +1 (754) 799-2655 · WhatsApp +593 96 994 3941 or +593 99 484 3667 · info@coastlinecondos.vip · @coastline_condos
 
 ## What Esmi should escalate
 - Legal questions about title, HOA, or foreign ownership paperwork

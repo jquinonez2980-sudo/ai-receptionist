@@ -8,10 +8,11 @@ Residences feature private balconies/terraces, modern coastal design, and
 panoramic ocean views.
 
 ## Contact
+- Call Esmi 24/7: +1 (754) 799-2655
 - WhatsApp: +593 96 994 3941 and +593 99 484 3667
-- Email: hello@coastlinecondos.ec
+- Email: info@coastlinecondos.vip
 - Instagram: @coastline_condos
-- Website: coastlinecondos.ec
+- Website: coastlinecondos.vip
 
 ## Languages
 The sales team and Esmi (AI concierge) support **English and Latin American Spanish**.
