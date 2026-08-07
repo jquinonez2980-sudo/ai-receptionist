@@ -198,11 +198,32 @@ class TenantConfig:
     sms_templates: dict[str, str] = field(default_factory=dict)
     transfer_phone: str = ""
     # Optional custom opening line (dashboard "Greeting" field, Phase 2 self-
-    # serve config). Not yet wired into the live prompt — prompts/esmi_system.md
-    # and tenants/<id>/prompts/ remain authoritative (CLAUDE.md rule #4) until a
-    # later change compiles this into the prompt template. Stored now so the
-    # settings UI has somewhere durable to write.
+    # serve config). Wired into the web-chat prompt (agents.py appends it as
+    # the opening line on the first agent turn). NOT wired into voice — VAPI
+    # calls never reach agents.py's LangGraph prompt; a tenant's voice
+    # greeting is still whatever is configured by hand in the VAPI dashboard
+    # / mirrored prompts/vapi_system.md, tenants/<id>/prompts/vapi_voice.md
+    # (CLAUDE.md rule #4). See docs/ESMI_DASHBOARD_UX.md Section 12.1.
     greeting: str = ""
+    # Voice Studio fields (docs/ESMI_DASHBOARD_UX.md Section 3 / 12.1). Stored
+    # here now, same as greeting above, so the dashboard has somewhere durable
+    # to write — but as of this field's introduction there is NO sync path to
+    # the tenant's actual VAPI assistant yet. Saving these today changes only
+    # what the dashboard displays, not what callers hear. That sync (VAPI
+    # assistant-update API call) is separate follow-up work; do not present
+    # "Save voice settings" as live-affecting in the UI until it exists.
+    #
+    # voice_id: short catalog id (e.g. "sofia"), NOT the raw ElevenLabs
+    # provider voice id — the id-to-provider-voice mapping lives in the
+    # frontend's lib/voice/voices.ts (EsmiVoice.providerVoiceId), keeping the
+    # provider id out of tenant-editable config.
+    voice_id: str = ""
+    # 0.85-1.15, default 1.0 ("Natural") — see ConfigUpdate validation in
+    # platform_api/config.py for the enforced range.
+    speed: float = 1.0
+    # "auto" | "en" | "es" — caller-language preference for the voice channel.
+    # Mirrors the dashboard's "Language default" radio group (Section 3.2).
+    language_pref: str = "auto"
     # Tenant-scoped override for "what does Esmi itself cost" (the
     # PRICING — ESMI ITSELF case in prompts/esmi_system.md / informer.md).
     # Empty for every tenant except 'default' (see _DEFAULT_ESMI_PRICING_PITCH)
@@ -492,6 +513,9 @@ def _config_from_file(tenant_id: str, data: dict) -> TenantConfig:
         sms_templates={str(k): str(v) for k, v in sms_templates.items()},
         transfer_phone=str(data.get("transfer_phone") or "").strip(),
         greeting=str(data.get("greeting") or "").strip(),
+        voice_id=str(data.get("voice_id") or "").strip(),
+        speed=float(data.get("speed") or base.speed),
+        language_pref=str(data.get("language_pref") or base.language_pref).strip().lower(),
         # No base.esmi_pricing_pitch fallback (unlike company_name etc. above) —
         # this must stay "" for every tenant that doesn't explicitly set it, or
         # a config.json missing the key would silently inherit the default

@@ -59,6 +59,14 @@ _MAX_GREETING_LEN = 500
 _MAX_NAME_LEN = 200
 _MAX_VERSIONS = 100
 
+# Voice Studio field constraints (docs/ESMI_DASHBOARD_UX.md Section 3.4).
+# _VOICE_SPEED_MIN/MAX match the dashboard slider's 0.85x-1.15x range exactly
+# — keep these in sync if that range ever changes.
+_VOICE_SPEED_MIN = 0.85
+_VOICE_SPEED_MAX = 1.15
+_LANGUAGE_PREFS = {"auto", "en", "es"}
+_MAX_VOICE_ID_LEN = 64
+
 # Top-level config.json keys the version-history diff considers — the same
 # allow-list PUT /platform/config writes to. A human-readable label for each,
 # used to build the one-line "what changed" summary.
@@ -72,6 +80,9 @@ _DIFF_LABELS = {
     "emails": "notification emails",
     "locations": "locations/hours",
     "services": "services",
+    "voice_id": "voice",
+    "speed": "speech speed",
+    "language_pref": "language preference",
 }
 
 
@@ -111,6 +122,13 @@ class ConfigUpdate(BaseModel):
     locations: Optional[dict[str, LocationUpdate]] = None
     services: Optional[dict[str, ServiceUpdate]] = None
     emails: Optional[EmailsUpdate] = None
+    # Voice Studio (docs/ESMI_DASHBOARD_UX.md Section 3). Saving these today
+    # only changes what this endpoint returns — there is no VAPI sync yet, so
+    # it does not change what live callers hear. See tenants.py's voice_id
+    # field comment before wiring a "Save" button in the UI to this.
+    voice_id: Optional[str] = None
+    speed: Optional[float] = None
+    language_pref: Optional[str] = None
     # Optimistic concurrency: if set, must match the version this edit was
     # loaded from, or the write is rejected (409) rather than silently
     # clobbering a concurrent edit.
@@ -157,6 +175,9 @@ def _safe_config_out(cfg: TenantConfig) -> dict:
             "booking_to": cfg.email_booking_to,
             "escalation_to": cfg.email_escalation_to,
         },
+        "voice_id": cfg.voice_id,
+        "speed": cfg.speed,
+        "language_pref": cfg.language_pref,
     }
 
 
@@ -253,6 +274,35 @@ def _apply_update(raw: dict, body: ConfigUpdate) -> dict:
 
     if body.transfer_phone is not None:
         out["transfer_phone"] = body.transfer_phone.strip()
+
+    if body.voice_id is not None:
+        voice_id = body.voice_id.strip().lower()
+        if len(voice_id) > _MAX_VOICE_ID_LEN:
+            raise HTTPException(
+                status_code=400, detail=f"voice_id must be at most {_MAX_VOICE_ID_LEN} characters"
+            )
+        # Deliberately NOT validated against the voice catalog here — the
+        # catalog (lib/voice/voices.ts) is frontend-owned and not duplicated
+        # backend-side. An unrecognized id is harmless to store; the dashboard
+        # is responsible for only ever sending an id from its own library.
+        out["voice_id"] = voice_id
+
+    if body.speed is not None:
+        if not (_VOICE_SPEED_MIN <= body.speed <= _VOICE_SPEED_MAX):
+            raise HTTPException(
+                status_code=400,
+                detail=f"speed must be between {_VOICE_SPEED_MIN} and {_VOICE_SPEED_MAX}",
+            )
+        out["speed"] = body.speed
+
+    if body.language_pref is not None:
+        pref = body.language_pref.strip().lower()
+        if pref not in _LANGUAGE_PREFS:
+            raise HTTPException(
+                status_code=400,
+                detail=f"language_pref must be one of: {', '.join(sorted(_LANGUAGE_PREFS))}",
+            )
+        out["language_pref"] = pref
 
     if body.business_hours is not None:
         _validate_hours_pair(body.business_hours, "business_hours")

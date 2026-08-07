@@ -143,6 +143,9 @@ def test_config_update_allow_list_is_exactly_what_we_expect():
         "locations",
         "services",
         "emails",
+        "voice_id",
+        "speed",
+        "language_pref",
         "expected_version",
     }
 

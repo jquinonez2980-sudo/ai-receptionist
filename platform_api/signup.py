@@ -279,6 +279,15 @@ def seed_config(body: SignupRequest, tenant_id: str) -> dict:
         "services": {},
         "greeting": "",
         "transfer_phone": (body.contact_phone or "").strip(),
+        # Voice Studio defaults (see tenants.py TenantConfig.voice_id/speed/
+        # language_pref) — explicit here for the same reason pricing: [] is
+        # explicit above: a missing key would inherit the default tenant's
+        # dataclass default, which happens to be the same values today, but
+        # relying on that coincidence is exactly the kind of silent inheritance
+        # this file's other comments warn against.
+        "voice_id": "",
+        "speed": 1.0,
+        "language_pref": "auto",
     }
 
 
