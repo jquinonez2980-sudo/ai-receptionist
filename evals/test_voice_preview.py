@@ -301,6 +301,33 @@ def test_resolve_voice_id_esmi_default_is_mapped():
     assert voice_library.resolve_voice_id("ESMI-DEFAULT") == "hpp4J3VqNfWAUOO0d1Us"
 
 
+@pytest.mark.parametrize(
+    "short_id,elevenlabs_id",
+    [
+        ("ava", "EXAVITQu4vr4xnSDxMaL"),  # ElevenLabs "Sarah"
+        ("noah", "pNInz6obpgDQGcFmaJgB"),  # ElevenLabs "Adam"
+    ],
+)
+def test_resolve_voice_id_popular_catalog_entries_are_mapped(short_id, elevenlabs_id):
+    """Two of the three popular-voice additions, checked against the real
+    (unpatched) VOICE_LIBRARY — same treatment as esmi-default above, so an
+    accidental edit/removal of one of these fails loudly here too. "sofia" is
+    covered separately below — the autouse _voice_catalog fixture overrides
+    that one key for every test in this file."""
+    assert voice_library.resolve_voice_id(short_id) == elevenlabs_id
+    assert voice_library.resolve_voice_id(short_id.upper()) == elevenlabs_id
+
+
+def test_resolve_voice_id_sofia_is_mapped(monkeypatch):
+    """"sofia" needs its own test: the autouse _voice_catalog fixture above
+    overrides VOICE_LIBRARY["sofia"] with a fake id for every test in this
+    file (so happy-path preview tests don't depend on the real catalog's
+    contents) — undo that override here to check the real mapping."""
+    monkeypatch.setitem(voice_library.VOICE_LIBRARY, "sofia", "21m00Tcm4TlvDq8ikWAM")
+    assert voice_library.resolve_voice_id("sofia") == "21m00Tcm4TlvDq8ikWAM"
+    assert voice_library.resolve_voice_id("SOFIA") == "21m00Tcm4TlvDq8ikWAM"
+
+
 def test_resolve_voice_id_still_refuses_other_real_catalog_lookups():
     """Adding "esmi-default" must not make every other short id resolve —
     the real (unpatched) catalog still refuses to guess for anything else.

@@ -29,10 +29,18 @@ VOICE_LIBRARY: dict[str, str] = {
     # (default/Orchelix, otro-nivel, coastline-condos) are configured on VAPI
     # with this exact same ElevenLabs voice (model eleven_multilingual_v2) —
     # there is no per-tenant distinction yet, hence one neutral catalog id
-    # rather than a personality name. More voices (the Section 3.3 roster)
-    # get their own entries here once each is actually chosen and validated
-    # against a real tenant's assistant.
+    # rather than a personality name. Existing tenants stay on this voice
+    # until they explicitly pick another one in Voice Studio and Apply — no
+    # tenant is auto-migrated when a new entry is added below.
     "esmi-default": "hpp4J3VqNfWAUOO0d1Us",
+    # First three of the Section 3.3 roster made real: ElevenLabs' own
+    # popular premade voices (not yet chosen/Applied by any live tenant, so
+    # no --show-current confirmation needed the way esmi-default had one —
+    # these are catalog additions, validated by test-calling Quality Studio's
+    # "Spanish caller" scenario before recommending one to a client).
+    "sofia": "21m00Tcm4TlvDq8ikWAM",  # ElevenLabs "Rachel" — calm professional
+    "ava": "EXAVITQu4vr4xnSDxMaL",  # ElevenLabs "Sarah" — soft professional
+    "noah": "pNInz6obpgDQGcFmaJgB",  # ElevenLabs "Adam" — deep neutral male
 }
 
 
