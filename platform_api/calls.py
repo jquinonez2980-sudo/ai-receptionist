@@ -33,6 +33,40 @@ def _parse_date(name: str, value: Optional[str]) -> Optional[date]:
         raise HTTPException(status_code=400, detail=f"{name} must be YYYY-MM-DD")
 
 
+_CALL_COLUMNS = (
+    "id, vapi_call_id, caller_e164, started_at, ended_at, "
+    "duration_sec, outcome, language, summary, transcript, "
+    "recording_key, cost_vapi, cost_llm, created_at"
+)
+
+
+def _row_to_call(r) -> dict:
+    """Shared row → API-shape mapping for both the list and detail routes —
+    one place decides what a call looks like on the wire, so the two
+    endpoints can never quietly drift apart on field names/types."""
+    from platform_api.recordings import playable_recording_url
+
+    return {
+        "id": str(r["id"]),
+        "vapi_call_id": r["vapi_call_id"],
+        "caller": r["caller_e164"],
+        "started_at": r["started_at"].isoformat() if r["started_at"] else None,
+        "ended_at": r["ended_at"].isoformat() if r["ended_at"] else None,
+        "duration_sec": r["duration_sec"],
+        "outcome": r["outcome"],
+        # None ("Unknown" in the dashboard) for calls logged before the
+        # language column existed, or with no transcript to detect from.
+        "language": r["language"],
+        "summary": r["summary"],
+        "transcript": r["transcript"],
+        # R2 object keys are presigned into short-lived URLs here; legacy
+        # raw VAPI URLs pass through (see platform_api/recordings.py).
+        "recording_url": playable_recording_url(r["recording_key"]),
+        "cost_vapi": float(r["cost_vapi"]) if r["cost_vapi"] is not None else None,
+        "cost_llm": float(r["cost_llm"]) if r["cost_llm"] is not None else None,
+    }
+
+
 @router.get("/platform/calls")
 def platform_calls(
     request: Request,
@@ -41,12 +75,16 @@ def platform_calls(
     outcome: Optional[str] = None,
     from_date: Optional[str] = None,
     to_date: Optional[str] = None,
+    language: Optional[str] = None,
+    has_recording: Optional[bool] = None,
 ) -> dict:
     """Tenant-scoped call log, newest first.
 
     Auth: X-Platform-Secret + X-Tenant-Id headers (see security.py).
     Filters: outcome (booked|info|escalated|voicemail|abandoned|other),
-    from_date / to_date (YYYY-MM-DD, inclusive, on started_at).
+    from_date / to_date (YYYY-MM-DD, inclusive, on started_at), language
+    (es|en — matches platform_api.call_log._detect_language's output),
+    has_recording (true/false).
     Sync `def` on purpose: FastAPI runs it in the threadpool, keeping the
     blocking SQLAlchemy queries off the event loop.
     """
@@ -81,6 +119,11 @@ def platform_calls(
     if d_to:
         where.append("started_at < :d_to_excl")  # inclusive end date
         params["d_to_excl"] = d_to + timedelta(days=1)
+    if language:
+        where.append("language = :language")
+        params["language"] = language.strip().lower()
+    if has_recording is not None:
+        where.append("recording_key IS NOT NULL" if has_recording else "recording_key IS NULL")
     where_sql = " AND ".join(where)
 
     with engine.connect() as conn:
@@ -90,9 +133,7 @@ def platform_calls(
         rows = conn.execute(
             text(
                 f"""
-                SELECT id, vapi_call_id, caller_e164, started_at, ended_at,
-                       duration_sec, outcome, summary, transcript,
-                       recording_key, cost_vapi, cost_llm, created_at
+                SELECT {_CALL_COLUMNS}
                 FROM calls
                 WHERE {where_sql}
                 ORDER BY started_at DESC NULLS LAST, created_at DESC
@@ -102,27 +143,7 @@ def platform_calls(
             {**params, "limit": limit, "offset": offset},
         ).mappings().all()
 
-    from platform_api.recordings import playable_recording_url
-
-    calls = [
-        {
-            "id": str(r["id"]),
-            "vapi_call_id": r["vapi_call_id"],
-            "caller": r["caller_e164"],
-            "started_at": r["started_at"].isoformat() if r["started_at"] else None,
-            "ended_at": r["ended_at"].isoformat() if r["ended_at"] else None,
-            "duration_sec": r["duration_sec"],
-            "outcome": r["outcome"],
-            "summary": r["summary"],
-            "transcript": r["transcript"],
-            # R2 object keys are presigned into short-lived URLs here; legacy
-            # raw VAPI URLs pass through (see platform_api/recordings.py).
-            "recording_url": playable_recording_url(r["recording_key"]),
-            "cost_vapi": float(r["cost_vapi"]) if r["cost_vapi"] is not None else None,
-            "cost_llm": float(r["cost_llm"]) if r["cost_llm"] is not None else None,
-        }
-        for r in rows
-    ]
+    calls = [_row_to_call(r) for r in rows]
     return {
         "tenant_id": tenant_id,
         "total": total,
@@ -130,6 +151,44 @@ def platform_calls(
         "offset": offset,
         "calls": calls,
     }
+
+
+@router.get("/platform/calls/{call_id}")
+def platform_call_detail(request: Request, call_id: str) -> dict:
+    """Single call, tenant-scoped. 404 for a missing id AND for another
+    tenant's call id (never distinguish the two — see security.py's
+    require_tenant convention elsewhere in this package: a cross-tenant
+    lookup must read identically to a nonexistent one).
+
+    The list endpoint above already returns every field a row has (it's
+    the dashboard's only fetch today — CallLog.tsx expands a list row
+    in place rather than re-fetching), so this exists for direct
+    deep-links to one call rather than because the list is missing data.
+    """
+    verify_platform_secret(request)
+    tenant_id = require_tenant(request)
+
+    if not _UUID_RE.match(call_id or ""):
+        raise HTTPException(status_code=404, detail="Call not found")
+
+    from sqlalchemy import text
+
+    from platform_db import get_engine
+
+    engine = get_engine()
+    if engine is None:
+        raise HTTPException(status_code=503, detail="Platform DB not configured.")
+
+    with engine.connect() as conn:
+        row = conn.execute(
+            text(f"SELECT {_CALL_COLUMNS} FROM calls WHERE id = :id AND tenant_id = :tenant_id"),
+            {"id": uuid.UUID(call_id), "tenant_id": tenant_id},
+        ).mappings().first()
+
+    if row is None:
+        raise HTTPException(status_code=404, detail="Call not found")
+
+    return {"tenant_id": tenant_id, "call": _row_to_call(row)}
 
 
 @router.get("/platform/calls/{call_id}/recording/export")

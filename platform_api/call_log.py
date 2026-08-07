@@ -26,6 +26,34 @@ _BOOKING_FAILURE_MARKERS = (
     "not available", "no availability", "failed", "fully booked",
 )
 
+# Cheap heuristic language signal for the Calls dashboard's language filter
+# — not NLP-grade, just enough to bucket es vs en from the transcript text
+# VAPI already gives us in the same payload. VAPI's end-of-call-report
+# doesn't carry a reliable detected-language field across versions/
+# transcriber configs, so there's no structured field to read instead.
+# Same char-set/word-list approach as platform_api/quality_studio.py's
+# _looks_spanish — duplicated rather than shared for now since the two
+# call sites (live-call ingest here vs. a Quality Studio practice-run
+# transcript there) have no other reason to depend on each other; worth
+# consolidating into a shared module if a third caller shows up.
+_SPANISH_CHARS = set("áéíóúñ¿¡")
+_SPANISH_WORDS = (
+    " el ", " la ", " los ", " las ", " gracias", " hola", " está", " puedo",
+    " cita", " para ", " sí ", " qué ", " cómo ", " disponible", " usted ",
+)
+
+
+def _detect_language(transcript_text: str) -> Optional[str]:
+    """"es" / "en" / None (no transcript to look at — shown as "Unknown" on
+    the Calls dashboard, never miscategorized as English)."""
+    text = (transcript_text or "").strip()
+    if not text:
+        return None
+    lowered = f" {text.lower()} "
+    if any(ch in lowered for ch in _SPANISH_CHARS) or any(w in lowered for w in _SPANISH_WORDS):
+        return "es"
+    return "en"
+
 
 def _dt(value: Any) -> Optional[datetime]:
     """Parse a VAPI timestamp (ISO string or epoch ms) to aware UTC datetime."""
@@ -174,6 +202,7 @@ def parse_end_of_call(payload: dict) -> Optional[dict]:
         "outcome": derive_outcome(
             str(msg.get("endedReason") or ""), tools_called, tool_results, user_turns
         ),
+        "language": _detect_language(transcript_text),
         # Keep both the flat text and the structured turns — the dashboard
         # renders text now, and richer views can use messages later.
         "transcript": json.dumps({"text": transcript_text, "messages": messages}),
@@ -227,11 +256,11 @@ def upsert_call(tenant_id: str, row: dict) -> bool:
                 """
                 INSERT INTO calls (
                     tenant_id, vapi_call_id, vapi_phone_number_id, caller_e164,
-                    started_at, ended_at, duration_sec, outcome,
+                    started_at, ended_at, duration_sec, outcome, language,
                     transcript, summary, recording_key, cost_vapi, cost_llm
                 ) VALUES (
                     :tenant_id, :vapi_call_id, :vapi_phone_number_id, :caller_e164,
-                    :started_at, :ended_at, :duration_sec, :outcome,
+                    :started_at, :ended_at, :duration_sec, :outcome, :language,
                     CAST(:transcript AS jsonb), :summary, :recording_key,
                     :cost_vapi, :cost_llm
                 )
@@ -239,6 +268,7 @@ def upsert_call(tenant_id: str, row: dict) -> bool:
                     ended_at = EXCLUDED.ended_at,
                     duration_sec = EXCLUDED.duration_sec,
                     outcome = EXCLUDED.outcome,
+                    language = EXCLUDED.language,
                     transcript = EXCLUDED.transcript,
                     summary = EXCLUDED.summary,
                     recording_key = EXCLUDED.recording_key,
