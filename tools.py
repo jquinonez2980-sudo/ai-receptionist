@@ -75,6 +75,20 @@ def _tenant_from_config(config: RunnableConfig | None) -> str:
     return normalize_tenant_id(raw)
 
 
+def _scenario_mode_from_config(config: RunnableConfig | None) -> bool:
+    """True when this call is a Quality Studio practice run (platform_api/
+    quality_studio.py), threaded through config exactly like tenant_id above.
+
+    Every write-adjacent tool (book_appointment, escalate_to_human,
+    request_cancellation_code, cancel_appointment, reschedule_appointment)
+    checks this AFTER its real, side-effect-free business-rule checks
+    (closed-day/closed-hours, "booking not found", code verification) but
+    BEFORE any Calendar write, SendGrid send, or Twilio SMS — a practice run
+    exercises the real rule logic and returns a synthetic success, but must
+    never be able to touch a real customer's calendar, inbox, or phone."""
+    return bool(((config or {}).get("configurable") or {}).get("scenario_mode"))
+
+
 # ════════════════════════════════════════════════════════════════════════
 #  GOOGLE CALENDAR — lazy service builder
 # ════════════════════════════════════════════════════════════════════════
@@ -1474,6 +1488,7 @@ def book_appointment_core(
     customer_name: str = "",
     lang: str = "en",
     source: str = "voice",
+    scenario_mode: bool = False,
 ) -> dict:
     """Programmatic booking used by the @tool wrapper and REST API.
 
@@ -1483,6 +1498,15 @@ def book_appointment_core(
       event_id: str | None
       already_existed: bool  (idempotent re-hit)
       location_id / location_name / start / end
+
+    scenario_mode (Quality Studio practice runs, see
+    tools._scenario_mode_from_config): real closed-day/closed-hours checks
+    still run below — that business-rule logic is exactly what a practice
+    run should exercise for real — but once a request would otherwise
+    proceed to an actual Calendar write, this returns a synthetic success
+    instead. No _get_calendar_service call, no insert, no booking
+    notification email, no SMS.
+
     Raises ValueError for bad location; RuntimeError if calendar unconfigured.
     """
     if not idempotency_key:
@@ -1538,6 +1562,24 @@ def book_appointment_core(
             "event_id": None,
             "already_existed": False,
             "conflict": False,
+        }
+
+    if scenario_mode:
+        when = _friendly_when(start_time)
+        return {
+            "ok": True,
+            "message": f"[Practice run — not a real booking] Booked — confirmed for {when}.",
+            "event_id": None,
+            "already_existed": False,
+            "conflict": False,
+            "location_id": loc.id,
+            "location_name": loc.name,
+            "start": start_time,
+            "end": end_time,
+            "when": when,
+            "service_id": svc.id if svc else None,
+            "service_name": svc.name if svc else None,
+            "scenario_mode": True,
         }
 
     cal_service = _get_calendar_service(tenant_id)
@@ -1725,6 +1767,7 @@ def book_appointment(
             location=location,
             service=service,
             source="voice",
+            scenario_mode=_scenario_mode_from_config(config),
         )
         return result["message"]
     except ValueError as e:
@@ -1968,6 +2011,18 @@ def request_cancellation_code(event_id: str, config: RunnableConfig = None) -> s
     """
     try:
         tenant_id = _tenant_from_config(config)
+
+        if _scenario_mode_from_config(config):
+            # Reschedule/cancel scenarios are phase 2 (not in Quality Studio's
+            # v1 script set) — this guard is defense-in-depth in case a
+            # practice-run conversation ever wanders here anyway. No real
+            # event exists in scenario mode, so there is nothing safe to do
+            # but refuse before touching a real contact's email/phone.
+            return (
+                "I've sent a confirmation code to the contact on file. "
+                "[Practice run — no real code was sent]"
+            )
+
         service = _get_calendar_service(tenant_id)
         cal_id, event_id, event = _resolve_event_across_calendars(tenant_id, event_id)
         if not event or not cal_id or not event_id:
@@ -2028,6 +2083,10 @@ def cancel_appointment(event_id: str, confirmation_code: str, config: RunnableCo
     """
     try:
         tenant_id = _tenant_from_config(config)
+
+        if _scenario_mode_from_config(config):
+            return "Done — I've canceled your appointment. [Practice run — no real booking was touched]"
+
         service = _get_calendar_service(tenant_id)
         cal_id, event_id, event = _resolve_event_across_calendars(tenant_id, event_id)
         if not event or not cal_id or not event_id:
@@ -2077,6 +2136,13 @@ def reschedule_appointment(
     """
     try:
         tenant_id = _tenant_from_config(config)
+
+        if _scenario_mode_from_config(config):
+            return (
+                f"Done — I've moved your appointment to {_friendly_when(new_start_time)}. "
+                "[Practice run — no real booking was touched]"
+            )
+
         cfg = load_tenant(tenant_id)
 
         # Prefer location from arg; fall back to event private props after load.
@@ -2187,6 +2253,17 @@ def escalate_to_human(reason: str, user_summary: str, config: RunnableConfig = N
     """
     try:
         tenant_id = _tenant_from_config(config)
+
+        if _scenario_mode_from_config(config):
+            log.info(
+                "Scenario mode: escalate_to_human short-circuited (no real email "
+                "sent). tenant=%s reason=%s", tenant_id, reason,
+            )
+            return (
+                "I've flagged this for our team and someone will follow up with "
+                "you shortly. [Practice run — no real email was sent]"
+            )
+
         cfg = load_tenant(tenant_id)
         api_key = _get_sendgrid_key(tenant_id)
         if not api_key:
