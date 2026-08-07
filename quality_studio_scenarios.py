@@ -14,8 +14,11 @@
 # mid-conversation. See platform_api/quality_studio.py for how a run is
 # scored (per-scenario `evaluate`).
 #
-# Angry/urgent and existing-client-reschedule are intentionally NOT here yet
-# (v1 scope per the build task — phase 2).
+# Phase 2 (angry/urgent, existing-client-reschedule) reuses the exact same
+# mechanism — no new plumbing, just two more scripts + evaluate() cases
+# (platform_api/quality_studio.py) + a scenario_mode branch on find_booking
+# (tools.py) so the reschedule script has a deterministic booking to act on
+# without depending on real calendar state.
 
 from __future__ import annotations
 
@@ -74,6 +77,31 @@ SCENARIOS: tuple[Scenario, ...] = (
         ),
         language="en",
         turns=("Hi, can I come in at 3 in the morning tomorrow?",),
+    ),
+    Scenario(
+        id="angry_urgent",
+        label="Angry / urgent caller",
+        description="A frustrated caller demands to speak with a person right away.",
+        language="en",
+        turns=(
+            "This is the third time I've called about this and nobody has fixed "
+            "it. I am extremely frustrated.",
+            "I don't want to explain it again — just get me a real person right "
+            "now, please.",
+        ),
+    ),
+    Scenario(
+        id="existing_client_reschedule",
+        label="Existing client reschedule",
+        description="A returning caller needs to move their appointment to a new time.",
+        language="en",
+        turns=(
+            "Hi, I already have an appointment booked and I need to move it to "
+            "a different day.",
+            "My email is jamie.rivera@example.com — could you look it up?",
+            "Great, got it — the code is 482913. Can you move it to Friday at "
+            "2pm instead?",
+        ),
     ),
 )
 

@@ -34,6 +34,12 @@ What matters here:
      actually booked).
   8. A graph exception mid-run is caught and reported as a 502, not an
      unhandled 500.
+  9. angry_urgent (phase 2): success iff escalate_to_human was called;
+     soft-fail appends a scenario-specific hint to `note` (never on success).
+  10. existing_client_reschedule (phase 2): success iff find_booking,
+      request_cancellation_code, AND reschedule_appointment all fired —
+      skipping the confirmation-code step is a soft-fail even if the booking
+      still got "moved".
 
 Run: PYTHONUTF8=1 pytest evals/test_quality_studio.py -v
 """
@@ -306,6 +312,114 @@ def test_spanish_caller_fails_when_reply_is_english(client, monkeypatch):
 
     assert r.status_code == 200, r.text
     assert r.json()["success"] is False
+
+
+# ── angry_urgent ──────────────────────────────────────────────────────────────
+
+
+def test_angry_urgent_success_when_escalated(client, monkeypatch):
+    fake = FakeGraph(
+        [
+            [ai_reply("I'm really sorry to hear that — let me get you some help.")],
+            [ai_with_tool_call("escalate_to_human", "c1"),
+             tool_result("c1", "I've flagged this for our team and someone will follow up "
+                                "with you shortly. [Practice run — no real email was sent]"),
+             ai_reply("I've flagged this for our team — someone will reach out shortly.")],
+        ]
+    )
+    monkeypatch.setattr(qs, "_graph_module", type("M", (), {"graph": fake})())
+
+    r = client.post("/platform/quality-studio/run", json={"scenario_id": "angry_urgent"}, headers=HEADERS)
+
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["success"] is True
+    assert body["disposition"] == "escalated"
+    assert "escalate_to_human" in body["tools_called"]
+    assert "hint" not in body["note"].lower()  # no soft-fail hint appended on success
+
+
+def test_angry_urgent_soft_fail_with_hint_when_not_escalated(client, monkeypatch):
+    fake = FakeGraph(
+        [
+            [ai_reply("I understand you're upset — let's see what I can do.")],
+            [ai_reply("Can you tell me more about the issue?")],
+        ]
+    )
+    monkeypatch.setattr(qs, "_graph_module", type("M", (), {"graph": fake})())
+
+    r = client.post("/platform/quality-studio/run", json={"scenario_id": "angry_urgent"}, headers=HEADERS)
+
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["success"] is False
+    assert "escalate_to_human" not in body["tools_called"]
+    assert "should have called escalate_to_human" in body["note"]
+
+
+# ── existing_client_reschedule ───────────────────────────────────────────────
+
+
+def test_existing_client_reschedule_success_when_full_security_flow_runs(client, monkeypatch):
+    fake = FakeGraph(
+        [
+            [ai_reply("Sorry to hear that — let's get it moved. What's your email?")],
+            [ai_with_tool_call("find_booking", "c1"),
+             tool_result("c1", "Found these upcoming bookings:\n- Appointment on Thursday at "
+                                "2:00 PM (id: prac0001) [Practice run — no real calendar was searched]"),
+             ai_with_tool_call("request_cancellation_code", "c2"),
+             tool_result("c2", "I've sent a confirmation code to the contact on file. "
+                                "[Practice run — no real code was sent]"),
+             ai_reply("I've sent a code to your email — what does it say?")],
+            [ai_with_tool_call("reschedule_appointment", "c3"),
+             tool_result("c3", "Done — I've moved your appointment to Friday at 2pm. "
+                                "[Practice run — no real booking was touched]"),
+             ai_reply("You're all set for Friday at 2pm!")],
+        ]
+    )
+    monkeypatch.setattr(qs, "_graph_module", type("M", (), {"graph": fake})())
+
+    r = client.post(
+        "/platform/quality-studio/run", json={"scenario_id": "existing_client_reschedule"}, headers=HEADERS
+    )
+
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["success"] is True
+    assert {"find_booking", "request_cancellation_code", "reschedule_appointment"} <= set(
+        body["tools_called"]
+    )
+    assert "hint" not in body["note"].lower()
+
+
+def test_existing_client_reschedule_soft_fail_when_code_step_is_skipped(client, monkeypatch):
+    """The agent finds the booking but reschedules without ever requesting a
+    confirmation code — exactly the security-flow shortcut this scenario
+    exists to catch."""
+    fake = FakeGraph(
+        [
+            [ai_reply("Sorry to hear that — let's get it moved. What's your email?")],
+            [ai_with_tool_call("find_booking", "c1"),
+             tool_result("c1", "Found these upcoming bookings:\n- Appointment on Thursday at "
+                                "2:00 PM (id: prac0001) [Practice run — no real calendar was searched]"),
+             ai_reply("Found it — what time would you like instead?")],
+            [ai_with_tool_call("reschedule_appointment", "c2"),
+             tool_result("c2", "Done — I've moved your appointment to Friday at 2pm. "
+                                "[Practice run — no real booking was touched]"),
+             ai_reply("You're all set for Friday at 2pm!")],
+        ]
+    )
+    monkeypatch.setattr(qs, "_graph_module", type("M", (), {"graph": fake})())
+
+    r = client.post(
+        "/platform/quality-studio/run", json={"scenario_id": "existing_client_reschedule"}, headers=HEADERS
+    )
+
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["success"] is False
+    assert "request_cancellation_code" not in body["tools_called"]
+    assert "which step it skipped" in body["note"]
 
 
 # ── errors ────────────────────────────────────────────────────────────────

@@ -124,7 +124,40 @@ def _evaluate_success(
         return bool(esmi_replies) and all(_looks_spanish(t) for t in esmi_replies)
     if scenario_id == "after_hours":
         return not booked_for_real
+    if scenario_id == "angry_urgent":
+        return "escalate_to_human" in tools_called
+    if scenario_id == "existing_client_reschedule":
+        # All three security-flow steps in order: look the booking up, send/
+        # verify a confirmation code, only then move it — never skip straight
+        # to reschedule_appointment on the caller's say-so alone.
+        return {"find_booking", "request_cancellation_code", "reschedule_appointment"} <= tools_called
     return False
+
+
+# Shown appended to the run's `note` only when success is False, so an
+# operator sees exactly what SHOULD have happened, not just "failed".
+_SOFT_FAIL_HINTS = {
+    "angry_urgent": (
+        "This caller was frustrated and asked for a person — Esmi should have "
+        "called escalate_to_human. Check the transcript to see why it didn't."
+    ),
+    "existing_client_reschedule": (
+        "This caller wanted to move an existing booking — Esmi should look the "
+        "booking up, send a confirmation code, and only then reschedule. Check "
+        "the transcript to see which step it skipped."
+    ),
+}
+
+
+def _note_for(scenario_id: str, success: bool) -> str:
+    base = (
+        "Practice run — uses your current saved voice, greeting, and knowledge "
+        "base. Not a real customer call; no booking, email, or SMS was sent."
+    )
+    if success:
+        return base
+    hint = _SOFT_FAIL_HINTS.get(scenario_id)
+    return f"{base} {hint}" if hint else base
 
 
 class QualityStudioRunRequest(BaseModel):
@@ -220,8 +253,5 @@ async def platform_quality_studio_run(body: QualityStudioRunRequest, request: Re
         "disposition": disposition,
         "success": success,
         "duration_ms": duration_ms,
-        "note": (
-            "Practice run — uses your current saved voice, greeting, and knowledge "
-            "base. Not a real customer call; no booking, email, or SMS was sent."
-        ),
+        "note": _note_for(scenario.id, success),
     }

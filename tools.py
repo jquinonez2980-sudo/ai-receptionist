@@ -2017,6 +2017,19 @@ def find_booking(
     """
     try:
         tenant_id = _tenant_from_config(config)
+
+        if _scenario_mode_from_config(config):
+            # Quality Studio's existing-client-reschedule scenario (phase 2)
+            # needs a deterministic match to hand to request_cancellation_code
+            # / reschedule_appointment — a stateless scripted run has no real
+            # booking to find, and this table has never depended on real
+            # calendar state. No calendar is searched.
+            return (
+                "Found these upcoming bookings:\n"
+                "- Appointment on Thursday at 2:00 PM (id: prac0001) "
+                "[Practice run — no real calendar was searched]"
+            )
+
         matches = _find_events_for_contact(tenant_id, contact, location=location)
         if not matches:
             return "I don't see any upcoming bookings under that contact."

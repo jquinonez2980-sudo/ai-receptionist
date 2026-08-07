@@ -25,9 +25,15 @@ What matters here:
   4. escalate_to_human(scenario_mode=True) never imports/calls
      SendGridAPIClient.
   5. request_cancellation_code / cancel_appointment / reschedule_appointment
-     all short-circuit before _get_calendar_service in scenario mode
-     (defense-in-depth — none of Quality Studio's v1 scenarios call these,
-     but a stray LLM decision must never be able to reach them for real).
+     all short-circuit before _get_calendar_service in scenario mode — the
+     existing_client_reschedule scenario (phase 2) exercises
+     request_cancellation_code and reschedule_appointment for real; cancel_
+     appointment still has no scenario calling it, so this stays
+     defense-in-depth for that one.
+  6. find_booking(scenario_mode=True) returns a synthetic match without
+     calling _get_calendar_service — existing_client_reschedule (phase 2)
+     needs a deterministic booking to hand to the rest of the flow, since a
+     stateless scripted run has no real appointment to find.
 
 Run: PYTHONUTF8=1 pytest evals/test_tools_scenario_mode.py -v
 """
@@ -212,6 +218,33 @@ def test_reschedule_appointment_scenario_mode_never_touches_calendar(monkeypatch
         config=config,
     )
     assert "[Practice run" in result
+
+
+# ── find_booking ─────────────────────────────────────────────────────────────
+
+
+def test_find_booking_scenario_mode_never_touches_calendar(monkeypatch):
+    def boom(*a, **kw):
+        raise AssertionError("_find_events_for_contact must not be called in scenario_mode")
+
+    monkeypatch.setattr(tools, "_find_events_for_contact", boom)
+    config = {"configurable": {"tenant_id": TENANT, "scenario_mode": True}}
+    result = tools.find_booking.invoke({"contact": "jamie@example.com"}, config=config)
+
+    assert "[Practice run" in result
+    assert "id: prac0001" in result
+
+
+def test_find_booking_without_scenario_mode_reaches_the_real_lookup(monkeypatch):
+    called = []
+    monkeypatch.setattr(
+        tools, "_find_events_for_contact", lambda *a, **kw: called.append(1) or []
+    )
+    config = {"configurable": {"tenant_id": TENANT}}  # no scenario_mode key at all
+    result = tools.find_booking.invoke({"contact": "jamie@example.com"}, config=config)
+
+    assert called == [1]
+    assert "[Practice run" not in result
 
 
 # ── _scenario_mode_from_config ───────────────────────────────────────────────
