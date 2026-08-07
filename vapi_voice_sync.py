@@ -1,17 +1,23 @@
-# vapi_voice_sync.py — shared VAPI voice-PATCH mechanics.
+# vapi_voice_sync.py — shared VAPI voice + greeting PATCH mechanics.
 #
 # Single source of truth for two independent callers that must never drift
 # apart, same pattern voice_library.py already established for the id ->
 # ElevenLabs voiceId mapping:
-#   - scripts/sync_vapi_voice.py     (CLI, operator-run via `railway run`)
+#   - scripts/sync_vapi_voice.py     (CLI, operator-run via `railway run` —
+#                                      voice only, does not push greeting)
 #   - platform_api/voice_sync.py     (POST /platform/voice/apply, the
-#                                      dashboard's "Apply to live Esmi" button)
+#                                      dashboard's "Apply to live Esmi"
+#                                      button — pushes voice AND, when the
+#                                      tenant has one saved, greeting)
 #
 # Both need the exact same allow-list, the exact same assistant-id
-# resolution, and the exact same "GET, merge only voiceId+speed onto the
-# existing voice block, PATCH, verify" logic — a hand-copied second version
-# of any of these is how the two entry points end up disagreeing about what
-# is safe to push to a live VAPI assistant.
+# resolution, and the exact same "GET, compute the PATCH payload, PATCH,
+# verify" logic — a hand-copied second version of any of these is how the
+# two entry points end up disagreeing about what is safe to push to a live
+# VAPI assistant. Two independent plan/apply pairs below (voice, greeting)
+# since they patch different, unrelated fields on the same assistant object
+# and a tenant can have one without the other (e.g. voice_id set, greeting
+# still empty).
 #
 # api_key is a parameter everywhere here, not read from an env var in this
 # module: the script resolves VAPI_API_KEY from the Railway/local env
@@ -144,6 +150,78 @@ def apply_assistant_voice(plan: AssistantVoicePlan, api_key: str) -> AssistantVo
         )
     except VapiSyncError as e:
         return AssistantVoiceResult(
+            plan.assistant_id,
+            plan.name,
+            plan.before,
+            plan.before,
+            applied=False,
+            verified=False,
+            error=str(e),
+        )
+
+
+# ── greeting (assistant.firstMessage) ────────────────────────────────────
+#
+# Unlike voice, `firstMessage` is a plain top-level string on the assistant
+# object (confirmed via a live GET — sibling to `voice`, not nested), so
+# there is no "preserve other keys" merge to do: the PATCH payload is just
+# {"firstMessage": target_greeting}. Callers (platform_api/voice_sync.py)
+# only build a plan when TenantConfig.greeting is non-empty — an empty
+# greeting means "leave firstMessage exactly as it is," which these
+# functions can't distinguish from "shouldn't touch it" on their own, so
+# that decision stays the caller's, same as the voice_id-empty check in
+# sync_vapi_voice.py's sync_tenant().
+
+
+@dataclass
+class AssistantGreetingPlan:
+    assistant_id: str
+    name: str
+    before: str  # current firstMessage, "" if unset
+    after: str  # target_greeting, verbatim — spoken by TTS, no wrapper
+    changed: bool
+
+
+def plan_assistant_greeting(
+    assistant_id: str, target_greeting: str, api_key: str
+) -> AssistantGreetingPlan:
+    a = vapi_api("GET", f"/assistant/{assistant_id}", api_key)
+    name = a.get("name") or assistant_id
+    current = a.get("firstMessage") or ""
+    changed = current != target_greeting
+    return AssistantGreetingPlan(
+        assistant_id=assistant_id, name=name, before=current, after=target_greeting, changed=changed
+    )
+
+
+@dataclass
+class AssistantGreetingResult:
+    assistant_id: str
+    name: str
+    before: str
+    after: str
+    applied: bool
+    verified: bool
+    error: str | None = None
+
+
+def apply_assistant_greeting(plan: AssistantGreetingPlan, api_key: str) -> AssistantGreetingResult:
+    """Same no-op / PATCH-then-verify shape as apply_assistant_voice."""
+    if not plan.changed:
+        return AssistantGreetingResult(
+            plan.assistant_id, plan.name, plan.before, plan.before, applied=False, verified=True
+        )
+    try:
+        vapi_api(
+            "PATCH", f"/assistant/{plan.assistant_id}", api_key, {"firstMessage": plan.after}
+        )
+        check = vapi_api("GET", f"/assistant/{plan.assistant_id}", api_key)
+        got = check.get("firstMessage") or ""
+        return AssistantGreetingResult(
+            plan.assistant_id, plan.name, plan.before, got, applied=True, verified=got == plan.after
+        )
+    except VapiSyncError as e:
+        return AssistantGreetingResult(
             plan.assistant_id,
             plan.name,
             plan.before,

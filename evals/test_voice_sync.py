@@ -1,10 +1,17 @@
 """platform_api/voice_sync.py — POST /platform/voice/apply, Voice Studio's
 "Apply to live Esmi" button (docs/ESMI_DASHBOARD_UX.md Section 12.1).
 
-Never hits the real VAPI network: the PATCH-preserving-other-keys mechanics
-live in vapi_voice_sync.py (already covered by evals/test_vapi_voice_sync.py)
-and are exercised here only through vapi_voice_sync.vapi_api, monkeypatched
+Never hits the real VAPI network: the PATCH mechanics live in
+vapi_voice_sync.py (already covered by evals/test_vapi_voice_sync.py) and
+are exercised here only through vapi_voice_sync.vapi_api, monkeypatched
 with a fake recorder — same seam the CLI's own tests use.
+
+Response shape: each assistant entry is
+  {assistant_id, name, voice: {before, after, changed, applied, verified,
+  error}, greeting: {...same shape...} | None}
+`greeting` is None whenever TenantConfig.greeting is empty — voice and
+greeting are two independent PATCH targets on the same assistant, and a
+tenant can have one saved without the other.
 
 What matters here:
   1. Auth: missing X-Platform-Secret -> 401; missing X-Tenant-Id -> 400 —
@@ -12,17 +19,24 @@ What matters here:
      route uses, not reimplemented.
   2. The allow-list is enforced here too, independently of the CLI's own
      check — "default"/Orchelix and any other tenant get a 403 naming the
-     allow-listed set, before load_tenant or any VAPI call.
+     allow-listed set, before load_tenant or any VAPI call. Applies to
+     greeting too, not just voice.
   3. No assistant configured / no voice saved / unmapped voice_id each fail
-     loudly (409/409/503) before any VAPI call.
-  4. dry_run=true computes and returns the exact payload without PATCHing.
-  5. The success path PATCHes, verifies, and returns applied=true with the
-     before/after voice blocks.
-  6. Already-in-sync makes no PATCH call and still reports applied=true
-     (nothing failed) — `assistants[].changed`/`message` carry the "nothing
-     needed doing" detail rather than that collapsing into applied=false.
-  7. A VAPI failure on one assistant is surfaced in that assistant's `error`
-     and drops `applied` to false overall, rather than a 500.
+     loudly (409/409/503) before any VAPI call — a missing voice_id blocks
+     the whole request even when greeting is set, since voice is the
+     always-required half of this endpoint.
+  4. Empty greeting: no greeting plan is ever built, no extra GET/PATCH for
+     it, response `greeting` is None — an empty TenantConfig.greeting must
+     never blank out an assistant's existing firstMessage.
+  5. Non-empty greeting: planned and (unless dry_run) PATCHed independently
+     of voice, with its own {"firstMessage": ...} payload — never merged
+     into the voice PATCH body.
+  6. dry_run=true computes and returns both payloads without PATCHing
+     either.
+  7. Already-in-sync (voice and/or greeting) makes no PATCH call for that
+     part and still reports applied=true overall (nothing failed).
+  8. A VAPI failure on either voice or greeting is surfaced on that part's
+     `error` and drops top-level `applied` to false, rather than a 500.
 
 Run: PYTHONUTF8=1 pytest evals/test_voice_sync.py -v
 """
@@ -77,12 +91,15 @@ def _vapi_key(monkeypatch):
     monkeypatch.setenv("VAPI_API_KEY", "test-vapi-key")
 
 
-def fake_tenant(voice_id="esmi-default", speed=1.0, assistant_ids=(AID,)):
-    """load_tenant() stand-in — the endpoint only reads .voice_id and .speed
-    (assistant ids come from assistant_ids_for(), monkeypatched separately
-    in each test), so a full TenantConfig (many required fields, no
-    defaults) would be pure noise here."""
-    return types.SimpleNamespace(voice_id=voice_id, speed=speed, vapi_assistant_ids=tuple(assistant_ids))
+def fake_tenant(voice_id="esmi-default", speed=1.0, greeting="", assistant_ids=(AID,)):
+    """load_tenant() stand-in — the endpoint only reads .voice_id, .speed,
+    and .greeting (assistant ids come from assistant_ids_for(), monkeypatched
+    separately in each test), so a full TenantConfig (many required fields,
+    no defaults) would be pure noise here. greeting defaults empty so tests
+    that don't care about it don't pick up an unexpected extra GET/PATCH."""
+    return types.SimpleNamespace(
+        voice_id=voice_id, speed=speed, greeting=greeting, vapi_assistant_ids=tuple(assistant_ids)
+    )
 
 
 # ── auth ──────────────────────────────────────────────────────────────────
@@ -139,9 +156,9 @@ def test_no_assistant_configured_is_409(client, monkeypatch):
     assert fake_api.calls == []
 
 
-def test_no_voice_saved_is_409(client, monkeypatch):
+def test_no_voice_saved_is_409_even_with_a_greeting_saved(client, monkeypatch):
     monkeypatch.setattr(vs, "assistant_ids_for", lambda tid: [AID])
-    monkeypatch.setattr(vs, "load_tenant", lambda tid: fake_tenant(voice_id=""))
+    monkeypatch.setattr(vs, "load_tenant", lambda tid: fake_tenant(voice_id="", greeting="Hi!"))
     fake_api = FakeApi([])
     monkeypatch.setattr(vvs, "vapi_api", fake_api)
 
@@ -197,20 +214,43 @@ def test_dry_run_never_calls_patch(client, monkeypatch):
     assert body["dry_run"] is True
     assert body["applied"] is False
     assert body["assistant_id"] == AID
-    assert body["after"] == {
+    assert body["voice"]["after"] == {
         "provider": "11labs",
         "voiceId": "el_real_voice_id",
         "speed": 1.1,
         "stability": 0.5,
     }
-    assert body["assistants"][0]["changed"] is True
-    assert body["assistants"][0]["verified"] is None
+    assert body["assistants"][0]["voice"]["changed"] is True
+    assert body["assistants"][0]["voice"]["verified"] is None
+    assert body["greeting"] is None  # no greeting saved -> untouched
+    assert body["assistants"][0]["greeting"] is None
 
 
-# ── success path ─────────────────────────────────────────────────────────
+def test_dry_run_computes_greeting_payload_too(client, monkeypatch):
+    monkeypatch.setattr(vs, "assistant_ids_for", lambda tid: [AID])
+    monkeypatch.setattr(vs, "load_tenant", lambda tid: fake_tenant(greeting="New greeting!"))
+    current_assistant = {"voice": {"voiceId": "el_real_voice_id", "speed": 1.0}, "firstMessage": "Old"}
+    fake_api = FakeApi([current_assistant, current_assistant])  # voice GET, greeting GET
+    monkeypatch.setattr(vvs, "vapi_api", fake_api)
+
+    r = client.post("/platform/voice/apply?dry_run=true", headers=HEADERS)
+
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert [c[:2] for c in fake_api.calls] == [
+        ("GET", f"/assistant/{AID}"),
+        ("GET", f"/assistant/{AID}"),
+    ]  # two independent plans, no PATCH
+    assert body["greeting"] == {
+        "before": "Old", "after": "New greeting!", "changed": True, "applied": False,
+        "verified": None, "error": None,
+    }
 
 
-def test_apply_patches_and_returns_before_after(client, monkeypatch):
+# ── success path: voice ──────────────────────────────────────────────────
+
+
+def test_apply_patches_voice_and_returns_before_after(client, monkeypatch):
     monkeypatch.setattr(vs, "assistant_ids_for", lambda tid: [AID])
     monkeypatch.setattr(vs, "load_tenant", lambda tid: fake_tenant(speed=1.1))
     current_assistant = {
@@ -232,24 +272,29 @@ def test_apply_patches_and_returns_before_after(client, monkeypatch):
         ("PATCH", f"/assistant/{AID}"),
         ("GET", f"/assistant/{AID}"),
     ]
+    assert fake_api.calls[1][2] == {
+        "voice": {"provider": "11labs", "voiceId": "el_real_voice_id", "speed": 1.1, "stability": 0.5}
+    }
     assert body["applied"] is True
     assert body["dry_run"] is False
     assert body["tenant_id"] == TID
     assert body["assistant_id"] == AID
-    assert body["before"] == {
+    assert body["voice"]["before"] == {
         "provider": "11labs", "voiceId": "old_voice_id", "speed": 1.0, "stability": 0.5
     }
-    assert body["after"] == {
+    assert body["voice"]["after"] == {
         "provider": "11labs", "voiceId": "el_real_voice_id", "speed": 1.1, "stability": 0.5
     }
+    assert body["greeting"] is None
     assert "New callers will hear this voice" in body["message"]
-    assert body["assistants"][0]["verified"] is True
+    assert "greeting" not in body["message"].lower()
+    assert body["assistants"][0]["voice"]["verified"] is True
 
 
 def test_already_in_sync_makes_no_patch_but_still_reports_applied(client, monkeypatch):
     """`applied` means "completed without errors", not "a byte changed" —
     already-in-sync is a successful outcome (nothing failed), just with no
-    PATCH call. `assistants[].changed` / `message` carry the "nothing
+    PATCH call. `assistants[].voice.changed` / `message` carry the "nothing
     needed doing" detail for the frontend to show distinctly."""
     monkeypatch.setattr(vs, "assistant_ids_for", lambda tid: [AID])
     monkeypatch.setattr(vs, "load_tenant", lambda tid: fake_tenant(speed=1.0))
@@ -264,11 +309,11 @@ def test_already_in_sync_makes_no_patch_but_still_reports_applied(client, monkey
     assert fake_api.calls == [("GET", f"/assistant/{AID}", None)]  # no PATCH
     assert body["applied"] is True
     assert "up to date" in body["message"].lower()
-    assert body["assistants"][0]["changed"] is False
-    assert body["assistants"][0]["applied"] is False  # per-assistant: no PATCH was needed
+    assert body["assistants"][0]["voice"]["changed"] is False
+    assert body["assistants"][0]["voice"]["applied"] is False  # no PATCH was needed
 
 
-def test_vapi_failure_is_reported_not_500(client, monkeypatch):
+def test_vapi_failure_on_voice_is_reported_not_500(client, monkeypatch):
     monkeypatch.setattr(vs, "assistant_ids_for", lambda tid: [AID])
     monkeypatch.setattr(vs, "load_tenant", lambda tid: fake_tenant(speed=1.1))
     current_assistant = {"voice": {"voiceId": "old_voice_id", "speed": 1.0}}
@@ -285,5 +330,103 @@ def test_vapi_failure_is_reported_not_500(client, monkeypatch):
     assert r.status_code == 200, r.text
     body = r.json()
     assert body["applied"] is False
-    assert body["assistants"][0]["error"] is not None
-    assert "boom" in body["assistants"][0]["error"]
+    assert body["assistants"][0]["voice"]["error"] is not None
+    assert "boom" in body["assistants"][0]["voice"]["error"]
+
+
+# ── success path: greeting ───────────────────────────────────────────────
+
+
+def test_empty_greeting_is_never_planned_or_patched(client, monkeypatch):
+    monkeypatch.setattr(vs, "assistant_ids_for", lambda tid: [AID])
+    monkeypatch.setattr(vs, "load_tenant", lambda tid: fake_tenant(speed=1.0, greeting=""))
+    current_assistant = {"voice": {"voiceId": "el_real_voice_id", "speed": 1.0}, "firstMessage": "Existing"}
+    fake_api = FakeApi([current_assistant])  # only ONE call — voice GET, no greeting GET at all
+    monkeypatch.setattr(vvs, "vapi_api", fake_api)
+
+    r = client.post("/platform/voice/apply", headers=HEADERS)
+
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert fake_api.calls == [("GET", f"/assistant/{AID}", None)]
+    assert body["greeting"] is None
+    assert body["assistants"][0]["greeting"] is None
+
+
+def test_apply_patches_greeting_with_own_payload_alongside_voice(client, monkeypatch):
+    monkeypatch.setattr(vs, "assistant_ids_for", lambda tid: [AID])
+    monkeypatch.setattr(vs, "load_tenant", lambda tid: fake_tenant(speed=1.1, greeting="New greeting!"))
+    voice_get = {"voice": {"voiceId": "old_voice_id", "speed": 1.0}}
+    voice_verify = {"voice": {"voiceId": "el_real_voice_id", "speed": 1.1}}
+    greeting_get = {"firstMessage": "Old greeting"}
+    greeting_verify = {"firstMessage": "New greeting!"}
+    fake_api = FakeApi([voice_get, {}, voice_verify, greeting_get, {}, greeting_verify])
+    monkeypatch.setattr(vvs, "vapi_api", fake_api)
+
+    r = client.post("/platform/voice/apply", headers=HEADERS)
+
+    assert r.status_code == 200, r.text
+    body = r.json()
+    methods = [c[:2] for c in fake_api.calls]
+    assert methods == [
+        ("GET", f"/assistant/{AID}"), ("PATCH", f"/assistant/{AID}"), ("GET", f"/assistant/{AID}"),
+        ("GET", f"/assistant/{AID}"), ("PATCH", f"/assistant/{AID}"), ("GET", f"/assistant/{AID}"),
+    ]
+    # voice PATCH body vs greeting PATCH body — never merged into one call
+    assert fake_api.calls[1][2] == {"voice": {"voiceId": "el_real_voice_id", "speed": 1.1}}
+    assert fake_api.calls[4][2] == {"firstMessage": "New greeting!"}
+    assert body["applied"] is True
+    assert body["greeting"] == {
+        "before": "Old greeting", "after": "New greeting!", "changed": True,
+        "applied": True, "verified": True, "error": None,
+    }
+    assert "voice and greeting" in body["message"].lower()
+
+
+def test_greeting_only_changed_message_does_not_mention_voice(client, monkeypatch):
+    monkeypatch.setattr(vs, "assistant_ids_for", lambda tid: [AID])
+    monkeypatch.setattr(vs, "load_tenant", lambda tid: fake_tenant(speed=1.0, greeting="New!"))
+    voice_get = {"voice": {"voiceId": "el_real_voice_id", "speed": 1.0}}  # already in sync
+    greeting_get = {"firstMessage": "Old"}
+    greeting_verify = {"firstMessage": "New!"}
+    fake_api = FakeApi([voice_get, greeting_get, {}, greeting_verify])
+    monkeypatch.setattr(vvs, "vapi_api", fake_api)
+
+    r = client.post("/platform/voice/apply", headers=HEADERS)
+
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["applied"] is True
+    assert "greeting" in body["message"].lower()
+    assert "voice" not in body["message"].lower()
+
+
+def test_vapi_failure_on_greeting_drops_applied_even_if_voice_succeeds(client, monkeypatch):
+    monkeypatch.setattr(vs, "assistant_ids_for", lambda tid: [AID])
+    monkeypatch.setattr(vs, "load_tenant", lambda tid: fake_tenant(speed=1.0, greeting="New!"))
+    voice_get = {"voice": {"voiceId": "el_real_voice_id", "speed": 1.0}}  # already in sync, no PATCH
+    greeting_get = {"firstMessage": "Old"}
+
+    # Call-count based fake since both GETs hit the identical path — order
+    # is voice's plan GET first, then greeting's plan GET, then greeting's
+    # PATCH (which fails).
+    calls = {"n": 0}
+    responses = [voice_get, greeting_get]
+
+    def fake(method, path, api_key, body=None):
+        if method == "GET":
+            r = responses[calls["n"]]
+            calls["n"] += 1
+            return r
+        raise vvs.VapiSyncError(f"{method} {path} -> HTTP 500: boom")
+
+    monkeypatch.setattr(vvs, "vapi_api", fake)
+
+    r = client.post("/platform/voice/apply", headers=HEADERS)
+
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["applied"] is False
+    assert body["assistants"][0]["voice"]["error"] is None  # voice was already in sync — never PATCHed
+    assert body["assistants"][0]["greeting"]["error"] is not None
+    assert "boom" in body["assistants"][0]["greeting"]["error"]
