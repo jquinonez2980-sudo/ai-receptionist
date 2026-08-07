@@ -24,11 +24,11 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field, field_validator
-from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
-from slowapi.util import get_remote_address
 
 import graph as _graph_module
+import rate_limit
 from _text_utils import (
     _clean_response,
     _enhance_slots_for_voice,
@@ -70,38 +70,20 @@ for _noisy in ("httpx", "httpcore", "urllib3", "googleapiclient", "openai"):
 
 log = logging.getLogger(__name__)
 
-# Shared secret the Next.js proxy sends on every /chat request. Defined here
-# (rather than down with the other auth helpers) because _rate_limit_key needs
-# it. Fail-open when unset (logs a warning) so the endpoint stays usable before
-# the secret is wired up in Railway + Vercel. Once set, missing/wrong header → 401.
+# Shared secret the Next.js proxy sends on every /chat request. Fail-open
+# when unset (logs a warning) so the endpoint stays usable before the secret
+# is wired up in Railway + Vercel. Once set, missing/wrong header → 401.
+# Same value rate_limit.py reads independently (see that module's docstring
+# for why it doesn't import this name from here instead).
 CHAT_PROXY_SECRET = os.environ.get("CHAT_PROXY_SECRET")
 # Shared secret for website → Railway booking REST (X-Booking-Secret header).
 # Fail-open when unset (local dev); once set, missing/wrong header → 401.
 BOOKING_API_SECRET = os.environ.get("BOOKING_API_SECRET")
 
-
-def _rate_limit_key(request: Request) -> str:
-    """Key the /chat rate limiter on the real visitor, not the Next.js proxy.
-
-    All /chat traffic arrives via the orhelix-website proxy's server-to-server
-    fetch(), so request.client.host is the proxy's own egress IP for every
-    visitor — keying on it either throttles all visitors as one shared bucket
-    or (depending on proxy hosting) doesn't rate-limit anything meaningfully.
-    The proxy forwards the real visitor IP in X-Client-IP; only trust it when
-    the request also carries the correct X-Chat-Secret, so an unauthenticated
-    caller can't spoof the header to manipulate someone else's bucket (they'll
-    be 401'd by _verify_chat_secret regardless, but the rate-limit check runs
-    before that, per slowapi's decorator ordering).
-    """
-    provided_secret = request.headers.get("X-Chat-Secret", "")
-    if CHAT_PROXY_SECRET and hmac.compare_digest(provided_secret, CHAT_PROXY_SECRET):
-        forwarded = request.headers.get("X-Client-IP", "").strip()
-        if forwarded:
-            return forwarded
-    return get_remote_address(request)
-
-
-limiter = Limiter(key_func=_rate_limit_key)
+# The Limiter instance every rate-limited route in this file AND in
+# platform_api/public_voice_preview.py shares — see rate_limit.py's
+# docstring for why it lives there instead of here.
+limiter = rate_limit.limiter
 
 
 @asynccontextmanager
@@ -151,6 +133,7 @@ from platform_api import (  # noqa: E402
     leads_router,
     onboarding_router,
     overview_router,
+    public_voice_preview_router,
     signup_router,
     tenant_status_router,
     usage_router,
@@ -175,6 +158,7 @@ app.include_router(onboarding_router)
 app.include_router(tenant_status_router)
 app.include_router(voice_preview_router)
 app.include_router(voice_sync_router)
+app.include_router(public_voice_preview_router)
 
 
 # ── Auth helpers ──────────────────────────────────────────────────────────────
