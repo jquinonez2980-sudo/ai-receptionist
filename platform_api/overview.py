@@ -20,7 +20,7 @@ from zoneinfo import ZoneInfo
 from fastapi import APIRouter, HTTPException, Request
 
 from platform_api.security import require_tenant, verify_platform_secret
-from tenants import TenantConfig, load_tenant
+from tenants import TenantConfig, load_tenant, tenant_state
 
 log = logging.getLogger(__name__)
 
@@ -68,7 +68,8 @@ def _bucket_stats(
 ) -> dict:
     calls = booked = escalated = after_hours = 0
     seconds = 0
-    for started_at, duration_sec, outcome in rows:
+    language_mix = {"en": 0, "es": 0, "unknown": 0}
+    for started_at, duration_sec, outcome, language in rows:
         if started_at is None or not (start <= started_at < end):
             continue
         calls += 1
@@ -79,6 +80,7 @@ def _bucket_stats(
             escalated += 1
         if _is_after_hours(started_at.astimezone(tz), cfg):
             after_hours += 1
+        language_mix[language if language in ("en", "es") else "unknown"] += 1
     return {
         "from": start.isoformat(),
         "to": end.isoformat(),
@@ -92,6 +94,10 @@ def _bucket_stats(
         "est_revenue_booked": (
             round(booked * avg_price) if avg_price is not None else None
         ),
+        # docs/ESMI_DASHBOARD_UX.md Section 5.1 "Language mix donut" — reuses
+        # calls.language (migration 0008), no new query: same row set this
+        # bucket already scans.
+        "language_mix": language_mix,
     }
 
 
@@ -138,6 +144,92 @@ def _chat_rows(conn, tenant_id: str, prev_start) -> list:
         return []
 
 
+def _recent_activity(call_rows: list, chat_rows: list, limit: int = 5) -> list[dict]:
+    """Last `limit` calls + chats combined, newest first
+    (docs/ESMI_DASHBOARD_UX.md Section 5.1 "Recent activity"). Pure — reuses
+    the same 14-day row sets the KPI buckets above already fetched, no extra
+    query. Not window-bound the way the KPI buckets are: this is "what just
+    happened", so a quiet tenant with only 2 calls in 14 days simply shows 2,
+    rather than padding or re-querying further back.
+
+    No `id` in the output on purpose — there's no per-call/per-chat detail
+    route in the dashboard yet (Calls/Chats expand a row in place from their
+    own list fetch), so a row here only needs enough to render and link to
+    that list, not to deep-link a specific record.
+    """
+    items = [
+        {
+            "type": "call",
+            "at": started_at.isoformat() if started_at else None,
+            "outcome": outcome,
+            "language": language if language in ("en", "es") else None,
+        }
+        for started_at, _duration_sec, outcome, language in call_rows
+        if started_at is not None
+    ]
+    items += [
+        {
+            "type": "chat",
+            "at": (last_at or started_at).isoformat() if (last_at or started_at) else None,
+            "outcome": outcome,
+            "language": None,
+        }
+        for started_at, last_at, outcome in chat_rows
+        if (last_at or started_at) is not None
+    ]
+    items.sort(key=lambda x: x["at"] or "", reverse=True)
+    return items[:limit]
+
+
+def _setup_checklist(tenant_id: str) -> Optional[dict]:
+    """Onboarding setup checklist (docs/ESMI_DASHBOARD_UX.md Section 5.1) —
+    None once the tenant is active, so an established tenant's Overview does
+    zero extra work for this. Reuses tenant_state()'s 60s-cached lookup
+    (already used by tenant-status) plus one cheap kb_entries COUNT — no new
+    tables, no heavy analytics."""
+    state = tenant_state(tenant_id)
+    if state is None or state.onboarding_status == "active":
+        return None
+
+    knowledge_added = False
+    try:
+        from sqlalchemy import text
+
+        from platform_db import get_engine
+
+        engine = get_engine()
+        if engine is not None:
+            with engine.connect() as conn:
+                count = conn.execute(
+                    text("SELECT COUNT(*) FROM kb_entries WHERE tenant_id = :tid"),
+                    {"tid": tenant_id},
+                ).scalar_one()
+                knowledge_added = count > 0
+    except Exception:
+        log.exception("kb_entries count failed for tenant=%s setup checklist.", tenant_id)
+
+    return {
+        "onboarding_status": state.onboarding_status,
+        "items": [
+            {
+                "key": "voice_previewed",
+                "label": "Preview your voice & greeting",
+                "done": state.onboarding_voice_previewed_at is not None,
+            },
+            {
+                "key": "knowledge_added",
+                "label": "Add a knowledge base entry",
+                "done": knowledge_added,
+            },
+            {
+                "key": "activated",
+                "label": "Orchelix review & go-live",
+                "done": False,
+            },
+        ],
+    }
+
+
 @router.get("/platform/overview")
 def platform_overview(request: Request) -> dict:
     """Tenant KPIs: rolling last-7-days vs the 7 days before that.
@@ -168,7 +260,7 @@ def platform_overview(request: Request) -> dict:
     with engine.connect() as conn:
         rows = conn.execute(
             text(
-                "SELECT started_at, duration_sec, outcome FROM calls "
+                "SELECT started_at, duration_sec, outcome, language FROM calls "
                 "WHERE tenant_id = :tid AND started_at >= :prev_start"
             ),
             {"tid": tenant_id, "prev_start": prev_start},
@@ -186,4 +278,6 @@ def platform_overview(request: Request) -> dict:
         "window_days": WINDOW_DAYS,
         "current": current,
         "previous": previous,
+        "recent_activity": _recent_activity(rows, chat_rows),
+        "setup_checklist": _setup_checklist(tenant_id),
     }

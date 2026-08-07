@@ -165,6 +165,111 @@ def test_overview_chat_failure_does_not_break_calls_data(client, monkeypatch):
     assert body["current"]["calls_answered"] == 0
 
 
+def test_overview_language_mix_is_additive_and_buckets_correctly(client, monkeypatch):
+    now = datetime.now(timezone.utc)
+    conn = use(monkeypatch, FakeConn(rules=[
+        ("FROM calls", [
+            (now - timedelta(days=1), 60, "booked", "en"),
+            (now - timedelta(days=2), 60, "info", "es"),
+            (now - timedelta(days=3), 60, "info", None),  # unmapped/pre-migration row
+            (now - timedelta(days=3), 60, "info", "fr"),  # unexpected value — still "unknown"
+            (now - timedelta(days=10), 60, "info", "en"),  # prior window
+        ]),
+        ("FROM chat_sessions", []),
+    ]))
+    body = client.get("/platform/overview", headers=HEADERS).json()
+
+    assert body["current"]["language_mix"] == {"en": 1, "es": 1, "unknown": 2}
+    assert body["previous"]["language_mix"] == {"en": 1, "es": 0, "unknown": 0}
+    # Pre-existing keys unaffected.
+    assert body["current"]["calls_answered"] == 4
+
+
+def test_overview_recent_activity_merges_calls_and_chats_newest_first(client, monkeypatch):
+    now = datetime.now(timezone.utc)
+    use(monkeypatch, FakeConn(rules=[
+        ("FROM calls", [
+            (now - timedelta(hours=1), 60, "booked", "en"),
+            (now - timedelta(hours=5), 60, "info", "es"),
+        ]),
+        ("FROM chat_sessions", [
+            (now - timedelta(hours=3), None, "escalated"),
+        ]),
+    ]))
+    body = client.get("/platform/overview", headers=HEADERS).json()
+
+    activity = body["recent_activity"]
+    assert [item["type"] for item in activity] == ["call", "chat", "call"]
+    assert activity[0]["outcome"] == "booked"
+    assert activity[0]["language"] == "en"
+    assert activity[1]["type"] == "chat" and activity[1]["language"] is None
+    # Strictly newest-first.
+    assert activity == sorted(activity, key=lambda x: x["at"], reverse=True)
+
+
+def test_overview_recent_activity_caps_at_five(client, monkeypatch):
+    now = datetime.now(timezone.utc)
+    call_rows = [(now - timedelta(minutes=i), 60, "info", "en") for i in range(8)]
+    use(monkeypatch, FakeConn(rules=[("FROM calls", call_rows), ("FROM chat_sessions", [])]))
+    body = client.get("/platform/overview", headers=HEADERS).json()
+    assert len(body["recent_activity"]) == 5
+
+
+def test_setup_checklist_none_when_tenant_is_active(monkeypatch):
+    from tenants import TenantState
+
+    monkeypatch.setattr(
+        overview,
+        "tenant_state",
+        lambda tid: TenantState(onboarding_status="active", account_status="live", plan="managed"),
+    )
+    assert overview._setup_checklist(TID) is None
+
+
+def test_setup_checklist_none_when_tenant_unknown(monkeypatch):
+    monkeypatch.setattr(overview, "tenant_state", lambda tid: None)
+    assert overview._setup_checklist(TID) is None
+
+
+def test_setup_checklist_reflects_voice_previewed_and_knowledge(monkeypatch):
+    from datetime import timezone as tz_mod
+
+    from tenants import TenantState
+
+    monkeypatch.setattr(
+        overview,
+        "tenant_state",
+        lambda tid: TenantState(
+            onboarding_status="review", account_status="live", plan="managed",
+            onboarding_voice_previewed_at=datetime(2026, 8, 7, tzinfo=tz_mod.utc),
+        ),
+    )
+    conn = FakeConn(rules=[("FROM kb_entries", [(3,)])])
+    monkeypatch.setattr("platform_db.get_engine", lambda: FakeEngine(conn))
+
+    checklist = overview._setup_checklist(TID)
+    assert checklist["onboarding_status"] == "review"
+    items = {item["key"]: item["done"] for item in checklist["items"]}
+    assert items == {"voice_previewed": True, "knowledge_added": True, "activated": False}
+
+
+def test_setup_checklist_knowledge_not_added_when_zero_entries(monkeypatch):
+    from tenants import TenantState
+
+    monkeypatch.setattr(
+        overview,
+        "tenant_state",
+        lambda tid: TenantState(onboarding_status="submitted", account_status="live", plan="managed"),
+    )
+    conn = FakeConn(rules=[("FROM kb_entries", [(0,)])])
+    monkeypatch.setattr("platform_db.get_engine", lambda: FakeEngine(conn))
+
+    checklist = overview._setup_checklist(TID)
+    items = {item["key"]: item["done"] for item in checklist["items"]}
+    assert items["voice_previewed"] is False
+    assert items["knowledge_added"] is False
+
+
 def test_overview_no_db_is_503(client, monkeypatch):
     monkeypatch.setattr("platform_db.get_engine", lambda: None)
     r = client.get("/platform/overview", headers=HEADERS)
