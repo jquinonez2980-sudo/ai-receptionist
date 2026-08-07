@@ -40,6 +40,7 @@ import re
 import threading
 import warnings
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 from time import monotonic
 from typing import Optional
@@ -333,6 +334,9 @@ class TenantState:
     onboarding_status: str
     account_status: str
     plan: Optional[str] = None
+    # Onboarding voice gate (docs/ESMI_DASHBOARD_UX.md Section 7 Step 3).
+    # None = tenant hasn't successfully previewed a greeting yet.
+    onboarding_voice_previewed_at: Optional[datetime] = None
 
 
 # tid → (TenantState | None, expiry). None means "queried the DB, this tenant
@@ -616,7 +620,8 @@ def _db_tenant_status(tenant_id: str):
         with engine.connect() as conn:
             row = conn.execute(
                 _sql(
-                    "SELECT onboarding_status, status, plan FROM tenants WHERE id = :tid"
+                    "SELECT onboarding_status, status, plan, onboarding_voice_previewed_at "
+                    "FROM tenants WHERE id = :tid"
                 ),
                 {"tid": tenant_id},
             ).first()
@@ -629,6 +634,7 @@ def _db_tenant_status(tenant_id: str):
             onboarding_status=row[0] or ACTIVE_ONBOARDING_STATUS,
             account_status=row[1] or DEFAULT_ACCOUNT_STATUS,
             plan=row[2],
+            onboarding_voice_previewed_at=row[3],
         )
     except Exception as e:
         log.warning(

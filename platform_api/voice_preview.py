@@ -117,6 +117,48 @@ def _synthesize(elevenlabs_voice_id: str, api_key: str, speed: float, text: str)
     return resp.content
 
 
+def _mark_onboarding_voice_previewed(tenant_id: str) -> None:
+    """Best-effort: set tenants.onboarding_voice_previewed_at on this tenant's
+    first successful preview (docs/ESMI_DASHBOARD_UX.md Section 7 Step 3 —
+    the onboarding "must preview once" gate). Only called from the success
+    path below, after synthesis/caching and the presigned URL both succeeded
+    — any earlier failure raises before reaching here, so a failed preview
+    can never set this.
+
+    Idempotent (COALESCE keeps the first timestamp on repeat previews) and
+    non-fatal: a flag-write failure must not turn an otherwise-successful
+    preview response into an error the caller can't act on.
+    """
+    if tenant_id == "default":
+        return
+    try:
+        from sqlalchemy import text
+
+        from platform_db import get_engine
+
+        engine = get_engine()
+        if engine is None:
+            return
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    "INSERT INTO tenants (id, onboarding_voice_previewed_at) "
+                    "VALUES (:id, now()) "
+                    "ON CONFLICT (id) DO UPDATE SET onboarding_voice_previewed_at = "
+                    "COALESCE(tenants.onboarding_voice_previewed_at, now())"
+                ),
+                {"id": tenant_id},
+            )
+        from tenants import clear_tenant_cache
+
+        clear_tenant_cache(tenant_id)
+    except Exception as e:
+        log.warning(
+            "Tenant '%s': failed to record onboarding_voice_previewed_at (%s: %s).",
+            tenant_id, type(e).__name__, e,
+        )
+
+
 @router.post("/platform/voice/preview")
 def platform_voice_preview(body: VoicePreviewRequest, request: Request) -> dict:
     """Synthesize (or reuse a cached) preview of `text` in a tenant's voice.
@@ -203,6 +245,8 @@ def platform_voice_preview(body: VoicePreviewRequest, request: Request) -> dict:
     url = client.generate_presigned_url(
         "get_object", Params={"Bucket": _bucket(), "Key": object_key}, ExpiresIn=ttl
     )
+
+    _mark_onboarding_voice_previewed(tenant_id)
 
     return {
         "url": url,

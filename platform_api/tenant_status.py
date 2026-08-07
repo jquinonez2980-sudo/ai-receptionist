@@ -29,7 +29,9 @@ log = logging.getLogger(__name__)
 router = APIRouter()
 
 # Stand-in so the plan lookup below doesn't need its own None branch.
-_NO_STATE = TenantState(onboarding_status="", account_status="", plan=None)
+_NO_STATE = TenantState(
+    onboarding_status="", account_status="", plan=None, onboarding_voice_previewed_at=None
+)
 
 
 @router.get("/platform/tenant-status")
@@ -64,4 +66,8 @@ def platform_tenant_status(request: Request) -> dict:
         "can_serve_traffic": tenant_is_active(tenant_id),
         # No fallback: a tenant with no row genuinely has no assigned plan.
         "plan": state.plan,
+        # Onboarding voice gate (docs/ESMI_DASHBOARD_UX.md Section 7 Step 3) —
+        # set server-side by POST /platform/voice/preview on its first 200 for
+        # this tenant, never by the frontend directly.
+        "onboarding_voice_previewed": state.onboarding_voice_previewed_at is not None,
     }

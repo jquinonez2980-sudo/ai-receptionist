@@ -31,6 +31,7 @@ from fastapi.testclient import TestClient
 
 import platform_api.voice_preview as vp
 import voice_library
+from evals.test_signup import FakeConn, FakeEngine
 
 SECRET = "test-platform-secret"
 TID = "otro-nivel"
@@ -306,3 +307,95 @@ def test_resolve_voice_id_still_refuses_other_real_catalog_lookups():
     (Doesn't check "sofia" here — the autouse _voice_catalog fixture above
     temporarily injects that key into the real dict for every test.)"""
     assert voice_library.resolve_voice_id("totally-unknown-voice") is None
+
+
+# ── onboarding voice gate: onboarding_voice_previewed_at ─────────────────────
+# docs/ESMI_DASHBOARD_UX.md Section 7 Step 3 — "must preview once" gate.
+
+
+def use_db(monkeypatch, conn=None):
+    conn = conn or FakeConn()
+    monkeypatch.setattr("platform_db.get_engine", lambda: FakeEngine(conn))
+    return conn
+
+
+def test_successful_preview_marks_onboarding_voice_previewed(client, fake_s3, monkeypatch):
+    monkeypatch.setattr(vp, "_synthesize", lambda *a, **kw: b"\x00" * 16_000)
+    conn = use_db(monkeypatch)
+
+    r = client.post("/platform/voice/preview", json=body(), headers=HEADERS)
+    assert r.status_code == 200, r.text
+
+    writes = conn.sql_containing("onboarding_voice_previewed_at")
+    assert len(writes) == 1
+    sql, params = writes[0]
+    assert "INSERT INTO tenants" in sql
+    assert "ON CONFLICT" in sql
+    assert params == {"id": TID}
+
+
+def test_cache_hit_also_marks_onboarding_voice_previewed(client, fake_s3, monkeypatch):
+    """A cache hit is still a successful preview response — the gate cares
+    about "did they hear it", not "did we call ElevenLabs this time"."""
+    key = vp._object_key(TID, vp._cache_key(TID, "sofia", 1.0, "en", "Hello there."))
+    fake_s3.objects[key] = b"\x00" * 8000
+    conn = use_db(monkeypatch)
+
+    r = client.post("/platform/voice/preview", json=body(), headers=HEADERS)
+    assert r.status_code == 200, r.text
+    assert len(conn.sql_containing("onboarding_voice_previewed_at")) == 1
+
+
+@pytest.mark.parametrize(
+    "override,expected_status",
+    [
+        ({"speed": 5.0}, 400),
+        ({"language": "fr"}, 400),
+        ({"text": "   "}, 400),
+        ({"voice_id": "not-a-real-voice"}, 503),
+    ],
+)
+def test_failed_preview_never_marks_onboarding_voice_previewed(
+    client, fake_s3, monkeypatch, override, expected_status
+):
+    conn = use_db(monkeypatch)
+    r = client.post("/platform/voice/preview", json=body(**override), headers=HEADERS)
+    assert r.status_code == expected_status
+    assert conn.sql_containing("onboarding_voice_previewed_at") == []
+
+
+def test_synthesis_failure_never_marks_onboarding_voice_previewed(client, fake_s3, monkeypatch):
+    monkeypatch.setattr(vp, "_synthesize", lambda *a, **kw: (_ for _ in ()).throw(RuntimeError("boom")))
+    conn = use_db(monkeypatch)
+    r = client.post("/platform/voice/preview", json=body(), headers=HEADERS)
+    assert r.status_code == 502
+    assert conn.sql_containing("onboarding_voice_previewed_at") == []
+
+
+def test_default_tenant_is_never_marked(client, fake_s3, monkeypatch):
+    """tenant_id 'default' (Orchelix) has no self-serve onboarding — the flag
+    write must be skipped outright, not attempted and swallowed."""
+    monkeypatch.setattr(vp, "_synthesize", lambda *a, **kw: b"\x00" * 16_000)
+    conn = use_db(monkeypatch)
+    headers = {"X-Platform-Secret": SECRET, "X-Tenant-Id": "default"}
+
+    r = client.post("/platform/voice/preview", json=body(), headers=headers)
+    assert r.status_code == 200, r.text
+    assert conn.sql_containing("onboarding_voice_previewed_at") == []
+
+
+def test_flag_write_failure_does_not_break_a_successful_preview(client, fake_s3, monkeypatch):
+    """The preview itself already fully succeeded (audio synthesized/cached,
+    URL presigned) by the time this best-effort write runs — a DB hiccup here
+    must not turn that into an error response."""
+    monkeypatch.setattr(vp, "_synthesize", lambda *a, **kw: b"\x00" * 16_000)
+
+    class BoomEngine:
+        def begin(self):
+            raise RuntimeError("db unreachable")
+
+    monkeypatch.setattr("platform_db.get_engine", lambda: BoomEngine())
+
+    r = client.post("/platform/voice/preview", json=body(), headers=HEADERS)
+    assert r.status_code == 200, r.text
+    assert r.json()["url"]
