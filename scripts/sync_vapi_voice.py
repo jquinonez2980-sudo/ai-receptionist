@@ -53,6 +53,14 @@ file):
 
 Never prints secret values. Test against otro-nivel or coastline-condos
 before ever running --apply against the default (Orchelix) tenant.
+
+ALLOW-LIST: --tenant (dry run or --apply) only works for tenants in
+SYNC_ALLOWED_TENANTS below. This is a hard gate, not a suggestion — the
+default (Orchelix) assistant is the live production number and has no
+tested EsmiVoice -> ElevenLabs mapping precedent, so it stays out of this
+script's reach until otro-nivel/coastline-condos prove the sync path is
+safe. --show-current is exempt (read-only, no PATCH, and it's how you'd
+inspect Orchelix's live voice before ever deciding to expand this list).
 """
 
 from __future__ import annotations
@@ -114,6 +122,11 @@ def api(method: str, path: str, body: dict | None = None) -> dict | list:
 # config.json — same fact scripts/update_vapi_webhooks.py encodes.
 ORCHELIX_ASSISTANT_ID = "d5e020bf-0235-4214-a57f-de30e8072b0b"
 
+# Hard allow-list for --tenant (both dry run and --apply) — see module
+# docstring "ALLOW-LIST" section. Expand only after a tenant's sync has been
+# dry-run reviewed and apply-tested here first.
+SYNC_ALLOWED_TENANTS = frozenset({"otro-nivel", "coastline-condos"})
+
 
 def assistant_ids_for(tenant_id: str) -> list[str]:
     if tenant_id == "default":
@@ -149,6 +162,18 @@ def show_current(tenant_filter: str | None) -> int:
 
 
 def sync_tenant(tenant_id: str, apply: bool) -> int:
+    if tenant_id not in SYNC_ALLOWED_TENANTS:
+        print(
+            f"ERROR: tenant '{tenant_id}' is not on the sync allow-list "
+            f"({', '.join(sorted(SYNC_ALLOWED_TENANTS))}). Refusing — see "
+            "module docstring's ALLOW-LIST section. This blocks dry runs too: "
+            "the point is that this tenant's payload never gets built or "
+            "printed by this path yet, not just that --apply is withheld. "
+            f"Use --show-current --tenant {tenant_id} to inspect its live "
+            "voice config read-only."
+        )
+        return 1
+
     cfg = load_tenant(tenant_id)
     aids = assistant_ids_for(tenant_id)
     if not aids:
@@ -185,14 +210,18 @@ def sync_tenant(tenant_id: str, apply: bool) -> int:
             print("  already in sync — nothing to do")
             continue
 
-        if not apply:
-            continue
-
         # Preserve every other key already on the voice object (provider,
         # stability, similarityBoost, style, useSpeakerBoost, ...) — only
         # voiceId and speed are ours to change. Same "never guess, only set
-        # what we intend" rule as scripts/update_vapi_webhooks.py.
+        # what we intend" rule as scripts/update_vapi_webhooks.py. Built (and
+        # printed) on every run, dry or applied, so dry-run output IS the
+        # exact payload — never a paraphrase of it.
         new_voice = {**current_voice, "voiceId": target_elevenlabs_id, "speed": cfg.speed}
+        print(f"  PATCH payload (voice): {json.dumps(new_voice, indent=2)}")
+
+        if not apply:
+            continue
+
         try:
             api("PATCH", f"/assistant/{aid}", {"voice": new_voice})
             check = api("GET", f"/assistant/{aid}")
