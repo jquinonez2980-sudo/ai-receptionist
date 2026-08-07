@@ -137,6 +137,7 @@ from platform_api import (  # noqa: E402
     overview_router,
     public_voice_preview_router,
     quality_studio_router,
+    scheduling_router,
     signup_router,
     tenant_status_router,
     usage_router,
@@ -163,6 +164,7 @@ app.include_router(voice_preview_router)
 app.include_router(voice_sync_router)
 app.include_router(public_voice_preview_router)
 app.include_router(quality_studio_router)
+app.include_router(scheduling_router)
 
 
 # ── Auth helpers ──────────────────────────────────────────────────────────────

@@ -21,6 +21,7 @@ from platform_api.onboarding import router as onboarding_router
 from platform_api.overview import router as overview_router
 from platform_api.public_voice_preview import router as public_voice_preview_router
 from platform_api.quality_studio import router as quality_studio_router
+from platform_api.scheduling import router as scheduling_router
 from platform_api.signup import router as signup_router
 from platform_api.tenant_status import router as tenant_status_router
 from platform_api.usage import router as usage_router
@@ -41,6 +42,7 @@ __all__ = [
     "overview_router",
     "public_voice_preview_router",
     "quality_studio_router",
+    "scheduling_router",
     "signup_router",
     "tenant_status_router",
     "usage_router",
