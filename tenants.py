@@ -39,7 +39,7 @@ import os
 import re
 import threading
 import warnings
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from pathlib import Path
 from time import monotonic
@@ -48,6 +48,22 @@ from typing import Optional
 log = logging.getLogger(__name__)
 
 _REGISTRY_DIR = Path(__file__).parent / "tenants"
+
+
+class TenantRoutingError(RuntimeError):
+    """VAPI (or other inbound) matched a tenant that must not serve traffic.
+
+    Callers must NOT fall back to the default/Orchelix tenant — that would
+    write client bookings onto Orchelix's calendar. Fail the request instead.
+    """
+
+
+class TenantIsolationError(RuntimeError):
+    """A non-default tenant would write to Orchelix calendar/email.
+
+    Raised by assert_tenant_write_isolation() before any Calendar insert or
+    SendGrid send. Never catch-and-ignore this — surface a clear error.
+    """
 _TENANT_ID_RE = re.compile(r"^[a-z0-9-]{1,64}$")
 
 # Onboarding lifecycle (alembic 0006 — keep in sync with that migration's
@@ -429,11 +445,14 @@ def _parse_locations(data: dict, base: TenantConfig) -> dict[str, LocationConfig
         )
         bdays = loc.get("business_days")
         book_days = loc.get("booking_days")
+        # Never inherit base.calendar_id ("primary" = Orchelix's own calendar
+        # on the shared Google OAuth account). A missing per-location id must
+        # stay empty so assert_tenant_write_isolation fails closed.
         out[lid] = LocationConfig(
             id=lid,
             name=str(loc.get("name") or lid).strip(),
             address=str(loc.get("address") or "").strip(),
-            calendar_id=str(loc.get("calendar_id") or base.calendar_id),
+            calendar_id=str(loc.get("calendar_id") or "").strip(),
             business_hours=hours,
             business_days=tuple(int(d) for d in bdays) if bdays is not None else base.business_days,
             booking_days=tuple(int(d) for d in book_days) if book_days is not None else None,
@@ -490,9 +509,16 @@ def _config_from_file(tenant_id: str, data: dict) -> TenantConfig:
     sms_templates = data.get("sms_templates") or {}
     # If multi-location, prefer first location calendar as legacy calendar_id
     # for any code that still reads the top-level field.
-    legacy_cal = data.get("calendar_id", base.calendar_id)
-    if locations and not data.get("calendar_id"):
+    # Non-default tenants must NOT inherit Orchelix's "primary" calendar when
+    # calendar_id is omitted — that shared-OAuth alias is Orchelix's own cal.
+    if "calendar_id" in data and data.get("calendar_id") is not None:
+        legacy_cal = str(data.get("calendar_id") or "").strip()
+    elif locations:
         legacy_cal = next(iter(locations.values())).calendar_id
+    elif tenant_id == "default":
+        legacy_cal = base.calendar_id
+    else:
+        legacy_cal = ""
 
     return TenantConfig(
         tenant_id=tenant_id,
@@ -692,6 +718,157 @@ def _db_tenant_ids() -> Optional[list[str]]:
         return None
 
 
+def _is_orchelix_shared_calendar_id(calendar_id: Optional[str]) -> bool:
+    """True for the shared-OAuth alias that always means Orchelix's own calendar.
+
+    Client calendars live under the Orchelix Google account (see
+    sales/CALENDAR_SETUP_MANUAL.md) and are isolated solely by calendar_id.
+    "primary" (and empty) on that account is Orchelix AI Consulting's calendar.
+    """
+    cid = (calendar_id or "").strip().lower()
+    return not cid or cid == "primary"
+
+
+def _is_orchelix_ops_inbox(address: Optional[str]) -> bool:
+    """True if an address is Orchelix's own ops inbox (not a client destination).
+
+    A shared SendGrid *from* of info@orchelix.com is allowed for clients that
+    have not verified their own domain (coastline-condos does this). What we
+    must never do is *deliver* booking/escalation mail only to Orchelix.
+    """
+    addr = (address or "").strip().lower()
+    if not addr:
+        return True
+    if addr in {
+        _DEFAULT_EMAIL_FROM.lower(),
+        _DEFAULT_EMAIL_BOOKING_TO.lower(),
+        _DEFAULT_EMAIL_ESCALATION_TO.lower(),
+    }:
+        return True
+    return addr.endswith("@orchelix.com")
+
+
+def assert_tenant_write_isolation(
+    tenant_id: str,
+    *,
+    calendar_id: Optional[str] = None,
+    check_email: bool = False,
+    check_escalation_email: bool = False,
+) -> None:
+    """Hard guard: non-default tenants must never touch Orchelix calendar/email.
+
+    Call before every Calendar write (insert/update/delete) and every booking/
+    escalation email for a non-default tenant. Raises TenantIsolationError —
+    never silently falls through to Orchelix's primary calendar or Orchelix
+    ops inboxes.
+    """
+    tid = _norm(tenant_id)
+    if tid == "default":
+        return
+
+    if calendar_id is not None and _is_orchelix_shared_calendar_id(calendar_id):
+        raise TenantIsolationError(
+            f"Tenant '{tid}' refused calendar write: calendar_id is missing or "
+            f"'primary' (that is Orchelix's calendar on the shared Google account). "
+            f"Set a dedicated group calendar id on the tenant location / config."
+        )
+
+    if check_email or check_escalation_email:
+        cfg = load_tenant(tid)
+        if check_email and _is_orchelix_ops_inbox(cfg.email_booking_to):
+            raise TenantIsolationError(
+                f"Tenant '{tid}' refused email send: booking_to would deliver to "
+                f"an Orchelix ops inbox ({cfg.email_booking_to!r}). "
+                f"Set emails.booking_to to the client's address in the tenant config."
+            )
+        if check_escalation_email and _is_orchelix_ops_inbox(cfg.email_escalation_to):
+            raise TenantIsolationError(
+                f"Tenant '{tid}' refused escalation email: escalation_to would "
+                f"deliver to an Orchelix ops inbox ({cfg.email_escalation_to!r}). "
+                f"Set emails.escalation_to to the client's address in the tenant config."
+            )
+
+
+def _overlay_wiring_from_file(cfg: TenantConfig) -> TenantConfig:
+    """Fill non-self-serve wiring from tenants/<id>/config.json when DB left it empty.
+
+    Dashboard PUT preserves vapi/calendar_id when they exist on the raw base, but
+    a partial published row can drop them. File config is the ops-owned source of
+    truth for VAPI routing and Google calendar ids — without this overlay a
+    stripped DB row silently routes voice tool calls to tenant 'default' and
+    books onto Orchelix's primary calendar.
+    """
+    tid = cfg.tenant_id
+    if tid == "default":
+        return cfg
+    path = _REGISTRY_DIR / tid / "config.json"
+    if not path.exists():
+        return cfg
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        file_cfg = _config_from_file(tid, data)
+    except Exception as e:
+        log.warning("Tenant '%s': wiring overlay skipped (%s).", tid, e)
+        return cfg
+
+    changes: dict = {}
+    if not cfg.vapi_assistant_ids and file_cfg.vapi_assistant_ids:
+        changes["vapi_assistant_ids"] = file_cfg.vapi_assistant_ids
+        log.warning(
+            "Tenant '%s': overlaying vapi_assistant_ids from file config "
+            "(DB/published row had none).",
+            tid,
+        )
+    if not cfg.vapi_phone_number_ids and file_cfg.vapi_phone_number_ids:
+        changes["vapi_phone_number_ids"] = file_cfg.vapi_phone_number_ids
+        log.warning(
+            "Tenant '%s': overlaying vapi_phone_number_ids from file config "
+            "(DB/published row had none).",
+            tid,
+        )
+
+    if cfg.locations and file_cfg.locations:
+        new_locs = dict(cfg.locations)
+        patched = False
+        for lid, loc in cfg.locations.items():
+            floc = file_cfg.locations.get(lid)
+            if floc is None:
+                continue
+            if _is_orchelix_shared_calendar_id(loc.calendar_id) and not _is_orchelix_shared_calendar_id(
+                floc.calendar_id
+            ):
+                new_locs[lid] = replace(loc, calendar_id=floc.calendar_id)
+                patched = True
+        if patched:
+            changes["locations"] = new_locs
+            log.warning(
+                "Tenant '%s': overlaying location calendar_id(s) from file config.",
+                tid,
+            )
+
+    if _is_orchelix_shared_calendar_id(cfg.calendar_id) and not _is_orchelix_shared_calendar_id(
+        file_cfg.calendar_id
+    ):
+        changes["calendar_id"] = file_cfg.calendar_id
+
+    if cfg.email_from == _DEFAULT_EMAIL_FROM and file_cfg.email_from != _DEFAULT_EMAIL_FROM:
+        changes["email_from"] = file_cfg.email_from
+    if (
+        cfg.email_booking_to == _DEFAULT_EMAIL_BOOKING_TO
+        and file_cfg.email_booking_to != _DEFAULT_EMAIL_BOOKING_TO
+    ):
+        changes["email_booking_to"] = file_cfg.email_booking_to
+    if (
+        cfg.email_escalation_to == _DEFAULT_EMAIL_ESCALATION_TO
+        and file_cfg.email_escalation_to != _DEFAULT_EMAIL_ESCALATION_TO
+    ):
+        changes["email_escalation_to"] = file_cfg.email_escalation_to
+
+    if not changes:
+        return cfg
+    return replace(cfg, **changes)
+
+
 def load_tenant(tenant_id: str = "default") -> TenantConfig:
     """Return the TenantConfig for tenant_id (default == Orchelix).
 
@@ -713,11 +890,37 @@ def load_tenant(tenant_id: str = "default") -> TenantConfig:
         cfg = _config_from_db(tid)
         if cfg is None:
             cfg = _build(tid)
+        else:
+            # Restore ops wiring the dashboard is not allowed to edit, in case
+            # a published row lost vapi ids / calendar_ids.
+            cfg = _overlay_wiring_from_file(cfg)
         expires = monotonic() + _TTL_SECONDS
-        if cfg.email_from == _DEFAULT_EMAIL_FROM or cfg.email_booking_to == _DEFAULT_EMAIL_BOOKING_TO:
+        if _is_orchelix_ops_inbox(cfg.email_booking_to):
             warnings.warn(
-                f"Tenant '{tid}' is inheriting Orchelix email config. "
-                f"Set emails.from / emails.booking_to in tenants/{tid}/config.json.",
+                f"Tenant '{tid}' booking_to is an Orchelix ops inbox "
+                f"({cfg.email_booking_to!r}). Set emails.booking_to to the client. "
+                f"Booking notification emails will be refused until fixed.",
+                stacklevel=2,
+            )
+        if _is_orchelix_ops_inbox(cfg.email_escalation_to):
+            warnings.warn(
+                f"Tenant '{tid}' escalation_to is an Orchelix ops inbox "
+                f"({cfg.email_escalation_to!r}). Set emails.escalation_to to the client. "
+                f"Escalation emails will be refused until fixed.",
+                stacklevel=2,
+            )
+        # Also warn (but do not cache-fail) when any bookable calendar still
+        # points at Orchelix primary — the write guard enforces at tool time.
+        bad_cals = [
+            (lid, cid)
+            for lid, cid in cfg.all_calendar_ids()
+            if _is_orchelix_shared_calendar_id(cid)
+        ]
+        if bad_cals:
+            warnings.warn(
+                f"Tenant '{tid}' has calendar_id missing/primary on "
+                f"{[lid for lid, _ in bad_cals]} — calendar writes will be refused. "
+                f"Set dedicated group calendar ids (never 'primary').",
                 stacklevel=2,
             )
 
@@ -819,9 +1022,9 @@ def tenant_is_active(tenant_id: str) -> bool:
     """True if tenant_id may serve PRODUCTION traffic (voice + web chat).
 
     THE single traffic gate. api._resolve_tenant (chat), api._resolve_tenant_strict
-    (booking), tenants._vapi_tenant_allowed (voice) and the dashboard's
-    can_serve_traffic all route through here, so this function is the only
-    place the rule is written down.
+    (booking), resolve_vapi_tenant (voice) and the dashboard's can_serve_traffic
+    all route through here, so this function is the only place the rule is
+    written down.
 
     Two independent axes, both of which must pass:
 
@@ -896,12 +1099,21 @@ def _all_tenant_ids() -> list[str]:
     return sorted(ids)
 
 
-def resolve_vapi_tenant(payload: dict) -> str:
+def resolve_vapi_tenant(payload: dict, *, refuse_inactive: bool = True) -> str:
     """Map a VAPI webhook payload to a tenant_id via assistant/phone-number id.
 
     Looks for the assistant id and phone-number id in the common payload
     locations, then matches against each tenant's vapi config. Defaults to
-    'default' when nothing matches (single-tenant behavior preserved).
+    'default' when nothing matches (Orchelix / single-tenant behavior).
+
+    CRITICAL (refuse_inactive=True, the default for tool/voice paths): when an
+    id *does* match a known non-default tenant that cannot serve traffic
+    (pending onboarding, suspended, …), this raises TenantRoutingError instead
+    of falling back to 'default'. Falling back used to create client bookings
+    on Orchelix's calendar.
+
+    Call-log / analytics paths pass refuse_inactive=False so a suspended
+    tenant's completed call is still attributed to that tenant (not Orchelix).
     """
     msg = (payload or {}).get("message") or {}
     call = msg.get("call") or {}
@@ -919,31 +1131,38 @@ def resolve_vapi_tenant(payload: dict) -> str:
         return "default"
     for tid in _all_tenant_ids():
         cfg = load_tenant(tid)
+        matched = False
         if assistant_id and assistant_id in cfg.vapi_assistant_ids:
-            return tid if _vapi_tenant_allowed(tid) else "default"
-        if phone_id and phone_id in cfg.vapi_phone_number_ids:
-            return tid if _vapi_tenant_allowed(tid) else "default"
+            matched = True
+        elif phone_id and phone_id in cfg.vapi_phone_number_ids:
+            matched = True
+        if not matched:
+            continue
+        if tenant_is_active(tid):
+            return tid
+        if not refuse_inactive:
+            log.warning(
+                "VAPI call matched inactive tenant '%s' "
+                "(onboarding_status=%s, account_status=%s) — attributing to it "
+                "for logging only (refuse_inactive=False).",
+                tid,
+                tenant_onboarding_status(tid),
+                tenant_account_status(tid),
+            )
+            return tid
+        # Matched a real client tenant but it must not serve — NEVER route
+        # those calls to Orchelix (default). Fail closed.
+        log.error(
+            "VAPI call matched tenant '%s' but it cannot serve traffic "
+            "(onboarding_status=%s, account_status=%s) — refusing request "
+            "(will NOT fall back to default/Orchelix).",
+            tid,
+            tenant_onboarding_status(tid),
+            tenant_account_status(tid),
+        )
+        raise TenantRoutingError(
+            f"Tenant '{tid}' matched this VAPI assistant/number but cannot "
+            f"serve production traffic right now. Booking tools will not run "
+            f"as Orchelix."
+        )
     return "default"
-
-
-def _vapi_tenant_allowed(tenant_id: str) -> bool:
-    """Approve-to-activate gate on the inbound voice path.
-
-    A pre-approval tenant should have no VAPI assistant or number at all (both
-    provisioning steps are manual and run after approval), so this is a
-    belt-and-braces check for the case where an id was wired up early — e.g.
-    an admin pasting an assistant id into the provisioning checklist before
-    clicking Approve. Logged loudly, because reaching it means a number went
-    live ahead of its approval.
-    """
-    if tenant_is_active(tenant_id):
-        return True
-    log.warning(
-        "VAPI call matched tenant '%s' but it cannot serve traffic "
-        "(onboarding_status=%s, account_status=%s) — refusing to serve it and "
-        "falling back to default.",
-        tenant_id,
-        tenant_onboarding_status(tenant_id),
-        tenant_account_status(tenant_id),
-    )
-    return False

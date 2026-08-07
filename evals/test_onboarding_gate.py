@@ -238,12 +238,13 @@ def test_vapi_routes_to_an_active_tenant(monkeypatch):
 
 
 def test_vapi_refuses_a_pending_tenant(monkeypatch):
-    """An assistant id wired up before approval must not serve calls as that
-    tenant — it falls back to default rather than going live early."""
+    """An assistant id wired up before approval must not serve as that tenant
+    AND must not fall back to default/Orchelix (that was the isolation bug)."""
     monkeypatch.setattr(T, "_db_tenant_ids", lambda: [DB_ONLY])
     _stub_status(monkeypatch, {DB_ONLY: "review"})
     _stub_configs(monkeypatch, DB_ONLY)
-    assert resolve_vapi_tenant(_vapi_payload("asst_123")) == "default"
+    with pytest.raises(T.TenantRoutingError, match=DB_ONLY):
+        resolve_vapi_tenant(_vapi_payload("asst_123"))
 
 
 # ── billing-status half of the traffic gate ──────────────────────────────────
@@ -333,7 +334,8 @@ def test_vapi_refuses_a_suspended_tenant(monkeypatch):
     monkeypatch.setattr(T, "_db_tenant_ids", lambda: [DB_ONLY])
     _stub_status(monkeypatch, {DB_ONLY: (ACTIVE_ONBOARDING_STATUS, "suspended")})
     _stub_configs(monkeypatch, DB_ONLY)
-    assert resolve_vapi_tenant(_vapi_payload("asst_123")) == "default"
+    with pytest.raises(T.TenantRoutingError, match=DB_ONLY):
+        resolve_vapi_tenant(_vapi_payload("asst_123"))
 
 
 def test_suspension_takes_effect_after_cache_clear(monkeypatch):

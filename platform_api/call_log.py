@@ -293,7 +293,9 @@ def record_end_of_call(payload: dict) -> Optional[dict]:
         log.info("VAPI webhook: ignoring message type %r.", msg_type)
         return None
 
-    tenant_id = resolve_vapi_tenant(payload)
+    # Attribute the call to the matched tenant even if inactive/suspended —
+    # never re-label a client call as Orchelix just because tools are gated.
+    tenant_id = resolve_vapi_tenant(payload, refuse_inactive=False)
     row = parse_end_of_call(payload)
     if row is None:
         log.warning("VAPI webhook: end-of-call-report without a call id — skipped.")

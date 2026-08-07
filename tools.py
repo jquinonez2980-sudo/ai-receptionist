@@ -54,6 +54,8 @@ from tenants import (
     LocationConfig,
     ServiceConfig,
     TenantConfig,
+    TenantIsolationError,
+    assert_tenant_write_isolation,
     load_tenant,
     normalize_tenant_id,
     tenant_secret,
@@ -490,7 +492,16 @@ def _send_booking_notification(
     attendee_email: Optional[str] = None,
     tenant_id: str = "default",
 ) -> None:
-    """Send a branded ops email on every booking. Best-effort."""
+    """Send a branded ops email on every booking. Best-effort.
+
+    Hard-fails (logs + returns) for a non-default tenant that would send from
+    Orchelix booking addresses — never silent cross-tenant email.
+    """
+    try:
+        assert_tenant_write_isolation(tenant_id, check_email=True)
+    except TenantIsolationError as e:
+        log.error("booking notification blocked by isolation guard: %s", e)
+        return
     try:
         api_key = _get_sendgrid_key(tenant_id)
         if not api_key:
@@ -1141,6 +1152,13 @@ _CALENDAR_FALLBACK = (
     "Let me connect you with someone on our team so we don't lose your spot."
 )
 
+# Caller-safe message when the isolation hard-guard blocks a write that would
+# have hit Orchelix's calendar/email. Ops logs carry the full TenantIsolationError.
+_ISOLATION_FALLBACK = (
+    "I'm having trouble completing that booking right now. "
+    "Let me connect you with the team so they can get you scheduled."
+)
+
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 
@@ -1311,12 +1329,15 @@ def compute_available_slots(
     ):
         return []
 
+    cal_id = loc.calendar_id
+    # Hard guard before any freebusy against Orchelix primary for a client tenant.
+    assert_tenant_write_isolation(tenant_id, calendar_id=cal_id)
+
     cal_service = _get_calendar_service(tenant_id)
 
     window_start = tz.localize(start_dt.replace(hour=0, minute=0, second=0))
     window_end = tz.localize(end_dt.replace(hour=23, minute=59, second=59))
 
-    cal_id = loc.calendar_id
     result = (
         cal_service.freebusy()
         .query(
@@ -1428,6 +1449,9 @@ def list_available_slots(
 
     except ValueError as e:
         return str(e)
+    except TenantIsolationError as e:
+        log.error("list_available_slots: TENANT ISOLATION GUARD: %s", e)
+        return _ISOLATION_FALLBACK
     except RuntimeError as e:
         log.error("list_available_slots: calendar not configured: %s", e)
         return _CALENDAR_FALLBACK
@@ -1582,9 +1606,14 @@ def book_appointment_core(
             "scenario_mode": True,
         }
 
+    cal_id = loc.calendar_id
+    # Hard guard: non-default tenant must never write to Orchelix primary /
+    # send Orchelix booking email when misconfigured (fail closed, no silent
+    # fallback — see assert_tenant_write_isolation).
+    assert_tenant_write_isolation(tenant_id, calendar_id=cal_id, check_email=True)
+
     cal_service = _get_calendar_service(tenant_id)
     event_id = _idem_event_id(idempotency_key)
-    cal_id = loc.calendar_id
 
     if not _slot_still_free(cal_service, start_time, end_time, cfg.business_tz, cal_id):
         try:
@@ -1772,6 +1801,9 @@ def book_appointment(
         return result["message"]
     except ValueError as e:
         return str(e)
+    except TenantIsolationError as e:
+        log.error("book_appointment: TENANT ISOLATION GUARD: %s", e)
+        return _ISOLATION_FALLBACK
     except RuntimeError as e:
         log.error("book_appointment: calendar not configured: %s", e)
         return _CALENDAR_FALLBACK
@@ -1843,18 +1875,34 @@ def _resolve_event_id(service, cal_id: str, given_id: str) -> Optional[str]:
 
 
 def _tenant_calendar_ids(cfg: TenantConfig, location: Optional[str] = None) -> list[str]:
-    """Calendar ids for a tenant, optionally narrowed to one location."""
+    """Calendar ids for a tenant, optionally narrowed to one location.
+
+    Never invents 'primary' for a non-default tenant — that alias is Orchelix's
+    calendar on the shared Google account. Empty list → caller fails closed.
+    """
     if location:
-        return [cfg.resolve_location(location).calendar_id]
-    try:
-        calendars = [cid for _, cid in cfg.all_calendar_ids()]
-    except Exception:
-        calendars = [getattr(cfg, "calendar_id", None) or "primary"]
-    if not calendars:
-        calendars = [getattr(cfg, "calendar_id", None) or "primary"]
-    # de-dupe while preserving order
+        calendars = [cfg.resolve_location(location).calendar_id]
+    else:
+        try:
+            calendars = [cid for _, cid in cfg.all_calendar_ids()]
+        except Exception:
+            calendars = [getattr(cfg, "calendar_id", None) or ""]
+        if not calendars:
+            calendars = [getattr(cfg, "calendar_id", None) or ""]
+    # de-dupe while preserving order; drop empty / whitespace
     seen: set[str] = set()
-    return [c for c in calendars if c and not (c in seen or seen.add(c))]
+    out = []
+    for c in calendars:
+        c = (c or "").strip()
+        if not c or c in seen:
+            continue
+        seen.add(c)
+        out.append(c)
+    # Fail closed for client tenants that only have Orchelix primary left.
+    if cfg.tenant_id != "default":
+        for c in out:
+            assert_tenant_write_isolation(cfg.tenant_id, calendar_id=c)
+    return out
 
 
 def _find_events_for_contact(
@@ -2092,6 +2140,9 @@ def cancel_appointment(event_id: str, confirmation_code: str, config: RunnableCo
         if not event or not cal_id or not event_id:
             return "I couldn't find that booking — it may have already been canceled."
 
+        # Refuse deletes against Orchelix primary even if an id somehow resolved.
+        assert_tenant_write_isolation(tenant_id, calendar_id=cal_id)
+
         ok, msg = _verify_and_consume_code(service, cal_id, event, confirmation_code)
         if not ok:
             return msg
@@ -2104,6 +2155,9 @@ def cancel_appointment(event_id: str, confirmation_code: str, config: RunnableCo
             .execute()
         )
         return f"Done — I've canceled your appointment for {when}."
+    except TenantIsolationError as e:
+        log.error("cancel_appointment: TENANT ISOLATION GUARD: %s", e)
+        return _ISOLATION_FALLBACK
     except RuntimeError as e:
         log.error("cancel_appointment: calendar not configured: %s", e)
         return _CALENDAR_FALLBACK
@@ -2158,6 +2212,8 @@ def reschedule_appointment(
                 "I couldn't find that booking — it may have been canceled. "
                 "Want me to book a new time?"
             )
+
+        assert_tenant_write_isolation(tenant_id, calendar_id=cal_id)
 
         if loc is None:
             loc_id = (
@@ -2221,6 +2277,9 @@ def reschedule_appointment(
         return f"Done — I've moved your appointment to {_friendly_when(new_start_time)}."
     except ValueError as e:
         return str(e)
+    except TenantIsolationError as e:
+        log.error("reschedule_appointment: TENANT ISOLATION GUARD: %s", e)
+        return _ISOLATION_FALLBACK
     except RuntimeError as e:
         log.error("reschedule_appointment: calendar not configured: %s", e)
         return _CALENDAR_FALLBACK
@@ -2265,6 +2324,17 @@ def escalate_to_human(reason: str, user_summary: str, config: RunnableConfig = N
             )
 
         cfg = load_tenant(tenant_id)
+        # Never escalate a client lead into Orchelix inboxes when emails miswired.
+        try:
+            assert_tenant_write_isolation(tenant_id, check_escalation_email=True)
+        except TenantIsolationError as e:
+            log.error("escalate_to_human: TENANT ISOLATION GUARD: %s", e)
+            return (
+                "ESCALATION_FAILED: the team was NOT notified (tenant email "
+                "misconfigured — would have used Orchelix addresses). "
+                "Apologize to the user, do not promise a follow-up, and offer a direct "
+                "contact instead."
+            )
         api_key = _get_sendgrid_key(tenant_id)
         if not api_key:
             log.error("Escalation email NOT sent — no SendGrid key configured for tenant '%s'.", tenant_id)

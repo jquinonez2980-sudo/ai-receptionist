@@ -182,6 +182,112 @@ def test_calendar_id_defaults_to_primary():
     assert cfg.calendar_id == "primary"
 
 
+def test_isolation_guard_blocks_primary_calendar_for_client_tenant():
+    """Non-default tenant must NEVER write to Orchelix's primary calendar."""
+    from tenants import TenantIsolationError, assert_tenant_write_isolation
+
+    with pytest.raises(TenantIsolationError, match="primary"):
+        assert_tenant_write_isolation("otro-nivel", calendar_id="primary")
+    with pytest.raises(TenantIsolationError, match="missing"):
+        assert_tenant_write_isolation("otro-nivel", calendar_id="")
+    # Dedicated group calendar is fine
+    assert_tenant_write_isolation(
+        "otro-nivel",
+        calendar_id="c_04d64beea3e56d81e666a2e4ddfe4e14bf16d69ff0b0ebbbcd0201be4ce335de@group.calendar.google.com",
+    )
+    # Default tenant may use primary
+    assert_tenant_write_isolation("default", calendar_id="primary")
+
+
+def test_isolation_guard_blocks_orchelix_booking_destination(monkeypatch):
+    """Non-default tenant must NEVER deliver booking mail to Orchelix ops."""
+    from tenants import TenantConfig, TenantIsolationError, _default_config, assert_tenant_write_isolation
+    import tenants as T
+
+    base = _default_config()
+    poisoned = TenantConfig(
+        **{
+            **base.__dict__,
+            "tenant_id": "acme",
+            "company_name": "Acme Dental Care",
+            # leave email_booking_to as Orchelix default
+        }
+    )
+    monkeypatch.setattr(
+        T, "load_tenant", lambda tid="default": poisoned if tid == "acme" else base
+    )
+    with pytest.raises(TenantIsolationError, match="booking_to"):
+        assert_tenant_write_isolation("acme", check_email=True)
+
+    # Shared SendGrid from=info@orchelix.com is OK when booking_to is the client.
+    ok_cfg = TenantConfig(
+        **{
+            **base.__dict__,
+            "tenant_id": "acme",
+            "email_from": "info@orchelix.com",
+            "email_booking_to": "frontdesk@acmedental.example",
+        }
+    )
+    monkeypatch.setattr(
+        T, "load_tenant", lambda tid="default": ok_cfg if tid == "acme" else base
+    )
+    assert_tenant_write_isolation("acme", check_email=True)
+
+
+def test_location_calendar_id_does_not_inherit_orchelix_primary():
+    """Missing location calendar_id must stay empty, not fall back to primary."""
+    from tenants import _config_from_file
+
+    cfg = _config_from_file(
+        "acme",
+        {
+            "company_name": "Acme Dental Care",
+            "emails": {
+                "from": "hello@acme.example",
+                "booking_to": "book@acme.example",
+            },
+            "locations": {
+                "main": {"name": "Main", "business_hours": [9, 17]},
+            },
+        },
+    )
+    assert cfg.locations["main"].calendar_id == ""
+    assert cfg.calendar_id == ""
+
+
+def test_wiring_overlay_restores_vapi_ids_from_file():
+    """A DB-shaped config missing vapi ids gets them back from file config."""
+    from tenants import _config_from_file, _overlay_wiring_from_file, clear_tenant_cache
+
+    clear_tenant_cache("otro-nivel")
+    # Simulate a published DB row that lost the vapi block
+    stripped = _config_from_file(
+        "otro-nivel",
+        {
+            "company_name": "Otro Nivel Barbershop",
+            "emails": {
+                "from": "info@otronivelbarbershop.com",
+                "booking_to": "aotronivelbarbershop02@gmail.com",
+            },
+            "locations": {
+                "weston": {
+                    "name": "Weston",
+                    "calendar_id": "c_04d64beea3e56d81e666a2e4ddfe4e14bf16d69ff0b0ebbbcd0201be4ce335de@group.calendar.google.com",
+                },
+                "keele": {
+                    "name": "Keele",
+                    "calendar_id": "c_4364e89487e31bf2afcd13aa9e21ed08b7f777cbee71e9af1cd6d86940e70374@group.calendar.google.com",
+                },
+            },
+            # deliberately no "vapi" key
+        },
+    )
+    assert stripped.vapi_assistant_ids == ()
+    restored = _overlay_wiring_from_file(stripped)
+    assert "32994d60-3712-4183-a7db-edc3badeabec" in restored.vapi_assistant_ids
+    assert "8313f753-67f4-4c11-8f31-778b11692089" in restored.vapi_phone_number_ids
+
+
 # ── End-to-end: Acme through the REAL multi-agent graph (model) ──────────────
 
 @pytest.mark.skipif(

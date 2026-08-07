@@ -36,6 +36,8 @@ from _text_utils import (
     _strip_slots_from_text,
 )
 from tenants import (
+    TenantIsolationError,
+    TenantRoutingError,
     load_tenant,
     namespaced_thread,
     normalize_tenant_id,
@@ -279,6 +281,10 @@ def _resolve_tenant(request: Request, req: "ChatRequest | None" = None) -> str:
     Order: X-Tenant-Id header → request body tenant_id → 'default'. An unknown
     tenant id falls back to 'default' (logged) rather than erroring, so a
     misconfigured widget degrades gracefully to the base experience.
+
+    A *known* tenant that is not active (pending onboarding, suspended, …)
+    must NOT fall back to default/Orchelix — that used to create client
+    bookings and chats under the wrong brand. Returns 503 via HTTPException.
     """
     raw = request.headers.get("X-Tenant-Id")
     if not raw and req is not None:
@@ -287,14 +293,20 @@ def _resolve_tenant(request: Request, req: "ChatRequest | None" = None) -> str:
     if not tenant_exists(tid):
         log.warning("Unknown tenant_id '%s' — falling back to default.", tid)
         return "default"
-    # Approve-to-activate gate (Phase 4): a tenant still in onboarding exists
-    # and can use its dashboard, but must not serve customer conversations.
-    # Same graceful degradation as the unknown-tenant case above.
+    # Approve-to-activate + billing gate: known but not live → refuse.
+    # Never re-route a real client slug onto Orchelix.
     if not tenant_is_active(tid):
-        log.warning(
-            "Tenant '%s' is not active yet — falling back to default.", tid
+        log.error(
+            "Tenant '%s' is not active — refusing chat (will NOT fall back to default).",
+            tid,
         )
-        return "default"
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                f"Tenant '{tid}' is not currently accepting conversations. "
+                "Please try again later."
+            ),
+        )
     return tid
 
 
@@ -740,15 +752,32 @@ async def voice_tools(request: Request) -> dict:
     if _VOICE_DEBUG:
         log.info("VAPI raw payload: %s", json.dumps(body))
 
-    # Each tenant has its own VAPI assistant / phone number; map it to a tenant.
-    tenant_id = resolve_vapi_tenant(body)
-    log.info("VAPI tenant resolved: %s", tenant_id)
-
     msg = body.get("message", body)  # some VAPI versions omit the outer wrapper
     msg_type = msg.get("type", "")
 
     # Real caller number from VAPI payload — used to fill in missing/broken args.
     caller_number = (msg.get("call", {}).get("customer", {}).get("number") or "").strip()
+
+    # Each tenant has its own VAPI assistant / phone number; map it to a tenant.
+    # TenantRoutingError = matched a real client but it can't serve — do NOT
+    # book as Orchelix; return a spoken refusal for every tool call.
+    _routing_refuse = (
+        "I'm sorry — our booking system isn't available on this line right now. "
+        "Please try again shortly, or ask to be transferred to the team."
+    )
+    try:
+        tenant_id = resolve_vapi_tenant(body)
+    except TenantRoutingError as e:
+        log.error("VAPI tenant routing refused: %s", e)
+        if msg_type == "tool-calls" or "toolCallList" in msg:
+            return {
+                "results": [
+                    {"toolCallId": c.get("id", ""), "result": _routing_refuse}
+                    for c in msg.get("toolCallList", [])
+                ]
+            }
+        return {"result": _routing_refuse}
+    log.info("VAPI tenant resolved: %s", tenant_id)
 
     # ── New format: tool-calls ────────────────────────────────────────────
     if msg_type == "tool-calls" or "toolCallList" in msg:
@@ -765,6 +794,12 @@ async def voice_tools(request: Request) -> dict:
             log.info("VAPI tool-calls: %s | params: %s", name, _redact_for_log(params))
             try:
                 result = await asyncio.to_thread(_run_voice_tool, name, params, tenant_id)
+            except TenantIsolationError as e:
+                log.error("VAPI tool %s isolation guard: %s", name, e)
+                result = (
+                    "I'm having trouble completing that booking right now. "
+                    "Let me connect you with the team so they can get you scheduled."
+                )
             except Exception:
                 log.exception("VAPI tool %s failed", name)
                 result = "Something went wrong — I'll connect you with our team."
@@ -780,6 +815,12 @@ async def voice_tools(request: Request) -> dict:
     log.info("VAPI function-call: %s | params: %s", name, _redact_for_log(params))
     try:
         result = await asyncio.to_thread(_run_voice_tool, name, params, tenant_id)
+    except TenantIsolationError as e:
+        log.error("VAPI tool %s isolation guard: %s", name, e)
+        result = (
+            "I'm having trouble completing that booking right now. "
+            "Let me connect you with the team so they can get you scheduled."
+        )
     except Exception:
         log.exception("VAPI tool %s failed", name)
         result = "Something went wrong — I'll connect you with our team."
@@ -855,6 +896,12 @@ async def bookings_availability(
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    except TenantIsolationError as e:
+        log.error("bookings/availability isolation guard: %s", e)
+        raise HTTPException(
+            status_code=503,
+            detail="Calendar misconfigured for this tenant (isolation guard).",
+        )
     except RuntimeError as e:
         log.error("bookings/availability calendar error: %s", e)
         raise HTTPException(
@@ -966,6 +1013,12 @@ async def create_booking(request: Request, body: BookingCreateRequest) -> dict:
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    except TenantIsolationError as e:
+        log.error("bookings create isolation guard: %s", e)
+        raise HTTPException(
+            status_code=503,
+            detail="Calendar/email misconfigured for this tenant (isolation guard).",
+        )
     except RuntimeError as e:
         log.error("bookings create calendar error: %s", e)
         raise HTTPException(
