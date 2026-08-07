@@ -10,6 +10,7 @@
 # agents.py, graph.py). api.py mounts the routers; that is the only coupling.
 
 from platform_api.admin import router as admin_router
+from platform_api.analytics import router as analytics_router
 from platform_api.appointments import router as appointments_router
 from platform_api.billing import router as billing_router
 from platform_api.calls import router as calls_router
@@ -31,6 +32,7 @@ from platform_api.voice_sync import router as voice_sync_router
 
 __all__ = [
     "admin_router",
+    "analytics_router",
     "appointments_router",
     "billing_router",
     "calls_router",

@@ -126,6 +126,7 @@ app.add_middleware(
 # dependency of the agent path.
 from platform_api import (  # noqa: E402
     admin_router,
+    analytics_router,
     appointments_router,
     billing_router,
     calls_router,
@@ -165,6 +166,7 @@ app.include_router(voice_sync_router)
 app.include_router(public_voice_preview_router)
 app.include_router(quality_studio_router)
 app.include_router(scheduling_router)
+app.include_router(analytics_router)
 
 
 # ── Auth helpers ──────────────────────────────────────────────────────────────
