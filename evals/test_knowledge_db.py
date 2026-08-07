@@ -51,8 +51,8 @@ def _no_publish(monkeypatch):
 def faq_row(**over):
     row = {
         "id": EID, "kind": "faq", "question": "Do you sell gift cards?",
-        "answer": "Yes, at the front desk.", "source": None, "meta": None,
-        "created_at": None,
+        "answer": "Yes, at the front desk.", "language": None, "source": None,
+        "meta": None, "created_at": None,
     }
     row.update(over)
     return row
@@ -166,6 +166,31 @@ def test_pdf_meta_as_json_string_is_parsed(client, monkeypatch):
     assert body["pdfs"][0]["filename"] == "x.pdf"
 
 
+# ── language (migration 0010) ─────────────────────────────────────────────────
+
+
+def test_list_includes_language_when_set(client, monkeypatch):
+    use(monkeypatch, FakeConn(rules=[("FROM kb_entries", [faq_row(language="es")])]))
+    body = client.get("/platform/knowledge", headers=HEADERS).json()
+    assert body["entries"][0]["language"] == "es"
+
+
+def test_list_reports_null_language_as_none(client, monkeypatch):
+    use(monkeypatch, FakeConn(rules=[("FROM kb_entries", [faq_row(language=None)])]))
+    body = client.get("/platform/knowledge", headers=HEADERS).json()
+    assert body["entries"][0]["language"] is None
+
+
+def test_list_row_missing_language_key_degrades_to_none(client, monkeypatch):
+    """Migration-safe: a row shape that predates 0010 (no 'language' key at
+    all, not just a null value) must not KeyError."""
+    row = faq_row()
+    del row["language"]
+    use(monkeypatch, FakeConn(rules=[("FROM kb_entries", [row])]))
+    body = client.get("/platform/knowledge", headers=HEADERS).json()
+    assert body["entries"][0]["language"] is None
+
+
 # ── add ───────────────────────────────────────────────────────────────────────
 
 
@@ -208,6 +233,44 @@ def test_blank_question_is_stored_as_null(client, monkeypatch):
     client.post("/platform/knowledge", json={"question": "  ", "answer": "A."},
                 headers=HEADERS)
     assert conn.sql_containing("INSERT INTO kb_entries")[0][1]["q"] is None
+
+
+@pytest.mark.parametrize("lang", ["en", "es", "auto", "EN", " es "])
+def test_add_accepts_valid_languages_case_and_whitespace_insensitive(client, monkeypatch, lang):
+    conn = use(monkeypatch, _add_conn())
+    r = client.post("/platform/knowledge", json={"answer": "A.", "language": lang},
+                    headers=HEADERS)
+    assert r.status_code == 200, r.text
+    assert conn.sql_containing("INSERT INTO kb_entries")[0][1]["lang"] == lang.strip().lower()
+
+
+@pytest.mark.parametrize("blank", [None, "", "   "])
+def test_add_treats_blank_language_as_unspecified(client, monkeypatch, blank):
+    conn = use(monkeypatch, _add_conn())
+    body = {"answer": "A."}
+    if blank is not None:
+        body["language"] = blank
+    client.post("/platform/knowledge", json=body, headers=HEADERS)
+    assert conn.sql_containing("INSERT INTO kb_entries")[0][1]["lang"] is None
+
+
+def test_add_rejects_an_invalid_language(client, monkeypatch):
+    conn = use(monkeypatch, _add_conn())
+    r = client.post("/platform/knowledge", json={"answer": "A.", "language": "fr"},
+                    headers=HEADERS)
+    assert r.status_code == 400
+    assert "language" in r.json()["detail"]
+    assert conn.sql_containing("INSERT INTO kb_entries") == []
+
+
+def test_add_response_includes_the_saved_language(client, monkeypatch):
+    use(monkeypatch, FakeConn(rules=[
+        ("count(*)", [(0,)]),
+        ("INSERT INTO kb_entries", [faq_row(language="en")]),
+    ]))
+    r = client.post("/platform/knowledge", json={"answer": "A.", "language": "en"},
+                    headers=HEADERS)
+    assert r.json()["entry"]["language"] == "en"
 
 
 # ── edit (new) ────────────────────────────────────────────────────────────────
@@ -255,6 +318,30 @@ def test_edit_and_add_share_one_validator(client, monkeypatch):
                    json={"answer": "x" * (kb._MAX_ANSWER_LEN + 1)}, headers=HEADERS)
     assert r.status_code == 400
     assert conn.sql_containing("UPDATE kb_entries") == []
+
+
+def test_edit_updates_the_language(client, monkeypatch):
+    conn = use(monkeypatch, FakeConn(rules=[("UPDATE kb_entries", [faq_row(language="es")])]))
+    r = client.put(f"/platform/knowledge/{EID}", json={"answer": "x", "language": "es"},
+                   headers=HEADERS)
+    assert r.status_code == 200, r.text
+    assert r.json()["entry"]["language"] == "es"
+    assert conn.sql_containing("UPDATE kb_entries")[0][1]["lang"] == "es"
+
+
+def test_edit_rejects_an_invalid_language(client, monkeypatch):
+    conn = use(monkeypatch, FakeConn())
+    r = client.put(f"/platform/knowledge/{EID}", json={"answer": "x", "language": "fr"},
+                   headers=HEADERS)
+    assert r.status_code == 400
+    assert conn.sql_containing("UPDATE kb_entries") == []
+
+
+def test_edit_clears_language_when_sent_blank(client, monkeypatch):
+    conn = use(monkeypatch, FakeConn(rules=[("UPDATE kb_entries", [faq_row(language=None)])]))
+    client.put(f"/platform/knowledge/{EID}", json={"answer": "x", "language": ""},
+              headers=HEADERS)
+    assert conn.sql_containing("UPDATE kb_entries")[0][1]["lang"] is None
 
 
 # ── delete ────────────────────────────────────────────────────────────────────

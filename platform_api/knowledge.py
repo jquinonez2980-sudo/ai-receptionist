@@ -66,6 +66,10 @@ _MAX_ANSWER_LEN = 4000
 _MAX_QUESTION_LEN = 300
 _MAX_ENTRIES = 200
 _ENTRY_ID_RE = re.compile(r"^[0-9a-f]{32}$")
+# docs/ESMI_DASHBOARD_UX.md Section 5.3 — EN / ES / Auto selector. Same
+# validate-at-the-API-layer approach as calls.language (platform_api/
+# call_log.py): no DB check constraint on kb_entries.language.
+_VALID_LANGUAGES = {"en", "es", "auto"}
 
 
 # 4MB, not the 10-20MB one might expect: uploads route through the same
@@ -102,6 +106,11 @@ def _entry_out(row) -> dict:
         "id": row["id"],
         "question": row["question"],
         "answer": row["answer"],
+        # None for every entry created before migration 0010, and for any
+        # entry a tenant never set a language on — "unspecified", not "en".
+        # .get() (not row["language"]) so a caller's row dict/mapping that
+        # predates this field degrades to None instead of KeyError.
+        "language": row.get("language"),
         "created_at": row["created_at"].isoformat() if row["created_at"] else None,
     }
 
@@ -172,6 +181,21 @@ def _validate_entry_body(question: Optional[str], answer: str) -> tuple[Optional
     return q, answer
 
 
+def _validate_language(language: Optional[str]) -> Optional[str]:
+    """Empty/None -> unspecified (None). Anything else must be one of
+    _VALID_LANGUAGES — reject junk rather than silently storing it, same
+    contract as every other enum-shaped field in platform_api/config.py."""
+    lang = (language or "").strip().lower()
+    if not lang:
+        return None
+    if lang not in _VALID_LANGUAGES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"language must be one of: {', '.join(sorted(_VALID_LANGUAGES))}",
+        )
+    return lang
+
+
 def _publish(tenant_id: str) -> None:
     """Make a write visible to retrieval.
 
@@ -201,6 +225,7 @@ def _pdf_r2_key(tenant_id: str, entry_id: str) -> str:
 class KnowledgeEntryCreate(BaseModel):
     question: Optional[str] = None
     answer: str
+    language: Optional[str] = None
 
 
 class KnowledgeTestQuery(BaseModel):
@@ -225,7 +250,7 @@ def platform_list_knowledge(request: Request) -> dict:
     with engine.connect() as conn:
         rows = conn.execute(
             text(
-                "SELECT id, kind, question, answer, source, meta, created_at "
+                "SELECT id, kind, question, answer, language, source, meta, created_at "
                 "FROM kb_entries WHERE tenant_id = :tid "
                 "ORDER BY created_at DESC"
             ),
@@ -264,6 +289,7 @@ def platform_add_knowledge(body: KnowledgeEntryCreate, request: Request) -> dict
     _reject_default(tenant_id)
 
     question, answer = _validate_entry_body(body.question, body.answer)
+    language = _validate_language(body.language)
 
     from sqlalchemy import text
 
@@ -278,11 +304,11 @@ def platform_add_knowledge(body: KnowledgeEntryCreate, request: Request) -> dict
             )
         row = conn.execute(
             text(
-                "INSERT INTO kb_entries (id, tenant_id, kind, question, answer) "
-                "VALUES (:id, :tid, 'faq', :q, :a) "
-                "RETURNING id, question, answer, created_at"
+                "INSERT INTO kb_entries (id, tenant_id, kind, question, answer, language) "
+                "VALUES (:id, :tid, 'faq', :q, :a, :lang) "
+                "RETURNING id, question, answer, language, created_at"
             ),
-            {"id": entry_id, "tid": tenant_id, "q": question, "a": answer},
+            {"id": entry_id, "tid": tenant_id, "q": question, "a": answer, "lang": language},
         ).mappings().one()
         entry = _entry_out(row)
 
@@ -311,6 +337,7 @@ def platform_update_knowledge(
         raise HTTPException(status_code=400, detail="Invalid entry id")
 
     question, answer = _validate_entry_body(body.question, body.answer)
+    language = _validate_language(body.language)
 
     from sqlalchemy import text
 
@@ -318,11 +345,12 @@ def platform_update_knowledge(
     with engine.begin() as conn:
         row = conn.execute(
             text(
-                "UPDATE kb_entries SET question = :q, answer = :a, updated_at = now() "
+                "UPDATE kb_entries SET question = :q, answer = :a, language = :lang, "
+                "updated_at = now() "
                 "WHERE id = :id AND tenant_id = :tid AND kind = 'faq' "
-                "RETURNING id, question, answer, created_at"
+                "RETURNING id, question, answer, language, created_at"
             ),
-            {"id": entry_id, "tid": tenant_id, "q": question, "a": answer},
+            {"id": entry_id, "tid": tenant_id, "q": question, "a": answer, "lang": language},
         ).mappings().first()
         if row is None:
             raise HTTPException(status_code=404, detail="Entry not found")
