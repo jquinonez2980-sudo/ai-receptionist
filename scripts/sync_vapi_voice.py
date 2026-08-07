@@ -28,15 +28,32 @@ Two modes:
       building out voice_library.VOICE_LIBRARY — do not guess IDs.
 
   --tenant ID [--apply]
-      Reads voice_id/speed from tenants.load_tenant(ID), resolves voice_id
-      through voice_library.VOICE_LIBRARY to a real ElevenLabs voiceId, and PATCHes
-      only `voice.voiceId` + `voice.speed` onto that tenant's VAPI
-      assistant(s) — every other key already on the assistant's `voice`
-      object (provider, stability, similarityBoost, style, ...) is read back
-      from VAPI and re-sent unchanged, never guessed. Dry run by default.
-      Requires --tenant explicitly — no "sync every tenant" mode, unlike the
-      webhook script, because a bad voice change is more disruptive than a
-      bad server URL and each one deserves a human looking at the diff.
+      Reads voice_id/speed from the LIVE GET /platform/config endpoint (not
+      tenants.load_tenant(ID) — see "DB reachability" below for why),
+      resolves voice_id through voice_library.VOICE_LIBRARY to a real
+      ElevenLabs voiceId, and PATCHes only `voice.voiceId` + `voice.speed`
+      onto that tenant's VAPI assistant(s) — every other key already on the
+      assistant's `voice` object (provider, stability, similarityBoost,
+      style, ...) is read back from VAPI and re-sent unchanged, never
+      guessed. Dry run by default. Requires --tenant explicitly — no "sync
+      every tenant" mode, unlike the webhook script, because a bad voice
+      change is more disruptive than a bad server URL and each one deserves
+      a human looking at the diff.
+
+DB reachability: tenants.load_tenant() is DB-first (a dashboard "Save voice
+settings" writes to the tenant_configs Postgres table, not to
+tenants/<id>/config.json), but `railway run` only exposes Postgres's PRIVATE
+hostname, unreachable from a local machine — TENANT_CONFIG_FROM_DB=0 below
+forces file-only reads so the rest of this script (assistant ids, which
+aren't DB-editable and never drift from the file) still works locally. That
+means local load_tenant() alone would silently under-report a DB-config
+tenant's real voice_id as empty. --tenant sidesteps this by resolving
+voice_id/speed through the live GET /platform/config HTTPS endpoint instead
+(PLATFORM_API_SECRET, same secret the dashboard's server uses) — that's the
+same DB-first path the live app itself uses, no local Postgres access
+needed. --show-current's "dashboard voice_id/speed" lines still read the
+local file-only load_tenant() and can be stale for a DB-config tenant; they
+are a convenience cross-check, not what --tenant actually acts on.
 
 language_pref is NOT synced by this script. VAPI's 11labs voice object has no
 "caller language preference" field — language handling for voice happens via
@@ -44,8 +61,8 @@ the Deepgram transcriber's `languages` list (set at assistant creation, see
 sales/INTEGRATIONS_SETUP_MANUAL.md Part D) and the voice system prompt's
 language rules, neither of which this script touches.
 
-Usage (VAPI_API_KEY comes from the Railway service env — never put it in a
-file):
+Usage (VAPI_API_KEY / PLATFORM_API_SECRET come from the Railway service env —
+never put them in a file; --show-current only needs VAPI_API_KEY):
 
     railway run python scripts/sync_vapi_voice.py --show-current
     railway run python scripts/sync_vapi_voice.py --tenant otro-nivel            # dry run
@@ -96,6 +113,10 @@ def _require_env(name: str) -> str:
 
 API_KEY = _require_env("VAPI_API_KEY")
 
+ESMI_BASE_URL = os.environ.get(
+    "ESMI_BASE_URL", "https://ai-receptionist-production-5375.up.railway.app"
+).rstrip("/")
+
 
 def api(method: str, path: str, body: dict | None = None) -> dict | list:
     # Cloudflare 403s Python's default User-Agent — send a normal one (same
@@ -116,6 +137,34 @@ def api(method: str, path: str, body: dict | None = None) -> dict | list:
     except urllib.error.HTTPError as e:
         detail = e.read().decode(errors="replace")[:300]
         raise RuntimeError(f"{method} {path} -> HTTP {e.code}: {detail}") from None
+
+
+def live_voice_config(tenant_id: str) -> dict:
+    """voice_id/speed via the live GET /platform/config endpoint — the same
+    DB-first source the dashboard itself reads, and the only way to see a
+    DB-config tenant's real saved voice from a machine that can't reach
+    Postgres directly (see module docstring "DB reachability"). Not routed
+    through api()/BASE — this hits ESMI_BASE_URL (our own app), not VAPI.
+    """
+    secret = _require_env("PLATFORM_API_SECRET")
+    req = urllib.request.Request(
+        f"{ESMI_BASE_URL}/platform/config",
+        headers={
+            "X-Platform-Secret": secret,
+            "X-Tenant-Id": tenant_id,
+            "User-Agent": "curl/8.9.1",
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=30) as r:
+            data = json.loads(r.read())
+    except urllib.error.HTTPError as e:
+        detail = e.read().decode(errors="replace")[:300]
+        raise RuntimeError(
+            f"GET /platform/config (tenant={tenant_id}) -> HTTP {e.code}: {detail}"
+        ) from None
+    cfg = data.get("config") or {}
+    return {"voice_id": (cfg.get("voice_id") or "").strip().lower(), "speed": cfg.get("speed", 1.0)}
 
 
 # Default tenant (Orchelix) intentionally has no vapi ids in its own
@@ -174,21 +223,23 @@ def sync_tenant(tenant_id: str, apply: bool) -> int:
         )
         return 1
 
-    cfg = load_tenant(tenant_id)
     aids = assistant_ids_for(tenant_id)
     if not aids:
         print(f"Tenant '{tenant_id}' has no VAPI assistant ids configured — nothing to sync.")
         return 1
 
-    if not cfg.voice_id:
-        print(f"Tenant '{tenant_id}' has no voice_id saved (TenantConfig.voice_id is empty) "
+    live = live_voice_config(tenant_id)
+    voice_id, speed = live["voice_id"], live["speed"]
+
+    if not voice_id:
+        print(f"Tenant '{tenant_id}' has no voice_id saved (live config voice_id is empty) "
               "— nothing to sync.")
         return 0
 
-    target_elevenlabs_id = VOICE_LIBRARY.get(cfg.voice_id)
+    target_elevenlabs_id = VOICE_LIBRARY.get(voice_id)
     if target_elevenlabs_id is None:
         print(
-            f"ERROR: voice_id '{cfg.voice_id}' has no voice_library.VOICE_LIBRARY entry. "
+            f"ERROR: voice_id '{voice_id}' has no voice_library.VOICE_LIBRARY entry. "
             f"Run --show-current --tenant {tenant_id} to see the assistant's real current "
             "voiceId, then add the mapping before syncing. Refusing to guess."
         )
@@ -204,9 +255,9 @@ def sync_tenant(tenant_id: str, apply: bool) -> int:
 
         print(f"\n=== {name} (tenant: {tenant_id}, assistant {aid}) ===")
         print(f"  voiceId : {cur_voice_id!r} -> {target_elevenlabs_id!r}")
-        print(f"  speed   : {cur_speed!r} -> {cfg.speed!r}")
+        print(f"  speed   : {cur_speed!r} -> {speed!r}")
 
-        if cur_voice_id == target_elevenlabs_id and cur_speed == cfg.speed:
+        if cur_voice_id == target_elevenlabs_id and cur_speed == speed:
             print("  already in sync — nothing to do")
             continue
 
@@ -216,7 +267,7 @@ def sync_tenant(tenant_id: str, apply: bool) -> int:
         # what we intend" rule as scripts/update_vapi_webhooks.py. Built (and
         # printed) on every run, dry or applied, so dry-run output IS the
         # exact payload — never a paraphrase of it.
-        new_voice = {**current_voice, "voiceId": target_elevenlabs_id, "speed": cfg.speed}
+        new_voice = {**current_voice, "voiceId": target_elevenlabs_id, "speed": speed}
         print(f"  PATCH payload (voice): {json.dumps(new_voice, indent=2)}")
 
         if not apply:
@@ -226,7 +277,7 @@ def sync_tenant(tenant_id: str, apply: bool) -> int:
             api("PATCH", f"/assistant/{aid}", {"voice": new_voice})
             check = api("GET", f"/assistant/{aid}")
             got = check.get("voice") or {}
-            if got.get("voiceId") == target_elevenlabs_id and got.get("speed") == cfg.speed:
+            if got.get("voiceId") == target_elevenlabs_id and got.get("speed") == speed:
                 print("  ✔ patched + verified")
             else:
                 print(f"  ✘ verification mismatch: {got}")

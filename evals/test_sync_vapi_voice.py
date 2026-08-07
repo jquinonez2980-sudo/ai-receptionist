@@ -1,27 +1,40 @@
 """scripts/sync_vapi_voice.py — VAPI assistant voice sync (Voice Studio,
 docs/ESMI_DASHBOARD_UX.md Section 12.1).
 
-Never hits the real VAPI network: `sync_vapi_voice.api()` is the one seam
-both GET and PATCH go through, so it's monkeypatched with a fake recorder
-that returns canned assistant JSON. `load_tenant` is monkeypatched too, so
-tests control voice_id/speed directly instead of depending on the real
-tenants/<id>/config.json content drifting out from under this suite.
+Never hits the real VAPI or platform network:
+  - `sync_vapi_voice.api()` is the one seam both VAPI GET and PATCH go
+    through — monkeypatched with a fake recorder that returns canned
+    assistant JSON.
+  - `sync_vapi_voice.live_voice_config()` is the seam that resolves a
+    tenant's real (DB-first) voice_id/speed via the live GET /platform/config
+    endpoint — monkeypatched directly in most tests, with a couple of tests
+    below exercising its own internals (urllib mocked) since it's the fix
+    for a real bug: local `load_tenant()` is forced file-only
+    (TENANT_CONFIG_FROM_DB=0) and silently under-reports a DB-config
+    tenant's voice_id as empty, which is why sync_tenant() no longer reads
+    voice_id/speed from load_tenant() at all.
+  - `load_tenant` is monkeypatched too, so tests control vapi_assistant_ids
+    directly instead of depending on the real tenants/<id>/config.json
+    content drifting out from under this suite.
 
 What matters here:
   1. The hard allow-list (SYNC_ALLOWED_TENANTS) blocks any other tenant —
      including "default" (live Orchelix) — for BOTH dry run and --apply,
-     before api() is ever called.
+     before api() or live_voice_config() is ever called.
   2. Dry run (no --apply) calls GET only, never PATCH, and prints the exact
      PATCH payload it would send.
   3. --apply does GET -> PATCH -> verify-GET, preserving every voice key it
      didn't intend to change (stability, similarityBoost, ...).
   4. A verification mismatch after PATCH is reported as a failure.
-  5. An unmapped voice_id refuses before any api() call.
+  5. An unmapped voice_id refuses before any VAPI api() call.
   6. A tenant already in sync makes no PATCH call even under --apply.
+  7. live_voice_config() itself parses GET /platform/config correctly and
+     surfaces HTTP failures loudly.
 
 Run: PYTHONUTF8=1 pytest evals/test_sync_vapi_voice.py -v
 """
 
+import json
 import os
 import sys
 import types
@@ -30,6 +43,7 @@ from pathlib import Path
 import pytest
 
 os.environ.setdefault("VAPI_API_KEY", "test-vapi-key")
+os.environ.setdefault("PLATFORM_API_SECRET", "test-platform-secret")
 os.environ.setdefault("TENANT_CONFIG_FROM_DB", "0")
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
@@ -40,8 +54,14 @@ OTRO_NIVEL_AID = "32994d60-3712-4183-a7db-edc3badeabec"
 COASTLINE_AID = "a351deb6-bf22-4cda-a3f3-67bca8ac6346"
 
 
-def fake_tenant(voice_id="sofia", speed=1.0, assistant_ids=(OTRO_NIVEL_AID,)):
-    return types.SimpleNamespace(voice_id=voice_id, speed=speed, vapi_assistant_ids=tuple(assistant_ids))
+def fake_tenant(assistant_ids=(OTRO_NIVEL_AID,)):
+    """load_tenant() stand-in — only vapi_assistant_ids matters to sync_tenant()
+    now; voice_id/speed come from live_voice_config(), not this."""
+    return types.SimpleNamespace(vapi_assistant_ids=tuple(assistant_ids))
+
+
+def fake_live(voice_id="sofia", speed=1.0):
+    return lambda tenant_id: {"voice_id": voice_id, "speed": speed}
 
 
 class FakeApi:
@@ -74,6 +94,9 @@ def test_non_allowlisted_tenant_is_refused_before_any_api_call(monkeypatch, tena
     monkeypatch.setattr(svv, "load_tenant", lambda tid: (_ for _ in ()).throw(
         AssertionError("load_tenant must not be called for a non-allow-listed tenant")
     ))
+    monkeypatch.setattr(svv, "live_voice_config", lambda tid: (_ for _ in ()).throw(
+        AssertionError("live_voice_config must not be called for a non-allow-listed tenant")
+    ))
 
     rc = svv.sync_tenant(tenant_id, apply)
 
@@ -89,7 +112,8 @@ def test_allowlisted_tenants_are_exactly_otro_nivel_and_coastline():
 
 
 def test_dry_run_never_calls_patch(monkeypatch, capsys):
-    monkeypatch.setattr(svv, "load_tenant", lambda tid: fake_tenant(voice_id="sofia", speed=1.1))
+    monkeypatch.setattr(svv, "load_tenant", lambda tid: fake_tenant())
+    monkeypatch.setattr(svv, "live_voice_config", fake_live(voice_id="sofia", speed=1.1))
     current_assistant = {
         "name": "Otro Nivel Esmi",
         "voice": {"provider": "11labs", "voiceId": "old_voice_id", "speed": 1.0, "stability": 0.5},
@@ -114,7 +138,8 @@ def test_dry_run_never_calls_patch(monkeypatch, capsys):
 
 
 def test_apply_patches_and_verifies_preserving_other_voice_keys(monkeypatch, capsys):
-    monkeypatch.setattr(svv, "load_tenant", lambda tid: fake_tenant(voice_id="sofia", speed=1.1))
+    monkeypatch.setattr(svv, "load_tenant", lambda tid: fake_tenant())
+    monkeypatch.setattr(svv, "live_voice_config", fake_live(voice_id="sofia", speed=1.1))
     current_assistant = {
         "name": "Otro Nivel Esmi",
         "voice": {
@@ -163,7 +188,8 @@ def test_apply_patches_and_verifies_preserving_other_voice_keys(monkeypatch, cap
 
 
 def test_verification_mismatch_is_reported_as_failure(monkeypatch, capsys):
-    monkeypatch.setattr(svv, "load_tenant", lambda tid: fake_tenant(voice_id="sofia", speed=1.1))
+    monkeypatch.setattr(svv, "load_tenant", lambda tid: fake_tenant())
+    monkeypatch.setattr(svv, "live_voice_config", fake_live(voice_id="sofia", speed=1.1))
     current_assistant = {"name": "Otro Nivel Esmi", "voice": {"voiceId": "old_voice_id", "speed": 1.0}}
     verify_assistant = {"voice": {"voiceId": "old_voice_id", "speed": 1.0}}  # PATCH silently no-op'd
     fake_api = FakeApi([current_assistant, {}, verify_assistant])
@@ -176,9 +202,8 @@ def test_verification_mismatch_is_reported_as_failure(monkeypatch, capsys):
 
 
 def test_coastline_condos_is_allowlisted_and_uses_its_own_assistant_id(monkeypatch):
-    monkeypatch.setattr(
-        svv, "load_tenant", lambda tid: fake_tenant(voice_id="sofia", speed=1.0, assistant_ids=(COASTLINE_AID,))
-    )
+    monkeypatch.setattr(svv, "load_tenant", lambda tid: fake_tenant(assistant_ids=(COASTLINE_AID,)))
+    monkeypatch.setattr(svv, "live_voice_config", fake_live(voice_id="sofia", speed=1.0))
     current_assistant = {"voice": {"voiceId": "el_real_voice_id", "speed": 1.0}}
     fake_api = FakeApi([current_assistant])
     monkeypatch.setattr(svv, "api", fake_api)
@@ -189,11 +214,12 @@ def test_coastline_condos_is_allowlisted_and_uses_its_own_assistant_id(monkeypat
     assert fake_api.calls == [("GET", f"/assistant/{COASTLINE_AID}", None)]
 
 
-# ── unmapped voice refuses to guess, no api() calls ─────────────────────────
+# ── unmapped voice refuses to guess, no VAPI api() calls ────────────────────
 
 
 def test_unmapped_voice_id_refuses_before_any_api_call(monkeypatch):
-    monkeypatch.setattr(svv, "load_tenant", lambda tid: fake_tenant(voice_id="not-a-real-voice"))
+    monkeypatch.setattr(svv, "load_tenant", lambda tid: fake_tenant())
+    monkeypatch.setattr(svv, "live_voice_config", fake_live(voice_id="not-a-real-voice"))
     fake_api = FakeApi([])
     monkeypatch.setattr(svv, "api", fake_api)
 
@@ -204,7 +230,8 @@ def test_unmapped_voice_id_refuses_before_any_api_call(monkeypatch):
 
 
 def test_empty_voice_id_is_a_noop_before_any_api_call(monkeypatch):
-    monkeypatch.setattr(svv, "load_tenant", lambda tid: fake_tenant(voice_id=""))
+    monkeypatch.setattr(svv, "load_tenant", lambda tid: fake_tenant())
+    monkeypatch.setattr(svv, "live_voice_config", fake_live(voice_id=""))
     fake_api = FakeApi([])
     monkeypatch.setattr(svv, "api", fake_api)
 
@@ -218,7 +245,8 @@ def test_empty_voice_id_is_a_noop_before_any_api_call(monkeypatch):
 
 
 def test_already_in_sync_makes_no_patch_call_even_with_apply(monkeypatch, capsys):
-    monkeypatch.setattr(svv, "load_tenant", lambda tid: fake_tenant(voice_id="sofia", speed=1.0))
+    monkeypatch.setattr(svv, "load_tenant", lambda tid: fake_tenant())
+    monkeypatch.setattr(svv, "live_voice_config", fake_live(voice_id="sofia", speed=1.0))
     current_assistant = {"name": "Otro Nivel Esmi", "voice": {"voiceId": "el_real_voice_id", "speed": 1.0}}
     fake_api = FakeApi([current_assistant])
     monkeypatch.setattr(svv, "api", fake_api)
@@ -234,7 +262,10 @@ def test_already_in_sync_makes_no_patch_call_even_with_apply(monkeypatch, capsys
 
 
 def test_no_assistant_ids_is_reported_and_refuses(monkeypatch):
-    monkeypatch.setattr(svv, "load_tenant", lambda tid: fake_tenant(voice_id="sofia", assistant_ids=()))
+    monkeypatch.setattr(svv, "load_tenant", lambda tid: fake_tenant(assistant_ids=()))
+    monkeypatch.setattr(svv, "live_voice_config", lambda tid: (_ for _ in ()).throw(
+        AssertionError("live_voice_config must not be called when there are no assistant ids")
+    ))
     fake_api = FakeApi([])
     monkeypatch.setattr(svv, "api", fake_api)
 
@@ -242,3 +273,64 @@ def test_no_assistant_ids_is_reported_and_refuses(monkeypatch):
 
     assert rc == 1
     assert fake_api.calls == []
+
+
+# ── live_voice_config(): its own network seam ────────────────────────────────
+
+
+class _FakeHTTPResponse:
+    def __init__(self, payload: dict):
+        self._body = json.dumps(payload).encode()
+
+    def read(self):
+        return self._body
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+
+def test_live_voice_config_parses_config_response(monkeypatch):
+    captured = {}
+
+    def fake_urlopen(req, timeout=None):
+        captured["url"] = req.full_url
+        captured["headers"] = {k.lower(): v for k, v in req.headers.items()}
+        return _FakeHTTPResponse(
+            {"tenant_id": "otro-nivel", "version": 6, "config": {"voice_id": "Esmi-Default", "speed": 1.05}}
+        )
+
+    monkeypatch.setattr(svv.urllib.request, "urlopen", fake_urlopen)
+
+    out = svv.live_voice_config("otro-nivel")
+
+    assert out == {"voice_id": "esmi-default", "speed": 1.05}  # lower-cased, like PUT does
+    assert captured["url"] == f"{svv.ESMI_BASE_URL}/platform/config"
+    assert captured["headers"]["x-tenant-id"] == "otro-nivel"
+    assert captured["headers"]["x-platform-secret"] == "test-platform-secret"
+
+
+def test_live_voice_config_defaults_missing_voice_id_to_empty(monkeypatch):
+    monkeypatch.setattr(
+        svv.urllib.request,
+        "urlopen",
+        lambda req, timeout=None: _FakeHTTPResponse({"config": {}}),
+    )
+    assert svv.live_voice_config("otro-nivel") == {"voice_id": "", "speed": 1.0}
+
+
+def test_live_voice_config_raises_loudly_on_http_error(monkeypatch):
+    import io
+    import urllib.error
+
+    def fake_urlopen(req, timeout=None):
+        raise urllib.error.HTTPError(
+            req.full_url, 401, "Unauthorized", {}, io.BytesIO(b"bad secret")
+        )
+
+    monkeypatch.setattr(svv.urllib.request, "urlopen", fake_urlopen)
+
+    with pytest.raises(RuntimeError, match="platform/config"):
+        svv.live_voice_config("otro-nivel")
