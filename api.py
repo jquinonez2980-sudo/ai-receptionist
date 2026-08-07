@@ -156,6 +156,7 @@ from platform_api import (  # noqa: E402
     usage_router,
     vapi_webhook_router,
     voice_preview_router,
+    voice_sync_router,
 )
 
 app.include_router(vapi_webhook_router)
@@ -173,6 +174,7 @@ app.include_router(signup_router)
 app.include_router(onboarding_router)
 app.include_router(tenant_status_router)
 app.include_router(voice_preview_router)
+app.include_router(voice_sync_router)
 
 
 # ── Auth helpers ──────────────────────────────────────────────────────────────

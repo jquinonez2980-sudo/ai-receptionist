@@ -1,35 +1,33 @@
-"""scripts/sync_vapi_voice.py — VAPI assistant voice sync (Voice Studio,
+"""scripts/sync_vapi_voice.py — VAPI assistant voice sync CLI (Voice Studio,
 docs/ESMI_DASHBOARD_UX.md Section 12.1).
 
-Never hits the real VAPI or platform network:
-  - `sync_vapi_voice.api()` is the one seam both VAPI GET and PATCH go
-    through — monkeypatched with a fake recorder that returns canned
-    assistant JSON.
-  - `sync_vapi_voice.live_voice_config()` is the seam that resolves a
-    tenant's real (DB-first) voice_id/speed via the live GET /platform/config
-    endpoint — monkeypatched directly in most tests, with a couple of tests
-    below exercising its own internals (urllib mocked) since it's the fix
-    for a real bug: local `load_tenant()` is forced file-only
-    (TENANT_CONFIG_FROM_DB=0) and silently under-reports a DB-config
-    tenant's voice_id as empty, which is why sync_tenant() no longer reads
-    voice_id/speed from load_tenant() at all.
-  - `load_tenant` is monkeypatched too, so tests control vapi_assistant_ids
-    directly instead of depending on the real tenants/<id>/config.json
-    content drifting out from under this suite.
-
-What matters here:
-  1. The hard allow-list (SYNC_ALLOWED_TENANTS) blocks any other tenant —
-     including "default" (live Orchelix) — for BOTH dry run and --apply,
-     before api() or live_voice_config() is ever called.
-  2. Dry run (no --apply) calls GET only, never PATCH, and prints the exact
-     PATCH payload it would send.
-  3. --apply does GET -> PATCH -> verify-GET, preserving every voice key it
-     didn't intend to change (stability, similarityBoost, ...).
-  4. A verification mismatch after PATCH is reported as a failure.
-  5. An unmapped voice_id refuses before any VAPI api() call.
-  6. A tenant already in sync makes no PATCH call even under --apply.
+The PATCH-preserving-other-keys / plan-then-apply logic itself now lives in
+vapi_voice_sync.py (shared with platform_api/voice_sync.py's "Apply to live
+Esmi" endpoint) and has its own dedicated tests in
+evals/test_vapi_voice_sync.py. This file tests the CLI's OWN wiring on top
+of that shared module:
+  1. The hard allow-list (vapi_voice_sync.SYNC_ALLOWED_TENANTS) blocks any
+     other tenant — including "default" (live Orchelix) — for BOTH dry run
+     and --apply, before vapi_api or live_voice_config is ever called.
+  2. Dry run (no --apply) never calls apply_assistant_voice (no PATCH),
+     and prints the exact PATCH payload it would send.
+  3. --apply calls apply_assistant_voice and reports its result (patched +
+     verified / verification mismatch / FAILED) correctly.
+  4. An unmapped voice_id refuses before any VAPI call.
+  5. A tenant already in sync makes no PATCH call even under --apply.
+  6. No configured assistant ids refuses cleanly.
   7. live_voice_config() itself parses GET /platform/config correctly and
-     surfaces HTTP failures loudly.
+     surfaces HTTP failures loudly — this is the CLI's own network seam
+     (resolving a DB-config tenant's real voice from a machine that can't
+     reach Postgres directly), not shared with the endpoint.
+
+Never hits the real VAPI or platform network: vapi_voice_sync.vapi_api
+(the seam plan_assistant_voice/apply_assistant_voice call internally) and
+vapi_voice_sync.load_tenant (the seam assistant_ids_for calls internally)
+are monkeypatched directly on the vapi_voice_sync module — NOT on
+sync_vapi_voice's own copies of those names, since `from x import y` binds
+a separate reference that plan_assistant_voice/apply_assistant_voice/
+assistant_ids_for (defined in vapi_voice_sync.py) never consult.
 
 Run: PYTHONUTF8=1 pytest evals/test_sync_vapi_voice.py -v
 """
@@ -50,13 +48,16 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
 
 import sync_vapi_voice as svv  # noqa: E402
 
+import vapi_voice_sync as vvs  # noqa: E402
+
 OTRO_NIVEL_AID = "32994d60-3712-4183-a7db-edc3badeabec"
 COASTLINE_AID = "a351deb6-bf22-4cda-a3f3-67bca8ac6346"
 
 
 def fake_tenant(assistant_ids=(OTRO_NIVEL_AID,)):
-    """load_tenant() stand-in — only vapi_assistant_ids matters to sync_tenant()
-    now; voice_id/speed come from live_voice_config(), not this."""
+    """vapi_voice_sync.load_tenant() stand-in — only vapi_assistant_ids
+    matters to assistant_ids_for(); voice_id/speed come from
+    live_voice_config(), not this."""
     return types.SimpleNamespace(vapi_assistant_ids=tuple(assistant_ids))
 
 
@@ -65,16 +66,17 @@ def fake_live(voice_id="sofia", speed=1.0):
 
 
 class FakeApi:
-    """Records every call and answers from a scripted queue of responses."""
+    """Records every vapi_voice_sync.vapi_api call and answers from a
+    scripted queue of responses."""
 
     def __init__(self, responses):
         self.responses = list(responses)
         self.calls: list[tuple[str, str, dict | None]] = []
 
-    def __call__(self, method, path, body=None):
+    def __call__(self, method, path, api_key, body=None):
         self.calls.append((method, path, body))
         if not self.responses:
-            raise AssertionError(f"unexpected extra api() call: {method} {path}")
+            raise AssertionError(f"unexpected extra vapi_api call: {method} {path}")
         return self.responses.pop(0)
 
 
@@ -90,8 +92,8 @@ def _voice_catalog(monkeypatch):
 @pytest.mark.parametrize("apply", [False, True])
 def test_non_allowlisted_tenant_is_refused_before_any_api_call(monkeypatch, tenant_id, apply):
     fake_api = FakeApi([])
-    monkeypatch.setattr(svv, "api", fake_api)
-    monkeypatch.setattr(svv, "load_tenant", lambda tid: (_ for _ in ()).throw(
+    monkeypatch.setattr(vvs, "vapi_api", fake_api)
+    monkeypatch.setattr(vvs, "load_tenant", lambda tid: (_ for _ in ()).throw(
         AssertionError("load_tenant must not be called for a non-allow-listed tenant")
     ))
     monkeypatch.setattr(svv, "live_voice_config", lambda tid: (_ for _ in ()).throw(
@@ -112,14 +114,14 @@ def test_allowlisted_tenants_are_exactly_otro_nivel_and_coastline():
 
 
 def test_dry_run_never_calls_patch(monkeypatch, capsys):
-    monkeypatch.setattr(svv, "load_tenant", lambda tid: fake_tenant())
+    monkeypatch.setattr(vvs, "load_tenant", lambda tid: fake_tenant())
     monkeypatch.setattr(svv, "live_voice_config", fake_live(voice_id="sofia", speed=1.1))
     current_assistant = {
         "name": "Otro Nivel Esmi",
         "voice": {"provider": "11labs", "voiceId": "old_voice_id", "speed": 1.0, "stability": 0.5},
     }
     fake_api = FakeApi([current_assistant])
-    monkeypatch.setattr(svv, "api", fake_api)
+    monkeypatch.setattr(vvs, "vapi_api", fake_api)
 
     rc = svv.sync_tenant("otro-nivel", apply=False)
 
@@ -134,33 +136,21 @@ def test_dry_run_never_calls_patch(monkeypatch, capsys):
     assert "DRY RUN" in out
 
 
-# ── --apply: GET -> PATCH -> verify-GET, preserves unrelated keys ──────────
+# ── --apply: reports the shared module's plan/apply result ─────────────────
 
 
-def test_apply_patches_and_verifies_preserving_other_voice_keys(monkeypatch, capsys):
-    monkeypatch.setattr(svv, "load_tenant", lambda tid: fake_tenant())
+def test_apply_patches_and_reports_verified(monkeypatch, capsys):
+    monkeypatch.setattr(vvs, "load_tenant", lambda tid: fake_tenant())
     monkeypatch.setattr(svv, "live_voice_config", fake_live(voice_id="sofia", speed=1.1))
     current_assistant = {
         "name": "Otro Nivel Esmi",
-        "voice": {
-            "provider": "11labs",
-            "voiceId": "old_voice_id",
-            "speed": 1.0,
-            "stability": 0.5,
-            "similarityBoost": 0.8,
-        },
+        "voice": {"provider": "11labs", "voiceId": "old_voice_id", "speed": 1.0, "stability": 0.5},
     }
     verify_assistant = {
-        "voice": {
-            "provider": "11labs",
-            "voiceId": "el_real_voice_id",
-            "speed": 1.1,
-            "stability": 0.5,
-            "similarityBoost": 0.8,
-        }
+        "voice": {"provider": "11labs", "voiceId": "el_real_voice_id", "speed": 1.1, "stability": 0.5}
     }
     fake_api = FakeApi([current_assistant, {}, verify_assistant])
-    monkeypatch.setattr(svv, "api", fake_api)
+    monkeypatch.setattr(vvs, "vapi_api", fake_api)
 
     rc = svv.sync_tenant("otro-nivel", apply=True)
 
@@ -170,16 +160,8 @@ def test_apply_patches_and_verifies_preserving_other_voice_keys(monkeypatch, cap
         ("PATCH", f"/assistant/{OTRO_NIVEL_AID}"),
         ("GET", f"/assistant/{OTRO_NIVEL_AID}"),
     ]
-
-    patch_body = fake_api.calls[1][2]
-    assert patch_body == {
-        "voice": {
-            "provider": "11labs",
-            "voiceId": "el_real_voice_id",
-            "speed": 1.1,
-            "stability": 0.5,
-            "similarityBoost": 0.8,
-        }
+    assert fake_api.calls[1][2] == {
+        "voice": {"provider": "11labs", "voiceId": "el_real_voice_id", "speed": 1.1, "stability": 0.5}
     }
 
     out = capsys.readouterr().out
@@ -188,12 +170,12 @@ def test_apply_patches_and_verifies_preserving_other_voice_keys(monkeypatch, cap
 
 
 def test_verification_mismatch_is_reported_as_failure(monkeypatch, capsys):
-    monkeypatch.setattr(svv, "load_tenant", lambda tid: fake_tenant())
+    monkeypatch.setattr(vvs, "load_tenant", lambda tid: fake_tenant())
     monkeypatch.setattr(svv, "live_voice_config", fake_live(voice_id="sofia", speed=1.1))
     current_assistant = {"name": "Otro Nivel Esmi", "voice": {"voiceId": "old_voice_id", "speed": 1.0}}
     verify_assistant = {"voice": {"voiceId": "old_voice_id", "speed": 1.0}}  # PATCH silently no-op'd
     fake_api = FakeApi([current_assistant, {}, verify_assistant])
-    monkeypatch.setattr(svv, "api", fake_api)
+    monkeypatch.setattr(vvs, "vapi_api", fake_api)
 
     rc = svv.sync_tenant("otro-nivel", apply=True)
 
@@ -201,12 +183,30 @@ def test_verification_mismatch_is_reported_as_failure(monkeypatch, capsys):
     assert "verification mismatch" in capsys.readouterr().out
 
 
+def test_apply_failure_is_reported(monkeypatch, capsys):
+    monkeypatch.setattr(vvs, "load_tenant", lambda tid: fake_tenant())
+    monkeypatch.setattr(svv, "live_voice_config", fake_live(voice_id="sofia", speed=1.1))
+    current_assistant = {"name": "Otro Nivel Esmi", "voice": {"voiceId": "old_voice_id", "speed": 1.0}}
+
+    def flaky(method, path, api_key, body=None):
+        if method == "PATCH":
+            raise vvs.VapiSyncError(f"{method} {path} -> HTTP 500: boom")
+        return current_assistant
+
+    monkeypatch.setattr(vvs, "vapi_api", flaky)
+
+    rc = svv.sync_tenant("otro-nivel", apply=True)
+
+    assert rc == 1
+    assert "FAILED" in capsys.readouterr().out
+
+
 def test_coastline_condos_is_allowlisted_and_uses_its_own_assistant_id(monkeypatch):
-    monkeypatch.setattr(svv, "load_tenant", lambda tid: fake_tenant(assistant_ids=(COASTLINE_AID,)))
+    monkeypatch.setattr(vvs, "load_tenant", lambda tid: fake_tenant(assistant_ids=(COASTLINE_AID,)))
     monkeypatch.setattr(svv, "live_voice_config", fake_live(voice_id="sofia", speed=1.0))
     current_assistant = {"voice": {"voiceId": "el_real_voice_id", "speed": 1.0}}
     fake_api = FakeApi([current_assistant])
-    monkeypatch.setattr(svv, "api", fake_api)
+    monkeypatch.setattr(vvs, "vapi_api", fake_api)
 
     rc = svv.sync_tenant("coastline-condos", apply=False)
 
@@ -218,10 +218,10 @@ def test_coastline_condos_is_allowlisted_and_uses_its_own_assistant_id(monkeypat
 
 
 def test_unmapped_voice_id_refuses_before_any_api_call(monkeypatch):
-    monkeypatch.setattr(svv, "load_tenant", lambda tid: fake_tenant())
+    monkeypatch.setattr(vvs, "load_tenant", lambda tid: fake_tenant())
     monkeypatch.setattr(svv, "live_voice_config", fake_live(voice_id="not-a-real-voice"))
     fake_api = FakeApi([])
-    monkeypatch.setattr(svv, "api", fake_api)
+    monkeypatch.setattr(vvs, "vapi_api", fake_api)
 
     rc = svv.sync_tenant("otro-nivel", apply=True)
 
@@ -230,10 +230,10 @@ def test_unmapped_voice_id_refuses_before_any_api_call(monkeypatch):
 
 
 def test_empty_voice_id_is_a_noop_before_any_api_call(monkeypatch):
-    monkeypatch.setattr(svv, "load_tenant", lambda tid: fake_tenant())
+    monkeypatch.setattr(vvs, "load_tenant", lambda tid: fake_tenant())
     monkeypatch.setattr(svv, "live_voice_config", fake_live(voice_id=""))
     fake_api = FakeApi([])
-    monkeypatch.setattr(svv, "api", fake_api)
+    monkeypatch.setattr(vvs, "vapi_api", fake_api)
 
     rc = svv.sync_tenant("otro-nivel", apply=True)
 
@@ -245,11 +245,11 @@ def test_empty_voice_id_is_a_noop_before_any_api_call(monkeypatch):
 
 
 def test_already_in_sync_makes_no_patch_call_even_with_apply(monkeypatch, capsys):
-    monkeypatch.setattr(svv, "load_tenant", lambda tid: fake_tenant())
+    monkeypatch.setattr(vvs, "load_tenant", lambda tid: fake_tenant())
     monkeypatch.setattr(svv, "live_voice_config", fake_live(voice_id="sofia", speed=1.0))
     current_assistant = {"name": "Otro Nivel Esmi", "voice": {"voiceId": "el_real_voice_id", "speed": 1.0}}
     fake_api = FakeApi([current_assistant])
-    monkeypatch.setattr(svv, "api", fake_api)
+    monkeypatch.setattr(vvs, "vapi_api", fake_api)
 
     rc = svv.sync_tenant("otro-nivel", apply=True)
 
@@ -262,12 +262,12 @@ def test_already_in_sync_makes_no_patch_call_even_with_apply(monkeypatch, capsys
 
 
 def test_no_assistant_ids_is_reported_and_refuses(monkeypatch):
-    monkeypatch.setattr(svv, "load_tenant", lambda tid: fake_tenant(assistant_ids=()))
+    monkeypatch.setattr(vvs, "load_tenant", lambda tid: fake_tenant(assistant_ids=()))
     monkeypatch.setattr(svv, "live_voice_config", lambda tid: (_ for _ in ()).throw(
         AssertionError("live_voice_config must not be called when there are no assistant ids")
     ))
     fake_api = FakeApi([])
-    monkeypatch.setattr(svv, "api", fake_api)
+    monkeypatch.setattr(vvs, "vapi_api", fake_api)
 
     rc = svv.sync_tenant("otro-nivel", apply=False)
 
@@ -275,7 +275,7 @@ def test_no_assistant_ids_is_reported_and_refuses(monkeypatch):
     assert fake_api.calls == []
 
 
-# ── live_voice_config(): its own network seam ────────────────────────────────
+# ── live_voice_config(): the CLI's own network seam ─────────────────────────
 
 
 class _FakeHTTPResponse:

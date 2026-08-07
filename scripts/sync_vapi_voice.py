@@ -98,9 +98,15 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # repo root
 os.environ.setdefault("TENANT_CONFIG_FROM_DB", "0")
 
 from tenants import _all_tenant_ids, load_tenant  # noqa: E402
+from vapi_voice_sync import (  # noqa: E402
+    SYNC_ALLOWED_TENANTS,
+    VapiSyncError,
+    apply_assistant_voice,
+    assistant_ids_for,
+    plan_assistant_voice,
+    vapi_api,
+)
 from voice_library import VOICE_LIBRARY  # noqa: E402
-
-BASE = "https://api.vapi.ai"
 
 
 def _require_env(name: str) -> str:
@@ -118,25 +124,14 @@ ESMI_BASE_URL = os.environ.get(
 ).rstrip("/")
 
 
-def api(method: str, path: str, body: dict | None = None) -> dict | list:
-    # Cloudflare 403s Python's default User-Agent — send a normal one (same
-    # workaround as scripts/update_vapi_webhooks.py).
-    req = urllib.request.Request(
-        f"{BASE}{path}",
-        method=method,
-        headers={
-            "Authorization": f"Bearer {API_KEY}",
-            "User-Agent": "curl/8.9.1",
-            "Content-Type": "application/json",
-        },
-        data=json.dumps(body).encode() if body is not None else None,
-    )
+def api(method: str, path: str, body: dict | None = None) -> dict:
+    """Thin wrapper binding vapi_voice_sync.vapi_api to this script's
+    env-resolved API_KEY, and translating its VapiSyncError to the plain
+    RuntimeError this file's callers already catch."""
     try:
-        with urllib.request.urlopen(req, timeout=30) as r:
-            return json.loads(r.read())
-    except urllib.error.HTTPError as e:
-        detail = e.read().decode(errors="replace")[:300]
-        raise RuntimeError(f"{method} {path} -> HTTP {e.code}: {detail}") from None
+        return vapi_api(method, path, API_KEY, body)
+    except VapiSyncError as e:
+        raise RuntimeError(str(e)) from None
 
 
 def live_voice_config(tenant_id: str) -> dict:
@@ -167,20 +162,9 @@ def live_voice_config(tenant_id: str) -> dict:
     return {"voice_id": (cfg.get("voice_id") or "").strip().lower(), "speed": cfg.get("speed", 1.0)}
 
 
-# Default tenant (Orchelix) intentionally has no vapi ids in its own
-# config.json — same fact scripts/update_vapi_webhooks.py encodes.
-ORCHELIX_ASSISTANT_ID = "d5e020bf-0235-4214-a57f-de30e8072b0b"
-
-# Hard allow-list for --tenant (both dry run and --apply) — see module
-# docstring "ALLOW-LIST" section. Expand only after a tenant's sync has been
-# dry-run reviewed and apply-tested here first.
-SYNC_ALLOWED_TENANTS = frozenset({"otro-nivel", "coastline-condos"})
-
-
-def assistant_ids_for(tenant_id: str) -> list[str]:
-    if tenant_id == "default":
-        return [ORCHELIX_ASSISTANT_ID]
-    return list(load_tenant(tenant_id).vapi_assistant_ids)
+# SYNC_ALLOWED_TENANTS and assistant_ids_for() now live in vapi_voice_sync.py
+# (shared with platform_api/voice_sync.py's "Apply to live Esmi" endpoint) —
+# see module docstring's ALLOW-LIST section for the rationale, unchanged.
 
 
 def all_tenant_ids() -> list[str]:
@@ -247,17 +231,18 @@ def sync_tenant(tenant_id: str, apply: bool) -> int:
 
     failed = []
     for aid in aids:
-        a = api("GET", f"/assistant/{aid}")
-        name = a.get("name") or aid
-        current_voice = dict(a.get("voice") or {})
-        cur_voice_id = current_voice.get("voiceId")
-        cur_speed = current_voice.get("speed")
+        try:
+            plan = plan_assistant_voice(aid, target_elevenlabs_id, speed, API_KEY)
+        except VapiSyncError as e:
+            print(f"\n=== assistant {aid} (tenant: {tenant_id}) — FAILED to read: {e} ===")
+            failed.append(aid)
+            continue
 
-        print(f"\n=== {name} (tenant: {tenant_id}, assistant {aid}) ===")
-        print(f"  voiceId : {cur_voice_id!r} -> {target_elevenlabs_id!r}")
-        print(f"  speed   : {cur_speed!r} -> {speed!r}")
+        print(f"\n=== {plan.name} (tenant: {tenant_id}, assistant {aid}) ===")
+        print(f"  voiceId : {plan.before.get('voiceId')!r} -> {target_elevenlabs_id!r}")
+        print(f"  speed   : {plan.before.get('speed')!r} -> {speed!r}")
 
-        if cur_voice_id == target_elevenlabs_id and cur_speed == speed:
+        if not plan.changed:
             print("  already in sync — nothing to do")
             continue
 
@@ -267,24 +252,20 @@ def sync_tenant(tenant_id: str, apply: bool) -> int:
         # what we intend" rule as scripts/update_vapi_webhooks.py. Built (and
         # printed) on every run, dry or applied, so dry-run output IS the
         # exact payload — never a paraphrase of it.
-        new_voice = {**current_voice, "voiceId": target_elevenlabs_id, "speed": speed}
-        print(f"  PATCH payload (voice): {json.dumps(new_voice, indent=2)}")
+        print(f"  PATCH payload (voice): {json.dumps(plan.after, indent=2)}")
 
         if not apply:
             continue
 
-        try:
-            api("PATCH", f"/assistant/{aid}", {"voice": new_voice})
-            check = api("GET", f"/assistant/{aid}")
-            got = check.get("voice") or {}
-            if got.get("voiceId") == target_elevenlabs_id and got.get("speed") == speed:
-                print("  ✔ patched + verified")
-            else:
-                print(f"  ✘ verification mismatch: {got}")
-                failed.append(name)
-        except RuntimeError as e:
-            print(f"  ✘ FAILED: {e}")
-            failed.append(name)
+        result = apply_assistant_voice(plan, API_KEY)
+        if result.error:
+            print(f"  ✘ FAILED: {result.error}")
+            failed.append(plan.name)
+        elif result.verified:
+            print("  ✔ patched + verified")
+        else:
+            print(f"  ✘ verification mismatch: {result.after}")
+            failed.append(plan.name)
 
     if not apply:
         print("\nDRY RUN — nothing changed. Re-run with --apply to execute.")

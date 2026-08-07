@@ -24,6 +24,7 @@ from platform_api.tenant_status import router as tenant_status_router
 from platform_api.usage import router as usage_router
 from platform_api.vapi_webhook import router as vapi_webhook_router
 from platform_api.voice_preview import router as voice_preview_router
+from platform_api.voice_sync import router as voice_sync_router
 
 __all__ = [
     "admin_router",
@@ -41,4 +42,5 @@ __all__ = [
     "usage_router",
     "vapi_webhook_router",
     "voice_preview_router",
+    "voice_sync_router",
 ]
